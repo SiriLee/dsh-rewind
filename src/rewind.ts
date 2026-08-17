@@ -33,7 +33,6 @@ export type RewindErrorCode =
   | 'invalid-index'
   | 'not-a-user-message'
   | 'not-on-surface'
-  | 'nothing-after'
 
 /** A typed rewind failure. The host renders `code` into user-facing copy. */
 export class RewindError extends Error {
@@ -185,10 +184,17 @@ export function planRewind(
     )
   }
   if (targetIndex === surface.length - 1) {
-    throw new RewindError(
-      'nothing-after',
-      `user message at seq ${targetSeq} is already the last context item; nothing to rewind`,
-    )
+    // The target is the LAST surface node: nothing follows it, so "rewinding
+    // to it" means withdrawing the message itself (the common send-a-mistake
+    // case — the user re-sends after this). The replacement range includes
+    // the target, cutting the context back to before it.
+    return {
+      targetSeq,
+      targetIndex,
+      shadowedSeqs: [targetSeq],
+      surfaceStart: targetSeq,
+      surfaceEnd: targetSeq,
+    }
   }
 
   const shadowedSeqs = surface.slice(targetIndex + 1)

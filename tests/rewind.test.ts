@@ -160,20 +160,21 @@ describe('planRewind', () => {
     }
   })
 
-  it('rejects a target that is already the last surface node', () => {
-    // A log whose most recent surface node is a user message: nothing follows.
+  it('rewinds the last surface node away (withdraw the latest message)', () => {
+    // A log whose most recent surface node is a user message: rewinding to it
+    // withdraws the message itself (send-a-mistake → re-send), so the shadowed
+    // range INCLUDES the target.
     const events = [
       userEvent(0, 'first question'),
       assistantEvent(1, 'first answer'),
       userEvent(2, 'second question'),
     ]
     const surface = [0, 1, 2]
-    try {
-      planRewind(events, surface, { kind: 'seq', seq: 2 })
-      throw new Error('expected throw')
-    } catch (error) {
-      expect((error as RewindError).code).toBe('nothing-after')
-    }
+    const plan = planRewind(events, surface, { kind: 'seq', seq: 2 })
+    expect(plan.targetSeq).toBe(2)
+    expect(plan.shadowedSeqs).toEqual([2])
+    expect(plan.surfaceStart).toBe(2)
+    expect(plan.surfaceEnd).toBe(2)
   })
 
   it('produces no candidates in a user-less log', () => {

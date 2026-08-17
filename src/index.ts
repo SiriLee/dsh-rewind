@@ -267,9 +267,14 @@ async function executeRewind(
     }
   }
 
+  // The last-node case withdraws the target message itself (send-a-mistake →
+  // re-send); report it distinctly from a mid-conversation rewind.
+  const withdrewLatest = plan.shadowedSeqs[0] === plan.targetSeq
   return {
     kind: 'success',
-    text: `已回退到 seq ${plan.targetSeq}，移除 ${plan.shadowedSeqs.length} 条上下文（日志保留）${restore}。`,
+    text: withdrewLatest
+      ? `已撤回 seq ${plan.targetSeq}（最近一条消息），可重新发送${restore}。`
+      : `已回退到 seq ${plan.targetSeq}，移除 ${plan.shadowedSeqs.length} 条上下文（日志保留）${restore}。`,
     sourceEventSeq: event.seq,
   }
 }
@@ -282,7 +287,6 @@ function rewindErrorResult(error: unknown): CommandResult {
       'invalid-index': error.message,
       'not-a-user-message': error.message,
       'not-on-surface': error.message,
-      'nothing-after': error.message,
     }[error.code]
     return { kind: 'error', text }
   }

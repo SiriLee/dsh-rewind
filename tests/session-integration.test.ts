@@ -81,18 +81,31 @@ describe('in-place rewind over a real session', () => {
     expect((messages[0]!.content[0] as { text: string }).text).toBe('first question')
   })
 
-  it('refuses to plan a rewind to the last surface node', () => {
+  it('rewinds the last user message away (withdraw + re-send) end to end', () => {
     const session = buildSession()
-    // seq 2 is the second user message with assistant 3 still after it — valid.
+    // seq 2 is the second user message with assistant 3 still after it — valid,
+    // shadows only the assistant reply.
     const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: 2 })
     expect(plan.shadowedSeqs).toEqual([3])
 
-    // A session ending with a user message has nothing to shadow.
+    // A session ending with a user message: rewinding to it withdraws the
+    // message itself — the surface ends before it, and the next append follows.
     const open = Session.create(SessionId('rewind-open'))
     open.append('user/message', textMessage('first question'), { surfaceOp: 'append' })
-    open.append('user/message', textMessage('still waiting'), { surfaceOp: 'append' })
-    expect(() => planRewind(open.events, open.surface.nodes, { kind: 'seq', seq: 1 }))
-      .toThrowError(RewindError)
+    open.append('user/message', textMessage('oops, sent by mistake'), { surfaceOp: 'append' })
+    expect([...open.surface.nodes]).toEqual([0, 1])
+
+    const withdraw = planRewind(open.events, open.surface.nodes, { kind: 'seq', seq: 1 })
+    expect(withdraw.shadowedSeqs).toEqual([1])
+    open.append('user/message', textMessage('[回退标记] 已撤回 seq 1'), {
+      surfaceOp: { op: 'replace', start: withdraw.surfaceStart, end: withdraw.surfaceEnd },
+      sourceEventSeqs: [...withdraw.shadowedSeqs],
+    })
+    expect([...open.surface.nodes]).toEqual([0, 2])
+    open.append('user/message', textMessage('the corrected question'), { surfaceOp: 'append' })
+    const messages = open.deriveMessages()
+    expect(messages.map(m => (m.content[0] as { text: string }).text))
+      .toEqual(['first question', '[回退标记] 已撤回 seq 1', 'the corrected question'])
   })
 
   it('survives a rewind followed by new user traffic', () => {
