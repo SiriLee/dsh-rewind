@@ -40,30 +40,19 @@ In-place conversation rewind for [DeepSeek Harness](https://github.com/deepseek-
 
 ## 📸 Screenshots
 
-| Per-message ↶ button (hover) | Mode-selection popover |
-|:---:|:---:|
-| ![A user message with the ↶ rewind button in its actions row](assets/screenshots/rewind-button.png) | ![The popover offering conversation-only or conversation-and-code rewind](assets/screenshots/mode-popover.png) |
+All screenshots render at a fixed width, so their size stays consistent
+regardless of caption length.
 
-| "Conversation and code" impact list | Manual `/rewind` guard hint |
-|:---:|:---:|
-| ![The impact list showing files to restore/delete with confirm and back](assets/screenshots/impact-list.png) | ![Typing /rewind manually shows a hint pointing at the button](assets/screenshots/guard-hint.png) |
-
-<!-- Screenshots to provide later — drop the PNGs into assets/screenshots/:
-  - rewind-button.png — hover over a user message in the conversation: the
-                        ↶ rewind button in the message's action row, next to
-                        the existing copy / "branch in new chat" icons.
-  - mode-popover.png  — after clicking ↶: the small popover showing the target
-                        line (`seq N · HH:MM · preview`) and two options —
-                        "Rewind conversation only" and "Rewind conversation
-                        and code" — plus Cancel. "Checking for file changes…"
-                        may still be pending in the second option's hint.
-  - impact-list.png   — after choosing "Rewind conversation and code": the
-                        impact panel listing the files to restore / delete,
-                        with "Back" and "Confirm rewind" buttons.
-  - guard-hint.png    — typing `/rewind` (or `/rewind @seq`) into the composer
-                        and pressing Enter: the transient hint "…use the ↶
-                        button on a message to rewind" appears above the card.
--->
+<table>
+  <tr>
+    <td align="center"><img src="assets/screenshots/rewind-button.png" width="440" alt="Per-message ↶ rewind button"><br><sub>Per-message ↶ rewind button</sub></td>
+    <td align="center"><img src="assets/screenshots/mode-popover.png" width="440" alt="Mode-selection popover"><br><sub>Mode-selection popover</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/impact-list.png" width="440" alt="Impact list"><br><sub>"Conversation and code" impact list</sub></td>
+    <td align="center"><img src="assets/screenshots/guard-hint.png" width="440" alt="Manual /rewind guard hint"><br><sub>Manual /rewind guard hint</sub></td>
+  </tr>
+</table>
 
 ## How it works
 
@@ -220,7 +209,7 @@ scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader
 scripts/verify-host.mjs end-to-end host verification (18 checks)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration, 46 cases)
 docs/harness-reference.md   maintainer docs: DeepSeek Harness interface reference
-assets/screenshots/     screenshots (pending)
+assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
 package.json            dsh.bundle + dsh.client manifests, optional peerDependencies
 ```

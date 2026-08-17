@@ -40,25 +40,18 @@
 
 ## 📸 截图
 
-| 用户消息旁的 ↶ 按钮（hover） | 模式选择浮层 |
-|:---:|:---:|
-| ![用户消息操作行中的 ↶ 回退按钮](assets/screenshots/rewind-button.png) | ![仅回退对话 / 回退对话和代码 两个选项的浮层](assets/screenshots/mode-popover.png) |
+所有截图以固定宽度渲染，尺寸不随说明文字长短变化。
 
-| 「回退对话和代码」影响清单 | 手动 /rewind 拦截提示 |
-|:---:|:---:|
-| ![影响清单：待还原/删除的文件，含确认与返回](assets/screenshots/impact-list.png) | ![手动输入 /rewind 时提示改用按钮](assets/screenshots/guard-hint.png) |
-
-<!-- 待补充截图——将 PNG 放入 assets/screenshots/：
-  - rewind-button.png — hover 用户消息行：消息操作区中的 ↶ 回退按钮，
-                        与现有的 copy /「在新对话中分支」图标并排。
-  - mode-popover.png  — 点击 ↶ 后弹出的浮层：目标行（`seq N · HH:MM ·
-                        preview`）+ 两个选项「仅回退对话」「回退对话和代码」
-                        + 取消。第二项 hint 可能仍在显示「正在检查文件变更…」。
-  - impact-list.png   — 选择「回退对话和代码」后：影响面板列出待还原/删除的
-                        文件，底部有「返回」与「确认回退」。
-  - guard-hint.png    — 在输入框手动输入 `/rewind`（含参数）并按回车：卡片上方
-                        弹出临时提示「…请使用消息旁的 ↶ 回退按钮」。
--->
+<table>
+  <tr>
+    <td align="center"><img src="assets/screenshots/rewind-button.png" width="440" alt="用户消息旁的 ↶ 回退按钮"><br><sub>用户消息旁的 ↶ 回退按钮</sub></td>
+    <td align="center"><img src="assets/screenshots/mode-popover.png" width="440" alt="模式选择浮层"><br><sub>模式选择浮层</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="assets/screenshots/impact-list.png" width="440" alt="影响清单"><br><sub>「回退对话和代码」影响清单</sub></td>
+    <td align="center"><img src="assets/screenshots/guard-hint.png" width="440" alt="手动 /rewind 拦截提示"><br><sub>手动 /rewind 拦截提示</sub></td>
+  </tr>
+</table>
 
 ## 工作原理
 
@@ -211,7 +204,7 @@ scripts/build.mjs       esbuild：lib/index.js（host ESM）+ lib/client.js（lo
 scripts/verify-host.mjs 端到端验证构建产物（18 项检查）
 tests/                  vitest 套件（rewind / snapshot / hidden / session-cwd / 集成，46 例）
 docs/harness-reference.md   维护者文档：DeepSeek Harness 接口参考
-assets/screenshots/     截图（待补充）
+assets/screenshots/     界面截图
 cordis.patch.yml        bundle patch（挂载双面插件行）
 package.json            dsh.bundle + dsh.client 声明、optional peerDependencies
 ```
