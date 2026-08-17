@@ -2,9 +2,9 @@
 
 DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Claude Code `/rewind` 语义）。主交互为**用户消息旁的「回退」按钮**，点击后选择回退模式；命令仅作辅助。
 
-> 状态：v0.1.8 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
+> 状态：v0.1.10 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
 
-## 实现状态（v0.1.8）
+## 实现状态（v0.1.10）
 
 - ✅ host 端 `/rewind` 命令（手动单动作：不接受参数、撤回最近一条；参数化形式保留为按钮内部调用）
 - ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
