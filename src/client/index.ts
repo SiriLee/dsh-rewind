@@ -35,11 +35,10 @@ const NS = 'rewind'
 const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"]'
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
+/** The composer textarea dsh renders for the current session's input. */
+const COMPOSER_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
 
-/** Host marker prefix (DOM fallback for marker rows not in the chat view nodes). */
-const MARKER_TEXT = '__DSH_REWIND__'
-
-/** Extract the rewind target from a command outcome text ("已回退到 seq N"). */
+/** Extract the rewind target from a command outcome text ("已撤回 seq N..."). */
 function targetOfOutcome(text: string | undefined): number | undefined {
   if (text === undefined) return undefined
   const match = text.match(/seq (\d+)/)
@@ -59,10 +58,10 @@ function messagePreviewOf(node: UserMessageNode): string {
 /**
  * Anchor seqs that must be hidden from the rendered transcript so the user
  * sees the conversation as the agent sees it: every `/rewind` command row and
- * every message withdrawn between the latest rewind's target and its marker
- * (inclusive of the marker). The rewind marker is a replacement surface node
- * that is NOT part of the chat view nodes, so the range endpoint comes from
- * the command node's `sourceEventSeq` (the marker's log seq) instead.
+ * every message withdrawn by the latest rewind — the target message itself,
+ * everything after it, and the (empty, unrendered) marker. The range
+ * endpoints come from the command node: `sourceEventSeq` is the marker's log
+ * seq, and the outcome text carries the target seq.
  */
 function hiddenSeqsOf(session: SessionFace): Set<number> {
   const hidden = new Set<number>()
@@ -86,38 +85,44 @@ function hiddenSeqsOf(session: SessionFace): Set<number> {
       const node = snap.chat.nodes.get(key)
       if (node === undefined) continue
       const anchor = node.anchorSeq
-      if (anchor > latest.target && anchor <= latest.marker) hidden.add(anchor)
+      if (anchor >= latest.target && anchor <= latest.marker) hidden.add(anchor)
     }
   }
   return hidden
 }
 
 /**
- * Hide marker rows by text, regardless of how they are rendered: the marker
- * is a replacement surface node that may not exist in the chat view nodes, so
- * walk text nodes for the marker prefix and hide the enclosing message row
- * (a `data-chat-anchor-key` / `data-chat-flow-kind` container, or the nearest
- * ancestor block otherwise).
+ * The plain text of the user message at `seq` in the session snapshot, for
+ * filling the composer after a withdraw.
  */
-function hideMarkerRows(hidden: WeakSet<HTMLElement>): void {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
-  const rows: HTMLElement[] = []
-  while (walker.nextNode()) {
-    const text = walker.currentNode.textContent ?? ''
-    if (!text.includes(MARKER_TEXT)) continue
-    let el = walker.currentNode.parentElement
-    while (el !== null && el !== document.body
-      && el.dataset?.chatAnchorKey === undefined
-      && el.dataset?.chatFlowKind === undefined
-      && !el.classList.contains('dsh-rewind-popover')) {
-      el = el.parentElement
+function userTextAt(session: SessionFace, seq: number): string | undefined {
+  const snap = session.getSnapshot()
+  for (const key of snap.chat.order) {
+    const node = snap.chat.nodes.get(key)
+    if (node === undefined || node.kind !== 'user') continue
+    const user = node.data as UserMessageNode
+    if (user.seq === seq) {
+      return user.content
+        .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+        .join('')
     }
-    if (el !== null && el !== document.body && !hidden.has(el)) rows.push(el)
   }
-  for (const row of rows) {
-    row.style.display = 'none'
-    hidden.add(row)
-  }
+  return undefined
+}
+
+/**
+ * Fill the dsh composer with `text` (React-controlled textarea: use the
+ * native setter so the value change is seen, then dispatch an input event).
+ * Best-effort — no composer match means the fill is skipped.
+ */
+function fillComposer(text: string): boolean {
+  const textarea = document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
+  if (textarea === null) return false
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+  setter?.call(textarea, text)
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  textarea.focus()
+  return true
 }
 
 /**
@@ -217,15 +222,13 @@ export function apply(ctx: ClientContext): void {
           seat.style.display = 'none'
           hidden.add(seat)
           hiddenCount += 1
-        } else if (hidden.has(seat) && !seat.textContent?.includes(MARKER_TEXT)) {
+        } else if (hidden.has(seat)) {
           seat.style.display = ''
           hidden.delete(seat)
         }
       }
-      // Marker rows are replacement surface nodes that may not be chat view
-      // nodes at all (no data-chat-anchor-key), so locate them by their text:
-      // walk text nodes for the marker prefix and hide the enclosing row.
-      hideMarkerRows(hidden)
+      // Fill the composer with the withdrawn target's text, once per target.
+      if (session !== undefined) fillComposerForRewind(session, filledTargets)
       // Diagnostics (only when something is hidden): confirm the hiding path
       // actually fires in the browser.
       if (hiddenSeqs.size > 0 || hiddenCount > 0) {
@@ -235,6 +238,26 @@ export function apply(ctx: ClientContext): void {
       }
       for (const seat of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) {
         if (!hidden.has(seat)) attach(seat)
+      }
+    }
+
+    const filledTargets = new Set<number>()
+    /**
+     * When a rewind command settles successfully, put the withdrawn target
+     * message's text back into the composer so the user can edit and re-send.
+     */
+    const fillComposerForRewind = (session: SessionFace, filled: Set<number>): void => {
+      const snap = session.getSnapshot()
+      for (const key of snap.chat.order) {
+        const node = snap.chat.nodes.get(key)
+        if (node === undefined || node.kind !== 'command') continue
+        const command = node.data as CommandNode
+        if (command.name !== 'rewind' || command.outcome?.kind !== 'success') continue
+        const target = targetOfOutcome(command.outcome.text)
+        if (target === undefined || filled.has(target)) continue
+        const text = userTextAt(session, target)
+        if (text === undefined || text === '') continue
+        if (fillComposer(text)) filled.add(target)
       }
     }
 

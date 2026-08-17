@@ -90,12 +90,12 @@ check('command registered', typeof registered?.handler === 'function' && registe
 const listResult = await call(agent, '')
 check('bare /rewind lists candidates', listResult.kind === 'success' && listResult.text.includes('second question') && listResult.text.includes('first question'), listResult.text)
 
-// 3. /rewind @2 chat cuts the surface in place
+// 3. /rewind @2 chat withdraws the target (seq 2) and everything after it
 const before = [...session.surface.nodes]
 const chatResult = await call(agent, '@2 chat')
 const after = [...session.surface.nodes]
 check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
-check('surface cut to [0,1,2,marker]', after.length === 4 && after[0] === 0 && after[1] === 1 && after[2] === 2 && after[3] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
+check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
 check('log stays append-only (5 events)', session.events.length === 5, `events=${session.events.length}`)
 
 const writeExec = (callId, filePath, content) => ({
@@ -141,27 +141,29 @@ const writeExec = (callId, filePath, content) => ({
   check('both restores cwd-resolved file', both.kind === 'success' && fs.files.get('/workspace/rel.txt') === 'relative original', both.text)
 }
 
-// 7. preview reports the impact (rewind to seq 2 reverts the anchor-2 write)
-const previewResult = await call(agent, 'preview @2 both')
+// 7. preview reports the impact (rewind to seq 0 — still on the surface after
+//    the earlier withdraw — reverts the anchor-0 write)
+const previewResult = await call(agent, 'preview @0 both')
 check('preview shows file impact', previewResult.kind === 'success' && previewResult.text.includes('/workspace/a.txt'), previewResult.text)
 
 // 8. both mode restores the file
-const bothResult = await call(agent, '@2 both')
+const bothResult = await call(agent, '@0 both')
 check('rewind both restores file', bothResult.kind === 'success' && bothResult.text.includes('还原 1 个文件'), bothResult.text)
 check('file content restored', fs.files.get('/workspace/a.txt') === 'original content', fs.files.get('/workspace/a.txt'))
 
 // 9. a running agent is force-stopped before the rewind (not refused)
-let cancelled = false
+const runningSession = buildSession('verify-running')
 const running = {
-  ...agent, status: 'running',
+  ...{ id: runningSession.id, session: runningSession, status: 'idle' }, status: 'running',
   cancel: () => { cancelled = true; running.status = 'idle' },
 }
+let cancelled = false
 const runningResult = await registered.handler({ commandId: Symbol('cid'), agent: running, rawInput: '@2 chat', signal: aborted() })
 check('running agent is cancelled first', cancelled === true, `cancelled=${cancelled}`)
 check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
 
 // 9b. a cancel that never quiesces aborts the rewind (timeout path)
-const stuck = { ...agent, status: 'running', cancel: () => {} }
+const stuck = { ...{ id: runningSession.id, session: runningSession, status: 'idle' }, status: 'running', cancel: () => {} }
 const stuckResult = await registered.handler({ commandId: Symbol('cid'), agent: stuck, rawInput: '@2 chat', signal: aborted() })
 check('stuck agent aborts rewind', stuckResult.kind === 'error', stuckResult.text)
 

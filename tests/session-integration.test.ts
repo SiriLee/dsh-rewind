@@ -1,12 +1,14 @@
 /**
  * Integration tests against a real dsh-session: build a session log, plan a
- * rewind, append the marker with a surface replace, and verify the surface
- * and the derived model messages — the exact mechanism `executeRewind` uses.
+ * rewind (withdraw semantics: the target AND everything after it), append the
+ * empty-assistant marker with a surface replace, and verify the surface and
+ * the derived model messages — the exact mechanism `executeRewind` uses.
  */
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { AssistantMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { planRewind, RewindError } from '../src/rewind.ts'
+import { planRewind } from '../src/rewind.ts'
 
 function textMessage(text: string) {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -17,6 +19,20 @@ function assistantMessage(text: string) {
     content: [{ type: 'text', text }],
     source: { provider: 'test', model: 'test-model' },
   })
+}
+
+/** The empty-content marker the host uses: derives to null (no model noise). */
+function emptyMarker(): AssistantMessage {
+  return createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } })
+}
+
+/** Append the rewind marker (empty assistant) as the surface replacement. */
+function applyRewind(session: Session, plan: ReturnType<typeof planRewind>): number {
+  const event = session.append('assistant/message', { turn: 99, step: 0, message: emptyMarker() }, {
+    surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
+    sourceEventSeqs: [...plan.shadowedSeqs],
+  })
+  return event.seq
 }
 
 /** A session with two completed turns: u0/a1 (turn 0), u2/a3 (turn 1). */
@@ -30,66 +46,47 @@ function buildSession(): Session {
 }
 
 describe('in-place rewind over a real session', () => {
-  it('appends a marker whose replace shadows everything after the target', () => {
+  it('withdraws the target and everything after it; the empty marker leaves no model noise', () => {
     const session = buildSession()
     expect([...session.surface.nodes]).toEqual([0, 1, 2, 3])
 
     const plan = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
     expect(plan.targetSeq).toBe(2)
-    expect(plan.shadowedSeqs).toEqual([3])
+    expect(plan.shadowedSeqs).toEqual([2, 3])
 
-    const marker = textMessage('[回退标记] 对话已回退到 seq 2')
-    const event = session.append('user/message', marker, {
-      surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-      sourceEventSeqs: [...plan.shadowedSeqs],
-    })
+    const markerSeq = applyRewind(session, plan)
 
     // The log stays append-only (audit trail intact).
     expect(session.events).toHaveLength(5)
-    expect(session.events[4]).toBe(event)
-    expect(event.seq).toBe(4)
+    expect(markerSeq).toBe(4)
 
-    // The surface now ends at the marker; the shadowed nodes left the model context.
-    expect([...session.surface.nodes]).toEqual([0, 1, 2, 4])
+    // The surface ends at the (unrendered, empty) marker.
+    expect([...session.surface.nodes]).toEqual([0, 1, 4])
 
-    // The model messages derive from the cut surface, marker included.
+    // The model context is exactly "before the withdrawn message": no marker,
+    // no second question, no second answer.
     const messages = session.deriveMessages()
-    expect(messages.map(m => m.content[0]!.type === 'text' ? (m.content[0] as { text: string }).text : ''))
-      .toEqual(['first question', 'first answer', 'second question', '[回退标记] 对话已回退到 seq 2'])
+    expect(messages.map(m => (m.content[0] as { text: string }).text))
+      .toEqual(['first question', 'first answer'])
   })
 
   it('keeps rewinding after a rewind (rewind can itself be rewound)', () => {
     const session = buildSession()
     const first = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
-    session.append('user/message', textMessage('marker one'), {
-      surfaceOp: { op: 'replace', start: first.surfaceStart, end: first.surfaceEnd },
-      sourceEventSeqs: [...first.shadowedSeqs],
-    })
-    expect([...session.surface.nodes]).toEqual([0, 1, 2, 4])
+    applyRewind(session, first)
+    expect([...session.surface.nodes]).toEqual([0, 1, 4])
 
-    // Rewind again, to the first user message.
-    const second = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 3 })
+    // Rewind again, to the first user message: everything (incl. the marker
+    // and the first message itself) is withdrawn.
+    const second = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
     expect(second.targetSeq).toBe(0)
-    expect(second.shadowedSeqs).toEqual([1, 2, 4])
-    session.append('user/message', textMessage('marker two'), {
-      surfaceOp: { op: 'replace', start: second.surfaceStart, end: second.surfaceEnd },
-      sourceEventSeqs: [...second.shadowedSeqs],
-    })
-    expect([...session.surface.nodes]).toEqual([0, 5])
-    const messages = session.deriveMessages()
-    expect(messages).toHaveLength(2)
-    expect((messages[0]!.content[0] as { text: string }).text).toBe('first question')
+    expect(second.shadowedSeqs).toEqual([0, 1, 4])
+    const markerSeq = applyRewind(session, second)
+    expect([...session.surface.nodes]).toEqual([markerSeq])
+    expect(session.deriveMessages()).toEqual([])
   })
 
-  it('rewinds the last user message away (withdraw + re-send) end to end', () => {
-    const session = buildSession()
-    // seq 2 is the second user message with assistant 3 still after it — valid,
-    // shadows only the assistant reply.
-    const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: 2 })
-    expect(plan.shadowedSeqs).toEqual([3])
-
-    // A session ending with a user message: rewinding to it withdraws the
-    // message itself — the surface ends before it, and the next append follows.
+  it('withdraws the latest message end to end, then re-sends', () => {
     const open = Session.create(SessionId('rewind-open'))
     open.append('user/message', textMessage('first question'), { surfaceOp: 'append' })
     open.append('user/message', textMessage('oops, sent by mistake'), { surfaceOp: 'append' })
@@ -97,27 +94,23 @@ describe('in-place rewind over a real session', () => {
 
     const withdraw = planRewind(open.events, open.surface.nodes, { kind: 'seq', seq: 1 })
     expect(withdraw.shadowedSeqs).toEqual([1])
-    open.append('user/message', textMessage('[回退标记] 已撤回 seq 1'), {
-      surfaceOp: { op: 'replace', start: withdraw.surfaceStart, end: withdraw.surfaceEnd },
-      sourceEventSeqs: [...withdraw.shadowedSeqs],
-    })
+    applyRewind(open, withdraw)
     expect([...open.surface.nodes]).toEqual([0, 2])
+
     open.append('user/message', textMessage('the corrected question'), { surfaceOp: 'append' })
     const messages = open.deriveMessages()
     expect(messages.map(m => (m.content[0] as { text: string }).text))
-      .toEqual(['first question', '[回退标记] 已撤回 seq 1', 'the corrected question'])
+      .toEqual(['first question', 'the corrected question'])
   })
 
   it('survives a rewind followed by new user traffic', () => {
     const session = buildSession()
     const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: 0 })
-    session.append('user/message', textMessage('marker'), {
-      surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-      sourceEventSeqs: [...plan.shadowedSeqs],
-    })
+    const markerSeq = applyRewind(session, plan)
     session.append('user/message', textMessage('follow-up question'), { surfaceOp: 'append' })
     const messages = session.deriveMessages()
     expect(messages.map(m => (m.content[0] as { text: string }).text))
-      .toEqual(['first question', 'marker', 'follow-up question'])
+      .toEqual(['follow-up question'])
+    expect([...session.surface.nodes]).toEqual([markerSeq, 5])
   })
 })

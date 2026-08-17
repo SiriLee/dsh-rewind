@@ -18,8 +18,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { Session, UserMessage } from '@deepseek-ai/dsh-session'
+import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
+import type { AssistantMessage, Session } from '@deepseek-ai/dsh-session'
 import type {
   PostToolDecision, ToolExecution, ToolExecutionResult,
 } from '@deepseek-ai/dsh-tools'
@@ -171,18 +171,29 @@ async function commitEntry(
 }
 
 /**
- * Build the rewind marker message the surface replacement lands on. The
- * leading structured prefix lets the client hide the marker (and the
- * withdrawn messages) from the rendered transcript.
+ * Build the rewind marker: an EMPTY-content assistant message. Deriving an
+ * empty assistant/message to `null` (harness behavior), so the marker never
+ * enters the model context and never renders as conversation content — the
+ * agent and the user both see the conversation as it was at the target. The
+ * marker only exists as the surface-replacement carrier in the append-only
+ * log (audit).
  */
-function buildMarker(targetSeq: number): UserMessage {
-  return createUserMessage({
-    content: [{
-      type: 'text',
-      text: `__DSH_REWIND__:{"target":${targetSeq}}\n[回退标记 / rewind marker] 对话已回退到 seq ${targetSeq}，此标记之后的历史已从模型上下文中移除。请忽略此标记本身，等待用户的下一条消息。`,
-    }],
-    source: { kind: 'user' },
+function buildMarker(): AssistantMessage {
+  return createAssistantMessage({
+    content: [],
+    source: { provider: 'dsh-rewind', model: 'rewind-marker' },
   })
+}
+
+/** Next turn number for the marker event (past every recorded turn). */
+function nextTurnOf(session: Session): number {
+  let max = -1
+  for (const event of session.events) {
+    if (event.type === 'turn/start' || event.type === 'turn/end' || event.type === 'assistant/message') {
+      if (event.data.turn > max) max = event.data.turn
+    }
+  }
+  return max + 1
 }
 
 /** Render a parsed target for the step-2 hint. */
@@ -259,10 +270,14 @@ async function executeRewind(
     return rewindErrorResult(error)
   }
 
-  const marker = buildMarker(plan.targetSeq)
+  const marker = buildMarker()
   let event: ReturnType<Session['append']>
   try {
-    event = agent.session.append('user/message', marker, {
+    // The marker is an EMPTY assistant/message: it derives to null in the
+    // model context and renders nothing, so the surface simply ends before
+    // the withdrawn messages — agent and user both see the conversation as
+    // it was before the target.
+    event = agent.session.append('assistant/message', { turn: nextTurnOf(agent.session), step: 0, message: marker }, {
       surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
       sourceEventSeqs: [...plan.shadowedSeqs],
     })
@@ -289,14 +304,11 @@ async function executeRewind(
     }
   }
 
-  // The last-node case withdraws the target message itself (send-a-mistake →
-  // re-send); report it distinctly from a mid-conversation rewind.
-  const withdrewLatest = plan.shadowedSeqs[0] === plan.targetSeq
+  // Every rewind withdraws the target message and everything after it; its
+  // content is offered back in the composer for re-sending.
   return {
     kind: 'success',
-    text: withdrewLatest
-      ? `已撤回 seq ${plan.targetSeq}（最近一条消息），可重新发送${restore}。`
-      : `已回退到 seq ${plan.targetSeq}，移除 ${plan.shadowedSeqs.length} 条上下文（日志保留）${restore}。`,
+    text: `已撤回 seq ${plan.targetSeq} 及之后内容（对话已回到此前）${restore}。`,
     sourceEventSeq: event.seq,
   }
 }

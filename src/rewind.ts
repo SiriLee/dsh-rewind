@@ -183,21 +183,11 @@ export function planRewind(
       `user message at seq ${targetSeq} is no longer in the model context (shadowed by compaction)`,
     )
   }
-  if (targetIndex === surface.length - 1) {
-    // The target is the LAST surface node: nothing follows it, so "rewinding
-    // to it" means withdrawing the message itself (the common send-a-mistake
-    // case — the user re-sends after this). The replacement range includes
-    // the target, cutting the context back to before it.
-    return {
-      targetSeq,
-      targetIndex,
-      shadowedSeqs: [targetSeq],
-      surfaceStart: targetSeq,
-      surfaceEnd: targetSeq,
-    }
-  }
-
-  const shadowedSeqs = surface.slice(targetIndex + 1)
+  // Rewinding to a message WITHDRAWS it and everything after it (time-travel
+  // semantics: the conversation returns to before that message; its content
+  // is offered back in the composer for re-sending). The replacement range
+  // therefore ALWAYS includes the target.
+  const shadowedSeqs = surface.slice(targetIndex)
   return {
     targetSeq,
     targetIndex,

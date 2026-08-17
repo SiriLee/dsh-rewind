@@ -2,16 +2,16 @@
 
 DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Claude Code `/rewind` 语义）。主交互为**用户消息旁的「回退」按钮**，点击后选择回退模式；命令仅作辅助。
 
-> 状态：v0.1.5 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
+> 状态：v0.1.7 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
 
-## 实现状态（v0.1.5）
+## 实现状态（v0.1.7）
 
 - ✅ host 端 `/rewind` 命令（两步文本引导 + 直接执行 + `preview` 影响清单）
 - ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
 - ✅ **与其他审批类插件共存**：捕获在 around-dispatch 阶段，`tools/pre-execute` 被 `ask` 短路（如 dsh-edit-approval）后批准仍能记录；被拒绝的调用不留 pending 残留
 - ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径台账/还原指向真实文件；台账记录解析后的 display path
 - ✅ **fs 服务动态获取**（`ctx.inject(['fs'])`）：fs 后挂载也不失效，无 fs 部署时命令仍可用
-- ✅ 同窗口 in-place 回退：追加标记节点 + `surfaceOp: replace` 替换目标点之后的 surface（真实 `dsh-session` 集成测试通过）
+- ✅ 同窗口 in-place 回退：追加空内容标记 + `surfaceOp: replace` 替换目标及之后全部 surface（真实 `dsh-session` 集成测试通过）
 - ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）
 - ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（14 项，含审批短路/会话 cwd 场景）
 - ⏳ 二期：快捷键、git-first 快照式文件回退、命令路径的 client 两步浮层接管
@@ -68,14 +68,15 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 - 每条用户消息 hover 出现「↶ 回退」按钮：点击 → 选择「仅回退对话」或
   「回退对话和代码」（后者先展示影响清单再确认）。
-- **撤回最近消息**：对**最后一条**用户消息回退（按钮或 `/rewind <目标>`），效果是
-  **撤回该消息本身**（发错了立即重发的常见场景）——上下文回到它之前，命令结果
-  提示"已撤回 seq N，可重新发送"。
+- **回退 = 撤回（时间回溯）**：对**任意**用户消息回退（按钮或 `/rewind <目标>`），
+  效果是**撤回该消息及它之后的所有内容**（含 agent 回复、工具调用）——对话界面与
+  Agent 上下文都回到这条消息发送之前；**该消息的文本自动填入输入框（编辑区）**，
+  可直接修改后重发。命令结果提示"已撤回 seq N 及之后内容"。
 - 键盘流：`/rewind` → 选消息 → `/rewind <序号> chat|both`；`/rewind preview <目标>`
   只输出影响清单不执行。
-- **回退后前端与 Agent 一致**：回退/撤回后，client 端自动隐藏回退标记、`/rewind`
-  命令结果以及被回退范围内的消息（含 agent 回复），可见对话回到回退点之前的样子；
-  之后新发的消息正常显示。会话日志（append-only 审计）不受影响。
+- **回退后前端与 Agent 一致**：回退标记是空内容消息（deriveMessages 会跳过，模型
+  上下文无任何标记噪音）；client 端隐藏被撤回范围内的消息行与 `/rewind` 命令结果，
+  可见对话即"撤回点之前的内容"。会话日志（append-only 审计）不受影响。
 
 ## 已知限制（v0.1）
 
@@ -125,7 +126,7 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 ### 3. 同窗口 in-place 对话回退
 
-- `Session.append('user/message', marker, { surfaceOp: { op:'replace', start, end }, sourceEventSeqs })`：在当前会话日志内追加回退标记节点，把目标点之后的所有 surface 节点从模型上下文替换掉。
+- `Session.append('assistant/message', { turn, step, message: 空标记 }, { surfaceOp: { op:'replace', start, end }, sourceEventSeqs })`：追加**空内容**标记（deriveMessages 跳过 → 模型上下文无噪音），把目标及其之后的所有 surface 节点从模型上下文替换掉。
 - 效果：当前窗口上下文从目标点重新开始；**不产生新会话、不切换窗口**；原始日志完整保留（append-only 审计不变），仅不再进入模型上下文。
 - 依赖：`@deepseek-ai/dsh-session`（`Session.append`、`foldSurface`）、`@deepseek-ai/dsh-llm`（`createUserMessage`）、`@deepseek-ai/dsh-commands`（命令注册）、`@deepseek-ai/dsh-agent`（`Agent.status` idle 守卫）。
 

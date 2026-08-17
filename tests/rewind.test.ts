@@ -115,13 +115,14 @@ describe('listRewindCandidates', () => {
 })
 
 describe('planRewind', () => {
-  it('plans a range shadowing everything after the target', () => {
+  it('withdraws the target AND everything after it', () => {
     const { events, surface } = sampleLog()
     const plan = planRewind(events, surface, { kind: 'seq', seq: 2 })
     expect(plan.targetSeq).toBe(2)
     expect(plan.targetIndex).toBe(2)
-    expect(plan.shadowedSeqs).toEqual([3, 4, 5])
-    expect(plan.surfaceStart).toBe(3)
+    // Time-travel semantics: the target message itself is withdrawn too.
+    expect(plan.shadowedSeqs).toEqual([2, 3, 4, 5])
+    expect(plan.surfaceStart).toBe(2)
     expect(plan.surfaceEnd).toBe(5)
   })
 
