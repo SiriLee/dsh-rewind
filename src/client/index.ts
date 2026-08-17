@@ -36,8 +36,15 @@ const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"]'
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 
-/** Structured prefix the host marker carries: `__DSH_REWIND__:{"target":N}`. */
-const REWIND_MARKER_RE = /__DSH_REWIND__:\{"target":(\d+)\}/
+/** Host marker prefix (DOM fallback for marker rows not in the chat view nodes). */
+const MARKER_TEXT = '__DSH_REWIND__'
+
+/** Extract the rewind target from a command outcome text ("已回退到 seq N"). */
+function targetOfOutcome(text: string | undefined): number | undefined {
+  if (text === undefined) return undefined
+  const match = text.match(/seq (\d+)/)
+  return match !== null ? Number(match[1]) : undefined
+}
 
 /** Join the text blocks of a user message into one plain preview. */
 function messagePreviewOf(node: UserMessageNode): string {
@@ -51,9 +58,11 @@ function messagePreviewOf(node: UserMessageNode): string {
 
 /**
  * Anchor seqs that must be hidden from the rendered transcript so the user
- * sees the conversation as it was before the rewind (matching what the agent
- * sees): every rewind marker, every `/rewind` command row, and every message
- * withdrawn between the latest marker's target and the marker itself.
+ * sees the conversation as the agent sees it: every `/rewind` command row and
+ * every message withdrawn between the latest rewind's target and its marker
+ * (inclusive of the marker). The rewind marker is a replacement surface node
+ * that is NOT part of the chat view nodes, so the range endpoint comes from
+ * the command node's `sourceEventSeq` (the marker's log seq) instead.
  */
 function hiddenSeqsOf(session: SessionFace): Set<number> {
   const hidden = new Set<number>()
@@ -61,21 +70,15 @@ function hiddenSeqsOf(session: SessionFace): Set<number> {
   let latest: { marker: number; target: number } | null = null
   for (const key of snap.chat.order) {
     const node = snap.chat.nodes.get(key)
-    if (node === undefined) continue
-    if (node.kind === 'command') {
-      const command = node.data as CommandNode
-      if (command.name === 'rewind') hidden.add(command.seq)
-    } else if (node.kind === 'user') {
-      const user = node.data as UserMessageNode
-      const text = user.content
-        .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-        .join('')
-      const match = text.match(REWIND_MARKER_RE)
-      if (match !== null) {
-        hidden.add(user.seq)
-        const target = Number(match[1])
-        if (latest === null || user.seq > latest.marker) latest = { marker: user.seq, target }
-      }
+    if (node === undefined || node.kind !== 'command') continue
+    const command = node.data as CommandNode
+    if (command.name !== 'rewind') continue
+    hidden.add(command.seq)
+    const marker = command.outcome?.sourceEventSeq
+    const target = targetOfOutcome(command.outcome?.text)
+    if (marker !== undefined && target !== undefined
+      && (latest === null || marker > latest.marker)) {
+      latest = { marker, target }
     }
   }
   if (latest !== null) {
@@ -181,7 +184,10 @@ export function apply(ctx: ClientContext): void {
         const anchor = key !== undefined && session !== undefined
           ? session.getSnapshot().chat.nodes.get(key)?.anchorSeq
           : undefined
-        if (anchor !== undefined && hiddenSeqs.has(anchor)) {
+        // DOM fallback: a marker row that is not a chat view node (the marker
+        // is a replacement surface node) carries the structured prefix.
+        const isMarker = anchor === undefined && seat.textContent?.includes(MARKER_TEXT) === true
+        if ((anchor !== undefined && hiddenSeqs.has(anchor)) || isMarker) {
           seat.style.display = 'none'
           hidden.add(seat)
         } else if (hidden.has(seat)) {
