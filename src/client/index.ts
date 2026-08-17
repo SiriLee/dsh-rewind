@@ -62,11 +62,13 @@ function messagePreviewOf(node: UserMessageNode): string {
 
 /**
  * Anchor seqs that must be hidden from the rendered transcript so the user
- * sees the conversation as the agent sees it: every `/rewind` command row and
- * every message withdrawn by the latest rewind — the target message itself,
- * everything after it, and the (empty, unrendered) marker. The range
- * endpoints come from the command node: `sourceEventSeq` is the marker's log
- * seq, and the outcome text carries the target seq.
+ * sees the conversation as the agent sees it: every EXECUTED `/rewind`
+ * command row (one that appended a marker; preview-only rows stay visible
+ * until a real rewind's range covers them) and every message withdrawn by the
+ * latest rewind — the target message itself, everything after it, and the
+ * (empty, unrendered) marker. The range endpoints come from the command node:
+ * `sourceEventSeq` is the marker's log seq, and the outcome text carries the
+ * target seq.
  */
 function hiddenSeqsOf(session: SessionFace): Set<number> {
   const hidden = new Set<number>()
@@ -81,11 +83,14 @@ function hiddenSeqsOf(session: SessionFace): Set<number> {
     // the conversation is rewound). A failed rewind must stay visible so the
     // user sees the error instead of silently missing the rewind.
     if (command.outcome?.kind !== 'success') continue
+    // A successful command without a marker (`sourceEventSeq`) only PREVIEWED
+    // the impact — nothing was rewound, so its row stays visible (like a
+    // failed rewind); only a real rewind's range may hide it below.
+    if (command.outcome.sourceEventSeq === undefined) continue
     hidden.add(command.seq)
-    const marker = command.outcome?.sourceEventSeq
-    const target = targetOfOutcome(command.outcome?.text)
-    if (marker !== undefined && target !== undefined
-      && (latest === null || marker > latest.marker)) {
+    const marker = command.outcome.sourceEventSeq
+    const target = targetOfOutcome(command.outcome.text)
+    if (target !== undefined && (latest === null || marker > latest.marker)) {
       latest = { marker, target }
     }
   }
@@ -262,6 +267,12 @@ export function apply(ctx: ClientContext): void {
         if (node === undefined || node.kind !== 'command') continue
         const command = node.data as CommandNode
         if (command.name !== 'rewind' || command.outcome?.kind !== 'success') continue
+        // Only commands that ACTUALLY rewound (a marker event exists, carried
+        // as `sourceEventSeq`) fill the composer. A `preview` outcome is also
+        // 'success' and its text contains "seq N", but it appends no marker —
+        // filling on preview would move the withdrawn text into the editor
+        // BEFORE the user confirms the both-mode rewind.
+        if (command.outcome.sourceEventSeq === undefined) continue
         const target = targetOfOutcome(command.outcome.text)
         if (target === undefined || filled.has(target)) continue
         const text = userTextAt(session, target)
