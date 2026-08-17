@@ -57,8 +57,9 @@ const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
 
 const USAGE = [
   'Usage:',
-  '  /rewind                        撤回最近一条用户消息（不接受参数）',
-  '  回退到更早的消息请使用该消息旁的「回退」按钮',
+  '  /rewind                       （无参数）撤回最近一条用户消息',
+  '  /rewind @<seq> chat|both      回退到指定消息（chat 仅对话 / both 对话+文件）',
+  '  手动输入 /rewind 会被拦截，请使用消息旁的「回退」按钮',
 ].join('\n')
 
 /** Before-state captured for one in-flight tool call, keyed by agent+callId. */

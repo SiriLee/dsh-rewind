@@ -86,11 +86,19 @@ applyRewind(ctx, { snapshotDir: snapRoot })
 
 const call = (agentOf, rawInput) => registered.handler({ commandId: Symbol('cid'), agent: agentOf, rawInput, signal: aborted() })
 
-/** Simulate one tracked tool call: before-capture, dispatch writes the file, post-execute commits. */
+/**
+ * Simulate one tracked tool call: before-capture, dispatch writes the file,
+ * post-execute commits. The dispatched write resolves the path against the
+ * calling agent's session cwd first — exactly what the real fs service does —
+ * so a relative `filePath` lands on the resolved file (never in the process
+ * cwd), keeping the harness free of stray artifacts.
+ */
 async function runWrite(agentOf, callId, filePath, content) {
   const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
   await ctx.waterfall('tools/execute', exec, async () => {
-    await fs.writeText({ targetKey: FsTargetKey(filePath), displayPath: filePath }, content)
+    const cwd = agentOf?.session?.header?.cwd
+    const resolved = cwd !== undefined && !filePath.startsWith('/') ? join(cwd, filePath) : filePath
+    await fs.writeText({ targetKey: FsTargetKey(resolved), displayPath: resolved }, content)
     return { isError: false, content: [] }
   })
   await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))

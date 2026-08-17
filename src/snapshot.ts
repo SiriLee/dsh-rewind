@@ -28,7 +28,7 @@
  * @module dsh-rewind/snapshot
  */
 
-import { mkdir, readFile, readdir, rm, writeFile, lstat } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -77,6 +77,17 @@ function safeFileId(callId: string): string {
   return callId.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
+/**
+ * Sanitize a session id into a safe path segment. Real ids are harness-minted
+ * UUIDs (a no-op here), but a hostile or malformed id must never traverse out
+ * of the snapshot root — `.` and `..` are the only bare values the charset
+ * permits that would alias the root or its parent.
+ */
+function safeSessionId(sessionId: string): string {
+  const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
+  return safe === '..' || safe === '.' ? 'session' : safe
+}
+
 /** Read one committed entry, or undefined when missing/corrupt. */
 async function readEntry(file: string): Promise<CheckpointEntry | undefined> {
   try {
@@ -110,9 +121,14 @@ async function isSymbolicLink(path: string): Promise<boolean> {
 export class SnapshotStore {
   constructor(readonly root: string = process.env[SNAPSHOT_ROOT_ENV] ?? DEFAULT_SNAPSHOT_ROOT) {}
 
+  /** Absolute path of one session's snapshot directory (id sanitized). */
+  sessionDir(sessionId: string): string {
+    return join(this.root, safeSessionId(sessionId))
+  }
+
   /** Absolute path of one anchor group directory. */
   anchorDir(sessionId: string, anchorSeq: number): string {
-    return join(this.root, sessionId, String(anchorSeq))
+    return join(this.sessionDir(sessionId), String(anchorSeq))
   }
 
   /** Commit one before-backup under its turn's anchor group. */
@@ -135,7 +151,7 @@ export class SnapshotStore {
    * earlier messages survive.
    */
   async entriesAfter(sessionId: string, targetSeq: number): Promise<CheckpointEntry[]> {
-    const sessionDir = join(this.root, sessionId)
+    const sessionDir = this.sessionDir(sessionId)
     let names: string[]
     try {
       names = await readdir(sessionDir)
@@ -157,8 +173,11 @@ export class SnapshotStore {
     return entries.sort((a, b) => b.anchorSeq - a.anchorSeq || b.time - a.time)
   }
 
-  /** Per-file restore impact for the earliest entry at/after the target. */
-  async impactsAfter(sessionId: string, targetSeq: number): Promise<FileImpact[]> {
+  /**
+   * Per-path EARLIEST committed entry anchored at or after the target — the
+   * single source of truth for both restore and impact preview.
+   */
+  private async earliestEntries(sessionId: string, targetSeq: number): Promise<Map<string, CheckpointEntry>> {
     const earliest = new Map<string, CheckpointEntry>()
     for (const entry of await this.entriesAfter(sessionId, targetSeq)) {
       const current = earliest.get(entry.path)
@@ -166,7 +185,12 @@ export class SnapshotStore {
         earliest.set(entry.path, entry)
       }
     }
-    return [...earliest.values()]
+    return earliest
+  }
+
+  /** Per-file restore impact for the earliest entry at/after the target. */
+  async impactsAfter(sessionId: string, targetSeq: number): Promise<FileImpact[]> {
+    return [...(await this.earliestEntries(sessionId, targetSeq)).values()]
       .sort((a, b) => a.path.localeCompare(b.path))
       .map(entry => ({
         path: entry.path,
@@ -186,14 +210,7 @@ export class SnapshotStore {
     const deleted: string[] = []
     const skipped: string[] = []
     const failed: { path: string; message: string }[] = []
-    const earliest = new Map<string, CheckpointEntry>()
-    for (const entry of await this.entriesAfter(sessionId, targetSeq)) {
-      const current = earliest.get(entry.path)
-      if (current === undefined || entry.anchorSeq < current.anchorSeq || (entry.anchorSeq === current.anchorSeq && entry.time < current.time)) {
-        earliest.set(entry.path, entry)
-      }
-    }
-    for (const entry of earliest.values()) {
+    for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
       try {
         if (await isSymbolicLink(entry.path)) {
           skipped.push(entry.path)
@@ -218,7 +235,7 @@ export class SnapshotStore {
    * {@link MAX_ANCHOR_GROUPS}), deleting their whole directories.
    */
   async prune(sessionId: string, keep = MAX_ANCHOR_GROUPS): Promise<void> {
-    const sessionDir = join(this.root, sessionId)
+    const sessionDir = this.sessionDir(sessionId)
     let names: string[]
     try {
       names = await readdir(sessionDir)
@@ -236,7 +253,6 @@ export class SnapshotStore {
 
   /** True when a path exists on disk (used by tests and diagnostics). */
   async exists(path: string): Promise<boolean> {
-    const { stat } = await import('node:fs/promises')
     try {
       await stat(path)
       return true

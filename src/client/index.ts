@@ -29,6 +29,7 @@ import type {
 } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { hiddenSeqsOf, targetOfOutcome } from './hidden.ts'
 import { en, zh } from './locales.ts'
 import { closePopover, openPopover } from './popover.ts'
 import { CLASS, REWIND_ATTACHED, REWIND_ICON_SVG, STYLE } from './styles.ts'
@@ -43,66 +44,14 @@ const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 /** The composer textarea dsh renders for the current session's input. */
 const COMPOSER_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
 
-/** Extract the rewind target from a command outcome text ("已撤回 seq N..."). */
-function targetOfOutcome(text: string | undefined): number | undefined {
-  if (text === undefined) return undefined
-  const match = text.match(/seq (\d+)/)
-  return match !== null ? Number(match[1]) : undefined
-}
-
 /** Join the text blocks of a user message into one plain preview. */
 function messagePreviewOf(node: UserMessageNode): string {
-  return node.content
+  const text = node.content
     .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
     .join('')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 80)
-}
-
-/**
- * Anchor seqs that must be hidden from the rendered transcript so the user
- * sees the conversation as the agent sees it: every EXECUTED `/rewind`
- * command row (one that appended a marker; preview-only rows stay visible
- * until a real rewind's range covers them) and every message withdrawn by the
- * latest rewind — the target message itself, everything after it, and the
- * (empty, unrendered) marker. The range endpoints come from the command node:
- * `sourceEventSeq` is the marker's log seq, and the outcome text carries the
- * target seq.
- */
-function hiddenSeqsOf(session: SessionFace): Set<number> {
-  const hidden = new Set<number>()
-  const snap = session.getSnapshot()
-  let latest: { marker: number; target: number } | null = null
-  for (const key of snap.chat.order) {
-    const node = snap.chat.nodes.get(key)
-    if (node === undefined || node.kind !== 'command') continue
-    const command = node.data as CommandNode
-    if (command.name !== 'rewind') continue
-    // Only SUCCESSFUL rewind commands are hidden (their result is noise once
-    // the conversation is rewound). A failed rewind must stay visible so the
-    // user sees the error instead of silently missing the rewind.
-    if (command.outcome?.kind !== 'success') continue
-    // A successful command without a marker (`sourceEventSeq`) only PREVIEWED
-    // the impact — nothing was rewound, so its row stays visible (like a
-    // failed rewind); only a real rewind's range may hide it below.
-    if (command.outcome.sourceEventSeq === undefined) continue
-    hidden.add(command.seq)
-    const marker = command.outcome.sourceEventSeq
-    const target = targetOfOutcome(command.outcome.text)
-    if (target !== undefined && (latest === null || marker > latest.marker)) {
-      latest = { marker, target }
-    }
-  }
-  if (latest !== null) {
-    for (const key of snap.chat.order) {
-      const node = snap.chat.nodes.get(key)
-      if (node === undefined) continue
-      const anchor = node.anchorSeq
-      if (anchor >= latest.target && anchor <= latest.marker) hidden.add(anchor)
-    }
-  }
-  return hidden
+  return text.length <= 80 ? text : `${text.slice(0, 79)}…`
 }
 
 /**
@@ -221,12 +170,12 @@ export function apply(ctx: ClientContext): void {
         if (!button.isConnected) buttons.delete(key)
       }
       const session = sessionFor()
-      const hiddenSeqs = session !== undefined ? hiddenSeqsOf(session) : new Set<number>()
+      const hiddenSeqs = session !== undefined ? hiddenSeqsOf(session.getSnapshot().chat) : new Set<number>()
       let hiddenCount = 0
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
-      // message between the latest marker's target and the marker) so the
-      // rendered transcript matches the agent's context. React re-renders
-      // recreate rows, so this runs on every mutation.
+      // message inside the executed rewinds' [earliest target, latest marker]
+      // span) so the rendered transcript matches the agent's context. React
+      // re-renders recreate rows, so this runs on every mutation.
       for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
         const key = seat.dataset.chatAnchorKey
         const anchor = key !== undefined && session !== undefined

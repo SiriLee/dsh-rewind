@@ -40,7 +40,8 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## 发布（维护者，CI + Trusted Publishing）
 
-已发布版本：`0.1.0`（本地 2FA 首发）、`0.1.1`（CI OIDC + Sigstore provenance）。
+已发布版本：`0.1.0`（本地 2FA 首发）→ `0.2.0`（`0.1.1` 起走 CI OIDC +
+Sigstore provenance）。
 后续发版走 CI：
 
 ```sh
@@ -63,7 +64,7 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
      **Allowed actions：`npm publish`**（2026-05-20 起必选）。
 - 质量门禁（PR / push main）：`.github/workflows/ci.yml` 跑 typecheck + 测试
   + 构建 + `verify-host` + tarball 完整性检查（`lib/` 与 `LICENSE` 必须在包内）。
-- 包内附带 `.d.ts` 类型声明（`exports` 已声明 `types`，源码级 `./src/*` 亦可导入）。
+- 包内附带 `.d.ts` 类型声明（`exports` 已声明 `types`，可直接导入包的类型，无需源码级路径）。
 
 ## 使用
 
@@ -84,6 +85,8 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 - checkpoint 只覆盖**插件运行期间、经 `write` / `edit` / `str_replace_editor` 的变更**；
   bash 或外部程序的修改无法还原（与 Claude Code 相同的限制，二期可加整树快照层）。
   备份按消息分组**落盘**（每会话保留最近 100 组，最旧先清理），dsh 重启不丢失。
+  写前备份读取失败时（如权限错误）该次变更不会入备份，`both` 回退无法还原它——插件会在
+  日志中警告，但不会阻塞写操作本身。
 - 文件删除/还原走真实路径直删直写（本地 backend）；sandbox/远程 backend 下路径解析
   可能受限。
 - 回退本身可再回退（标记进入日志），但文件还原动作不再记录新备份。

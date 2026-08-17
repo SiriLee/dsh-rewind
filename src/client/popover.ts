@@ -42,11 +42,11 @@ export function closePopover(): void {
 }
 
 /** Format the target line (seq · HH:MM · preview). */
-function formatTarget(seq: number, time: number, preview: string): string {
+function formatTarget(t: Translate, seq: number, time: number, preview: string): string {
   const d = new Date(time)
   const hh = String(d.getHours()).padStart(2, '0')
   const mm = String(d.getMinutes()).padStart(2, '0')
-  const previewText = preview.length > 0 ? preview : '(no text)'
+  const previewText = preview.length > 0 ? preview : t('popover.noText')
   return `seq ${seq} · ${hh}:${mm} · ${previewText}`
 }
 
@@ -178,13 +178,13 @@ export function openPopover(opts: PopoverOptions): void {
   root.setAttribute('aria-label', t('popover.title'))
   root.append(
     el('div', CLASS.popoverTitle, t('popover.title')),
-    el('div', CLASS.popoverTarget, formatTarget(seq, time, preview)),
+    el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
   )
 
   const renderModes = (): void => {
     root.replaceChildren(
       el('div', CLASS.popoverTitle, t('popover.title')),
-      el('div', CLASS.popoverTarget, formatTarget(seq, time, preview)),
+      el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
       modeOption(t('popover.chat'), t('popover.chat.hint'), () => {
         closePopover()
         void session.command(`/rewind @${seq} chat`)

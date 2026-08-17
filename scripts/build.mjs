@@ -26,6 +26,9 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
 
+// Clean first: stale declarations from earlier builds (e.g. a removed module's
+// `ledger.d.ts`) must not survive into the next tarball.
+await rm(join(ROOT, 'lib'), { recursive: true, force: true })
 await mkdir(join(ROOT, 'lib'), { recursive: true })
 
 // ---- type declarations: host (lib/types) + client (lib/types/client) ----
