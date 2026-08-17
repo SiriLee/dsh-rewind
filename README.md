@@ -37,6 +37,27 @@ dsh plugin --profile web add dsh-rewind-plugin
 等于包名）；包声明 `dsh.bundle` + `dsh.client`，浏览器半面由
 `dsh-client-modules` 从 `exports["./client"]` 解析并注入 web roster。
 
+## 发布（维护者，CI + Trusted Publishing）
+
+发布走 GitHub Actions + npm **Trusted Publishing**（OIDC，无 npm token）：
+
+```sh
+npm version patch    # 或 minor / major；同步更新 README 版本说明
+git push --tags      # push v<version> tag → 触发 .github/workflows/publish.yml
+```
+
+- workflow：`v*` tag 或手动 `workflow_dispatch` 触发；`id-token: write` 让 npm
+  registry 校验 GitHub OIDC token 后授权发布（Node 24 自带 npm ≥11.5.1，
+  OIDC 必需）；自动生成 SLSA provenance；版本已发布则幂等跳过；tag 自动建
+  GitHub Release。
+- **一次性 npm 侧配置**（仓库内无法代做）：
+  1. [npmjs.com 账号 → Access Tokens](https://www.npmjs.com/settings/account/access-tokens)
+     顶部 **Enable Trusted Publishing**；
+  2. **Add publisher** → GitHub → repo `SiriLee/dsh-rewind`、branch `main`
+     （与 workflow 的 `environment: npm` 对应时可选 environment）。
+- 质量门禁（PR / push main）：`.github/workflows/ci.yml` 跑 typecheck + 测试
+  + 构建 + `verify-host`。
+
 ## 使用
 
 - 每条用户消息 hover 出现「↶ 回退」按钮：点击 → 选择「仅回退对话」或

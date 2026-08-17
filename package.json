@@ -54,6 +54,10 @@
     "prepare": "npm run build"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-agent": "*",
