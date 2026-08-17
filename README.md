@@ -39,7 +39,8 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## 发布（维护者，CI + Trusted Publishing）
 
-发布走 GitHub Actions + npm **Trusted Publishing**（OIDC，无 npm token）：
+已发布版本：`0.1.0`（本地 2FA 首发）、`0.1.1`（CI OIDC + Sigstore provenance）。
+后续发版走 CI：
 
 ```sh
 npm version patch    # 或 minor / major；同步更新 README 版本说明
@@ -60,7 +61,8 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
      （本 workflow 无 `environment` 块，OIDC subject 携带 ref，此为已验证组合）·
      **Allowed actions：`npm publish`**（2026-05-20 起必选）。
 - 质量门禁（PR / push main）：`.github/workflows/ci.yml` 跑 typecheck + 测试
-  + 构建 + `verify-host`。
+  + 构建 + `verify-host` + tarball 完整性检查（`lib/` 与 `LICENSE` 必须在包内）。
+- 包内附带 `.d.ts` 类型声明（`exports` 已声明 `types`，源码级 `./src/*` 亦可导入）。
 
 ## 使用
 
@@ -74,10 +76,13 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 ## 已知限制（v0.1）
 
 - 台账只覆盖插件运行期间、经 `write` / `edit` / `str_replace_editor` 的变更；
-  bash 或外部程序的修改无法还原（二期可加 git-first 快照层）。
+  bash 或外部程序的修改无法还原（二期可加 git-first 快照层）。台账按会话有界
+  （每会话保留最近 2000 条，最旧先丢弃）。
 - 文件删除走 `processPath` 直删（本地 backend）；sandbox/远程 backend 下还原
   可能受限。
 - 回退本身可再回退（标记进入日志），但文件还原动作不再重新入台账。
+- 回退按钮只出现在**当前会话**渲染的用户消息行上（DOM 注入范围即当前视图）；
+  subagent/分屏等非当前会话的对话需要先切到该会话再回退。
 
 ## 背景与定位
 

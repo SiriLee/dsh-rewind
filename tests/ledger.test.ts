@@ -6,7 +6,7 @@ import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type { FsEditOutcome, FsInfo, FsTarget, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { RewindLedger } from '../src/ledger.ts'
+import { RewindLedger, MAX_LEDGER_ENTRIES } from '../src/ledger.ts'
 
 /** Minimal in-memory FileSystem double implementing only what restore uses. */
 class FakeFs extends FileSystem {
@@ -159,6 +159,16 @@ describe('RewindLedger', () => {
     expect(outcome.restored).toEqual(['rel.txt'])
     expect(fs.files.get('/workspace/rel.txt')).toBe('original')
     expect(fs.files.has('rel.txt')).toBe(false) // never resolved at the process cwd
+  })
+
+  it('caps the per-session entry list, dropping the oldest entries first', () => {
+    const ledger = new RewindLedger()
+    for (let i = 0; i < MAX_LEDGER_ENTRIES + 50; i += 1) {
+      ledger.record(entry('write', i, `/f${i}.txt`, undefined, 'x'))
+    }
+    expect(ledger.changesAfter(0)).toHaveLength(MAX_LEDGER_ENTRIES)
+    // The 50 oldest entries were evicted: the earliest surviving anchor is 50.
+    expect(ledger.changesAfter(0).at(-1)!.anchorSeq).toBe(50)
   })
 
   it('records the marker-tool writes as regular entries too', () => {

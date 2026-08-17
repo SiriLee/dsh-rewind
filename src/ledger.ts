@@ -46,15 +46,26 @@ export interface RestoreOutcome {
 export type DeleteFile = (processPath: string) => Promise<void>
 
 /**
+ * Per-session cap on recorded entries. The ledger is intentionally bounded so
+ * an extremely long session cannot grow one entry list without limit; the
+ * oldest entries are dropped first, so rewinds to very early messages in a
+ * pathological session may lose the earliest file history (a declared
+ * tradeoff, see README).
+ */
+export const MAX_LEDGER_ENTRIES = 2000
+
+/**
  * Append-only change ledger. Entries are recorded in commit order; a rewind
- * replays them in reverse for the affected range.
+ * replays them in reverse for the affected range. Bounded per session to
+ * {@link MAX_LEDGER_ENTRIES} (oldest dropped first).
  */
 export class RewindLedger {
   private readonly entries: LedgerEntry[] = []
 
-  /** Record one committed mutation. */
+  /** Record one committed mutation, dropping the oldest entry when over the cap. */
   record(entry: LedgerEntry): void {
     this.entries.push(entry)
+    if (this.entries.length > MAX_LEDGER_ENTRIES) this.entries.shift()
   }
 
   /**

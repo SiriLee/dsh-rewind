@@ -18,6 +18,7 @@
  * parse, and the host half must import with the expected plugin shape.
  */
 import { build } from 'esbuild'
+import { execSync } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -26,6 +27,10 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
 
 await mkdir(join(ROOT, 'lib'), { recursive: true })
+
+// ---- type declarations: host (lib/types) + client (lib/types/client) ----
+execSync('npx tsc -p tsconfig.build.json', { cwd: ROOT, stdio: 'inherit' })
+execSync('npx tsc -p tsconfig.client.json', { cwd: ROOT, stdio: 'inherit' })
 
 // ---- host half: bundled TS -> ESM (@deepseek-ai/* stays external) ----
 await build({
@@ -77,4 +82,8 @@ for (const needle of ['name', 'inject', 'apply']) {
 for (const needle of ['window.__ModuleLoader__.load', `id: ${JSON.stringify(pkg.name)}`]) {
   if (!bundle.includes(needle)) throw new Error(`client bundle missing ${needle}`)
 }
-console.log('build ok: lib/index.js (host), lib/client.js (client)')
+// Declarations must exist (published tarball carries them).
+for (const dts of ['lib/types/index.d.ts', 'lib/types/client/index.d.ts']) {
+  await readFile(join(ROOT, dts), 'utf8')
+}
+console.log('build ok: lib/index.js (host), lib/client.js (client), lib/types/ (declarations)')

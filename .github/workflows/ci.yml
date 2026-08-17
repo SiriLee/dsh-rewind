@@ -22,3 +22,12 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: node scripts/verify-host.mjs
+
+      # Pack integrity: the publishable tarball must always carry the host
+      # bundle, the loader-closure client bundle, and the license.
+      - name: Pack sanity (tarball must contain lib/ and LICENSE)
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.txt
+          grep -q "lib/index.js" /tmp/pack.txt
+          grep -q "lib/client.js" /tmp/pack.txt
+          grep -q "LICENSE" /tmp/pack.txt

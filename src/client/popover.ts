@@ -146,7 +146,7 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
       session,
       node => {
         const args = node.args ?? ''
-        return node.name === 'rewind' && args.includes('preview') && args.includes(`@${seq}`)
+        return node.name === 'rewind' && args.includes('preview') && new RegExp(`(?:^|\\s)@${seq}(?=\\s|$)`).test(args)
       },
     )
     if (outcome === null) {

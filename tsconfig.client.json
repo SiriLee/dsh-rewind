@@ -1,4 +1,11 @@
 {
   "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "lib/types/client",
+    "rootDir": "src/client"
+  },
   "include": ["src/client/**/*.ts"]
 }
