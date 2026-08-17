@@ -1,5 +1,5 @@
 /**
- * Session-cwd resolution for ledger reads/restores, mirroring the fs tools'
+ * Session-cwd resolution for snapshot tracking reads, mirroring the fs tools'
  * own rule (`@deepseek-ai/dsh-tool-fs/session-cwd.ts`): relative paths
  * resolve against the calling agent's session workspace
  * (`exec.agent.session.header.cwd`), not the server's launch dir.

@@ -1,15 +1,26 @@
 /**
- * dsh-rewind host half: the `/rewind` command and the write-class change
- * ledger, composed as one dual-face bundle row (the browser half lives in
- * `src/client/`).
+ * dsh-rewind host half: the `/rewind` command and the Claude-Code-style
+ * checkpoint store, composed as one dual-face bundle row (the browser half
+ * lives in `src/client/`).
  *
  * Rewind mechanism: planning is pure (`src/rewind.ts`); execution appends a
- * marker `user/message` into the session log whose `surfaceOp` replaces every
- * surface node after the target message with the marker. The append-only log
- * (and the rendered transcript) is untouched — only the model-visible surface
- * is cut, so the next request derives its context from the target onward.
- * Mode `both` additionally reverses every ledger-recorded file change that
- * followed the target.
+ * marker `assistant/message` into the session log whose `surfaceOp` replaces
+ * every surface node after the target message with the marker. The
+ * append-only log (and the rendered transcript) is untouched — only the
+ * model-visible surface is cut, so the next request derives its context from
+ * the target onward.
+ *
+ * File restore (mode `both`) follows Claude Code's checkpointing: the plugin
+ * backs up each tracked write-class edit BEFORE it happens (at the
+ * `tools/execute` around-dispatch stage, so an approval short-circuit cannot
+ * skip the capture and a denied call never records), commits the backup under
+ * the turn's anchor message seq at `tools/post-execute`, and a rewind to
+ * message N restores every backup anchored at or after N — modified files are
+ * written back to their pre-edit content, files created after N are deleted.
+ * Backups persist on disk under the dsh data directory (newest 100 message
+ * groups per session), so restores work after a host restart, and they
+ * read/write the real file system with plain `node:fs` — independent of the
+ * fs service. See `src/snapshot.ts`.
  *
  * @module dsh-rewind
  */
@@ -20,39 +31,43 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, Session } from '@deepseek-ai/dsh-session'
-import type {
-  PostToolDecision, ToolExecution, ToolExecutionResult,
-} from '@deepseek-ai/dsh-tools'
+import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
-import { RewindLedger } from './ledger.ts'
-import {
-  listRewindCandidates, parseRewindTarget, planRewind,
-  RewindError, type RewindMode, type RewindPlan, type RewindTarget,
-} from './rewind.ts'
+import { listRewindCandidates, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
+import { SnapshotStore } from './snapshot.ts'
+
+export { SnapshotStore } from './snapshot.ts'
+export type { CheckpointEntry, FileImpact, RestoreOutcome } from './snapshot.ts'
 
 export const name = 'dsh-rewind'
 export const inject = ['commands', 'tools']
 
-/** Tool names whose mutations the ledger records. */
+/** Plugin config: optional override of the checkpoint store root. */
+export interface RewindConfig {
+  /** Checkpoint store root (defaults to `~/.dsh/rewind-snapshots`). */
+  readonly snapshotDir?: string
+}
+
+/** Tool names whose mutations the checkpoint tracker follows. */
 const TRACKED_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
 
 /** str_replace_editor commands that mutate the filesystem. */
 const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
-
-/** Before-state captured for one in-flight tool call, keyed by agent+callId. */
-interface PendingCapture {
-  readonly path: string
-  /** Session cwd the path was resolved against (mirrors the fs tools). */
-  readonly cwd: string | undefined
-  readonly before: string | undefined
-}
 
 const USAGE = [
   'Usage:',
   '  /rewind                        撤回最近一条用户消息（不接受参数）',
   '  回退到更早的消息请使用该消息旁的「回退」按钮',
 ].join('\n')
+
+/** Before-state captured for one in-flight tool call, keyed by agent+callId. */
+interface PendingCapture {
+  /** Resolved display path (absolute) of the file the call will mutate. */
+  readonly path: string
+  /** Full content before the change; undefined when the file does not exist (a creation). */
+  readonly before: string | undefined
+}
 
 /** Extract the file path a tracked tool call mutates, or undefined. */
 function mutationPathOf(exec: ToolExecution): string | undefined {
@@ -110,8 +125,8 @@ async function readTextOrUndefined(fs: FileSystem, target: FsTarget, signal?: Ab
  * stage only runs after any pre-execute approval gate allowed the call — so a
  * `{ kind: 'ask' }` short-circuit from another plugin (e.g. dsh-edit-approval)
  * cannot skip the capture, and a denied call never captures (no pending leak).
- * The recorded path is the RESOLVED display path, so previews and restores
- * always name the real file regardless of how the model spelled it.
+ * The recorded path is the RESOLVED display path, so restores always name the
+ * real file regardless of how the model spelled it.
  */
 async function captureBefore(
   fs: FileSystem,
@@ -125,16 +140,16 @@ async function captureBefore(
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
   const before = await readTextOrUndefined(fs, target, exec.signal)
-  pending.set(`${exec.agent?.id ?? 'anon'}:${exec.callId}`, { path: target.displayPath, cwd, before })
+  pending.set(`${exec.agent?.id ?? 'anon'}:${exec.callId}`, { path: target.displayPath, before })
 }
 
 /**
- * Finalize one tracked mutation during `tools/post-execute`: read the new
- * content, resolve the turn anchor, and commit the ledger entry.
+ * Commit one tracked mutation during `tools/post-execute`: resolve the turn
+ * anchor and write the before-backup to the checkpoint store. Failed calls
+ * never commit (the pending capture is dropped).
  */
 async function commitEntry(
-  fs: FileSystem,
-  ledgerFor: (session: Session) => RewindLedger,
+  store: SnapshotStore,
   pending: Map<string, PendingCapture>,
   exec: ToolExecution,
   result: ToolExecutionResult,
@@ -148,22 +163,11 @@ async function commitEntry(
   if (agent === undefined) return
   const anchorSeq = anchorSeqOf(agent.session)
   if (anchorSeq === undefined) return
-  // The recorded path is already resolved (display path); re-resolving with
-  // the captured cwd keeps remote/relative backends consistent.
-  const target = await resolveTarget(fs, capture.path, capture.cwd, exec.signal)
-  if (target === undefined) return
-  let after: string
-  try {
-    after = await readTextOrUndefined(fs, target, exec.signal) ?? ''
-  } catch {
-    return // unreadable post-state: nothing dependable to restore later
-  }
-  ledgerFor(agent.session).record({
-    toolName: exec.name,
+  await store.recordEntry(agent.session.id, {
+    callId: exec.callId,
     anchorSeq,
     path: capture.path,
-    before: capture.before,
-    after,
+    before: capture.before ?? null,
   })
 }
 
@@ -211,7 +215,7 @@ function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'r
       lines.push(`  ${file.action === 'restore' ? '还原' : '删除'} ${file.path}`)
     }
   } else {
-    lines.push('目标之后没有台账记录的写类变更，无需还原文件。')
+    lines.push('目标之后没有快照记录的写类变更，无需还原文件。')
   }
   return lines.join('\n')
 }
@@ -244,7 +248,7 @@ async function waitForAgentIdle(agent: Agent, signal: AbortSignal, timeoutMs = 1
 /** Execute a validated rewind: append the marker, then optionally restore files. */
 async function executeRewind(
   ctx: Context,
-  ledger: RewindLedger,
+  store: SnapshotStore,
   invocation: CommandInvocation,
   rawTarget: string,
   mode: RewindMode,
@@ -287,18 +291,13 @@ async function executeRewind(
 
   let restore = ''
   if (mode === 'both') {
-    const fs = ctx.get('fs', false) as FileSystem | undefined
-    if (fs === undefined) {
-      restore = '；未找到文件系统服务，未还原文件（可仅用 chat 模式回退对话）'
-    } else {
-      const outcome = await ledger.restoreAfter(fs, processPath => unlink(processPath), plan.targetSeq, {
-        // Relative ledger paths resolve against the session workspace, exactly
-        // as the fs tools resolve them (per-entry in src/ledger.ts).
-        cwd: agent.session.header.cwd,
-        signal: invocation.signal,
-      })
-      restore = `；还原 ${outcome.restored.length} 个文件、删除 ${outcome.deleted.length} 个文件${renderFailures(outcome.failed)}`
-    }
+    const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
+    const parts: string[] = []
+    if (outcome.restored.length > 0) parts.push(`还原 ${outcome.restored.length} 个文件`)
+    if (outcome.deleted.length > 0) parts.push(`删除 ${outcome.deleted.length} 个文件`)
+    if (outcome.skipped.length > 0) parts.push(`跳过 ${outcome.skipped.length} 个符号链接`)
+    restore = parts.length > 0 ? `；${parts.join('、')}` : '；目标之后没有可还原的写类变更'
+    restore += renderFailures(outcome.failed)
   }
 
   // Every rewind withdraws the target message and everything after it; its
@@ -327,7 +326,7 @@ function rewindErrorResult(error: unknown): CommandResult {
 /** Handle one `/rewind` invocation (two-step text flow + direct execution). */
 async function handleRewind(
   ctx: Context,
-  ledger: RewindLedger,
+  store: SnapshotStore,
   invocation: CommandInvocation,
 ): Promise<CommandResult> {
   const session = invocation.agent.session
@@ -344,7 +343,7 @@ async function handleRewind(
     if (candidates.length === 0) {
       return { kind: 'error', text: '当前会话还没有可回退的用户消息。' }
     }
-    return executeRewind(ctx, ledger, invocation, `@${candidates[0]!.seq}`, 'chat')
+    return executeRewind(ctx, store, invocation, `@${candidates[0]!.seq}`, 'chat')
   }
 
   const parts = input.split(/\s+/)
@@ -357,7 +356,7 @@ async function handleRewind(
     } catch (error) {
       return rewindErrorResult(error)
     }
-    const impacts = ledger.impactsAfter(plan.targetSeq)
+    const impacts = await store.impactsAfter(session.id, plan.targetSeq)
     return { kind: 'success', text: formatPlan(plan, impacts) }
   }
 
@@ -374,36 +373,32 @@ async function handleRewind(
       text: `将回退到 ${describeTarget(parsed)}。选择模式：\n  /rewind ${target} chat  仅回退对话\n  /rewind ${target} both  回退对话并还原文件`,
     }
   }
-  return executeRewind(ctx, ledger, invocation, target, mode)
+  return executeRewind(ctx, store, invocation, target, mode)
 }
 
 /**
- * Register the `/rewind` command and the tools-pipeline ledger hooks.
+ * Register the `/rewind` command and the checkpoint pipeline (before-capture
+ * at `tools/execute`, disk commit at `tools/post-execute`).
  *
- * The command is fs-independent and registers immediately. The ledger needs
- * `fs`, so its hooks mount through a dynamic `ctx.inject(['fs'])` — they take
- * effect whenever the fs service becomes available (and never fail the
- * plugin's load when a deployment has no fs).
+ * The command is fs-independent and registers immediately. The checkpoint
+ * pipeline needs `fs` to resolve tracked paths to their real display paths,
+ * so it mounts through a dynamic `ctx.inject(['fs'])` — it takes effect
+ * whenever the fs service becomes available (and never fails the plugin's
+ * load when a deployment has no fs; without it, no entries are recorded and
+ * `both` restores report "no tracked changes").
  *
  * Capture runs in `tools/execute` (the around-dispatch stage), NOT in
  * `tools/pre-execute`: a pre-execute `{ kind: 'ask' }` short-circuit from
  * another plugin (e.g. dsh-edit-approval) skips later pre-execute listeners,
  * and a denied call never dispatches — so approved calls are still captured,
- * denied calls never leave a pending entry behind.
+ * denied calls never leave a pending entry behind. Entries are committed to
+ * disk at `tools/post-execute` under the turn's anchor message seq.
  *
  * @param ctx - context carrying `commands`, `tools`, and an optional `fs`.
+ * @param config - optional override of the checkpoint store root.
  */
-export function apply(ctx: Context): void {
-  // Ledgers are per-session: seq numbers only make sense inside one log.
-  const ledgers = new Map<string, RewindLedger>()
-  const ledgerFor = (session: Session): RewindLedger => {
-    let ledger = ledgers.get(session.id)
-    if (ledger === undefined) {
-      ledger = new RewindLedger()
-      ledgers.set(session.id, ledger)
-    }
-    return ledger
-  }
+export function apply(ctx: Context, config?: RewindConfig): void {
+  const store = new SnapshotStore(config?.snapshotDir)
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
@@ -412,7 +407,7 @@ export function apply(ctx: Context): void {
     yield ctx.commands.register({
       name: 'rewind',
       description: '在同窗口内将对话回退到更早的用户消息（可同时还原文件）',
-      handler: invocation => handleRewind(ctx, ledgerFor(invocation.agent.session), invocation),
+      handler: invocation => handleRewind(ctx, store, invocation),
     })
   }, 'dsh-rewind command')
 
@@ -429,9 +424,9 @@ export function apply(ctx: Context): void {
 
     scope.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
       try {
-        await commitEntry(fs, ledgerFor, pending, exec, result)
+        await commitEntry(store, pending, exec, result)
       } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] ledger commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
+        ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }
       return next()
     })

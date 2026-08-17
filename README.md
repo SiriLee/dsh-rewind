@@ -2,19 +2,20 @@
 
 DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Claude Code `/rewind` 语义）。主交互为**用户消息旁的「回退」按钮**，点击后选择回退模式；命令仅作辅助。
 
-> 状态：v0.1.10 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
+> 状态：v0.2.0 已实现（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
 
-## 实现状态（v0.1.10）
+## 实现状态（v0.2.0）
 
 - ✅ host 端 `/rewind` 命令（参数化形式作为 ↶ 按钮的内部调用通道；手动输入由 client 拦截）
-- ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
+- ✅ **Claude Code 式 checkpoint 文件回退**：`tools/execute` 捕获写前备份、`tools/post-execute` 按消息分组**落盘**提交（`~/.dsh/rewind-snapshots`），重启后仍可还原
 - ✅ **与其他审批类插件共存**：捕获在 around-dispatch 阶段，`tools/pre-execute` 被 `ask` 短路（如 dsh-edit-approval）后批准仍能记录；被拒绝的调用不留 pending 残留
-- ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径台账/还原指向真实文件；台账记录解析后的 display path
+- ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径备份/还原指向真实文件；记录解析后的 display path
 - ✅ **fs 服务动态获取**（`ctx.inject(['fs'])`）：fs 后挂载也不失效，无 fs 部署时命令仍可用
 - ✅ 同窗口 in-place 回退：追加空内容标记 + `surfaceOp: replace` 替换目标及之后全部 surface（真实 `dsh-session` 集成测试通过）
+- ✅ **还原走 `node:fs` 直写**（不经 fs 服务）：文件内容真正落盘；符号链接跳过并警告
 - ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）+ 手动 `/rewind` 输入拦截
-- ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（14 项，含审批短路/会话 cwd 场景）
-- ⏳ 二期：快捷键、git-first 快照式文件回退
+- ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（18 项，含审批短路/会话 cwd/新建文件删除/重启持久化场景）
+- ⏳ 二期：快捷键、bash/外部修改的快照覆盖（整树快照）
 
 ## 安装
 
@@ -78,14 +79,14 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
   上下文无任何标记噪音）；client 端隐藏被撤回范围内的消息行与 `/rewind` 命令结果，
   可见对话即"撤回点之前的内容"。会话日志（append-only 审计）不受影响。
 
-## 已知限制（v0.1）
+## 已知限制（v0.2）
 
-- 台账只覆盖插件运行期间、经 `write` / `edit` / `str_replace_editor` 的变更；
-  bash 或外部程序的修改无法还原（二期可加 git-first 快照层）。台账按会话有界
-  （每会话保留最近 2000 条，最旧先丢弃）。
-- 文件删除走 `processPath` 直删（本地 backend）；sandbox/远程 backend 下还原
+- checkpoint 只覆盖**插件运行期间、经 `write` / `edit` / `str_replace_editor` 的变更**；
+  bash 或外部程序的修改无法还原（与 Claude Code 相同的限制，二期可加整树快照层）。
+  备份按消息分组**落盘**（每会话保留最近 100 组，最旧先清理），dsh 重启不丢失。
+- 文件删除/还原走真实路径直删直写（本地 backend）；sandbox/远程 backend 下路径解析
   可能受限。
-- 回退本身可再回退（标记进入日志），但文件还原动作不再重新入台账。
+- 回退本身可再回退（标记进入日志），但文件还原动作不再记录新备份。
 - 回退按钮只出现在**当前会话**渲染的用户消息行上（DOM 注入范围即当前视图）；
   subagent/分屏等非当前会话的对话需要先切到该会话再回退。
 
@@ -124,24 +125,29 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 - 效果：当前窗口上下文从目标点重新开始；**不产生新会话、不切换窗口**；原始日志完整保留（append-only 审计不变），仅不再进入模型上下文。
 - 依赖：`@deepseek-ai/dsh-session`（`Session.append`、`foldSurface`）、`@deepseek-ai/dsh-llm`（`createUserMessage`）、`@deepseek-ai/dsh-commands`（命令注册）、`@deepseek-ai/dsh-agent`（`Agent.status` idle 守卫）。
 
-### 4. 文件回退：变更台账
+### 4. 文件回退：Claude Code 式 checkpoint（写前备份，按消息分组落盘）
 
-- 在 `tools/execute`（around-dispatch 阶段）读取目标文件 before，`tools/post-execute` 记录
-  `{ 消息锚点 seq, 文件路径(解析后), before, after }`。捕获放在 execute 而非
-  pre-execute：**审批类插件（如 dsh-edit-approval）在 `tools/pre-execute` 返回 `ask`
-  会短路后续监听器**，但批准后 dispatch 阶段必然执行——共存的写操作照样入台账；
-  被拒绝的调用不 dispatch，不会留下 pending 残留。
+- 在 `tools/execute`（around-dispatch 阶段）读取目标文件**写前备份**（before；文件不存在记
+  为「新建」），`tools/post-execute` 将备份按**当前轮用户消息 seq（锚点）**落盘提交到
+  `~/.dsh/rewind-snapshots/<会话>/<锚点 seq>/`。捕获放在 execute 而非 pre-execute：
+  **审批类插件（如 dsh-edit-approval）在 `tools/pre-execute` 返回 `ask` 会短路后续监听器**，
+  但批准后 dispatch 阶段必然执行——共存的写操作照样入备份；被拒绝的调用不 dispatch，
+  不会留下残留。
 - 相对路径按**会话 cwd** 解析（与 `dsh-tool-fs` 同规则，`src/session-cwd.ts`），
-  台账记录解析后的 display path，preview/还原始终指向真实文件。
-- 回退「对话和代码」时，把目标点之后发生的变更**逆序还原**（内容写回 before、新建文件删除）。
-- 边界（已知限制）：台账只覆盖**插件运行期间、经写类工具**的变更；bash 命令或外部程序的修改不在台账内，无法还原（二期可加 git-first 快照层）。
+  备份记录解析后的 display path，preview/还原始终指向真实文件。
+- 回退「对话和代码」到消息 N 时：对锚点 ≥ N 的每条备份取**该文件最早一条**——内容写回
+  before、新建文件删除（与 Claude Code 的 rewind 语义一致）。恢复用 `node:fs` 直写真实
+  文件，不经过 fs 服务；符号链接跳过并在结果中提示。
+- 持久化：备份在磁盘上，**dsh 重启后仍可还原**；每会话保留最近 100 个消息分组，最旧先清理。
+- 边界（已知限制）：只覆盖**插件运行期间、经写类工具**的变更；bash 命令或外部程序的修改
+  不在备份内，无法还原（与 Claude Code 相同的限制，二期可加整树快照层）。
 
 ### 5. 安全守卫
 
 - agent 运行中（LLM 思考/输出）执行回退时**自动强制停止**当前回合（`cancel({kind:'user'})`），
   等待 quiescence 后回退；停止超时/失败则中止并报错。无需先手动停止。
 - 文件还原是破坏性操作：UI 选择「对话和代码」时需经影响清单确认；命令路径用 `preview` 先行查看。
-- 回退本身可再回退（回退动作同样进入台账/日志）。
+- 回退本身可再回退（回退动作同样进入会话日志），但文件还原动作不再记录新备份。
 
 ## 客户端实现要点（纯插件，无源码补丁）
 
@@ -156,22 +162,22 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 - 快捷键（esc+esc 回退等）——独立的快捷键插件，二期。
 - 压缩（`/compact`）——官方已有。
 - fork/分支回退——官方已有（「在新对话中分支」）。
-- 快照式文件回退（git-first）——二期（台账方案先行）。
+- 快照式文件回退（整树/git-first，覆盖 bash 与外部修改）——二期（checkpoint 方案先行）。
 
 ## 目录结构（实际）
 
 ```
-src/index.ts           host 插件：/rewind 命令 + tools/execute|post-execute 台账（fs 动态注入）
+src/index.ts           host 插件：/rewind 命令 + tools/execute|post-execute checkpoint（fs 动态注入）
 src/rewind.ts          planRewind 纯函数（目标解析、surface 范围计算、候选列表）
-src/ledger.ts          变更台账（记录、查询、逆序还原、影响清单；按会话 cwd 解析）
+src/snapshot.ts        checkpoint 存储（写前备份按消息分组落盘、还原/删除/影响清单、有界清理）
 src/session-cwd.ts     会话 cwd 解析（复刻 dsh-tool-fs 规则，可单测）
 src/client/index.ts    client 插件：消息行「回退」按钮 + 模式选择浮层
 src/client/popover.ts  浮层 DOM（含 both 模式影响清单确认）
 src/client/locales.ts  zh/en 文案（LocaleNamespaceMap 合并）
 src/client/styles.ts   注入样式（dsh 设计 token）
 scripts/build.mjs      esbuild 构建：lib/index.js（host ESM）+ lib/client.js（loader 闭包）
-scripts/verify-host.mjs  端到端验证（真实 cordis + dsh-session，14 项断言）
-tests/                 rewind/ledger 单测 + 真实 dsh-session 集成测试
+scripts/verify-host.mjs  端到端验证（真实 cordis + dsh-session + 真实临时文件，18 项断言）
+tests/                 rewind/snapshot 单测 + 真实 dsh-session 集成测试
 cordis.patch.yml       bundle patch（插入 dsh-rewind-plugin 一行，双面）
 package.json           dsh.bundle + dsh.client 声明、optional peerDependencies
 ```

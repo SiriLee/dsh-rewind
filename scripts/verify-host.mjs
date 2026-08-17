@@ -2,49 +2,58 @@
 /**
  * Host-half verification: boots the built plugin (`lib/index.js`) on a real
  * cordis context with a real dsh-session, then drives the `/rewind` command
- * handler and the tools-pipeline ledger events end to end — no model, no UI.
+ * handler and the checkpoint pipeline end to end — no model, no UI. Files are
+ * real files under a temporary directory, so a restore is verified against
+ * actual on-disk content, and the checkpoint store root is overridden to that
+ * temporary directory.
  *
  * Run: `npm run build && node scripts/verify-host.mjs`
  *
  * What it proves:
  *  1. the plugin registers a `rewind` command on the ctx;
  *  2. `/rewind` (no args) withdraws the most recent user message;
- *  3. `/rewind @<seq> chat` (the button's call form) cuts the surface in-place (log untouched);
- *  4. the ledger captures through `tools/execute` (NOT pre-execute): a
- *     pre-execute `ask` short-circuit still gets captured after approval, and
- *     a denied call never captures (no pending leak);
- *  5. relative file paths resolve against the session cwd (fs-tools rule);
- *  6. `/rewind preview @<seq> both` reports the file impact;
- *  7. `/rewind @<seq> both` restores the file and reports it.
+ *  3. `/rewind @<seq> chat` cuts the surface in-place (log untouched);
+ *  4. a successful write through the tools pipeline commits a before-backup
+ *     under the turn's anchor seq;
+ *  5. a denied call never commits (no phantom entry in the store);
+ *  6. relative file paths resolve against the session cwd (fs-tools rule);
+ *  7. `/rewind preview @<seq> both` reports the checkpoint impact;
+ *  8. `/rewind @<seq> both` restores the real file to its pre-edit content
+ *     and deletes files created after the target;
+ *  9. a running agent is force-stopped before the rewind (not refused);
+ * 10. a cancel that never quiesces aborts the rewind (timeout path).
  */
 import { Context } from '@deepseek-ai/cordis'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
 
 const aborted = () => new AbortController().signal
 
-/** In-memory fs double with session-cwd resolution (resolve/readText/writeText/processPath). */
+const tmpRoot = await mkdtemp(join(tmpdir(), 'dsh-rewind-verify-'))
+const wsDir = join(tmpRoot, 'ws')
+const snapRoot = join(tmpRoot, 'snapshots')
+await mkdir(wsDir, { recursive: true })
+
+/** Real-filesystem fs double: resolve returns the real display path. */
 class FakeFs extends FileSystem {
-  files = new Map()
   async resolve(path, opts = {}) {
     const displayPath = opts?.cwd !== undefined && !path.startsWith('/') ? join(opts.cwd, path) : path
     return { targetKey: FsTargetKey(displayPath), displayPath }
   }
   processPath(target) { return target.displayPath }
-  async readText(target) {
-    const content = this.files.get(target.displayPath)
-    if (content === undefined) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-    return content
+  async readText(target) { return readFile(target.displayPath, 'utf8') }
+  async writeText(target, content) { await writeFile(target.displayPath, content, 'utf8'); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
+  async stat(target) {
+    try { await readFile(target.displayPath); return { version: FsVersion('v'), type: 'file' } } catch { return undefined }
   }
-  async writeText(target, content) { this.files.set(target.displayPath, content); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
-  async stat(target) { return this.files.has(target.displayPath) ? { version: FsVersion('v'), type: 'file' } : undefined }
 }
 
 const fs = new FakeFs(new Context())
-fs.files.set('/workspace/a.txt', 'original content')
 
 const user = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
 const assistant = text => createAssistantMessage({ content: [{ type: 'text', text }], source: { provider: 'test', model: 'test' } })
@@ -73,9 +82,19 @@ ctx.provide('commands', {
   },
 })
 ctx.provide('fs', fs)
-applyRewind(ctx)
+applyRewind(ctx, { snapshotDir: snapRoot })
 
 const call = (agentOf, rawInput) => registered.handler({ commandId: Symbol('cid'), agent: agentOf, rawInput, signal: aborted() })
+
+/** Simulate one tracked tool call: before-capture, dispatch writes the file, post-execute commits. */
+async function runWrite(agentOf, callId, filePath, content) {
+  const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
+  await ctx.waterfall('tools/execute', exec, async () => {
+    await fs.writeText({ targetKey: FsTargetKey(filePath), displayPath: filePath }, content)
+    return { isError: false, content: [] }
+  })
+  await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+}
 
 let failures = 0
 const check = (name, ok, detail) => {
@@ -106,74 +125,82 @@ check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
 check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
 check('log stays append-only (5 events)', paramSession.events.length === 5, `events=${paramSession.events.length}`)
 
-const writeExec = (callId, filePath, content) => ({
-  callId, name: 'write', arguments: { file_path: filePath, content }, agent, signal: aborted(),
-})
-
-// 4. a pre-execute `ask` short-circuit (dsh-edit-approval) must not skip the
-//    capture: capture happens in tools/execute, which runs after approval.
+// 4. a tracked write commits a before-backup; rewinding both restores the
+//    real file and deletes files created after the target
 {
-  const exec = writeExec('c1', '/workspace/a.txt', 'rewritten')
-  // Another plugin asks at pre-execute; the user then allows it.
-  const gate = await ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'ask', reason: 'approve me' }))
-  check('pre-execute gate asks', gate.kind === 'ask', JSON.stringify(gate))
-  // Approved → dispatch stage runs: capture fires here.
-  await ctx.waterfall('tools/execute', exec, async () => ({ isError: false, content: [] }))
-  await fs.writeText({ targetKey: FsTargetKey('/workspace/a.txt'), displayPath: '/workspace/a.txt' }, 'rewritten')
-  await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  check('file mutated on disk', fs.files.get('/workspace/a.txt') === 'rewritten', fs.files.get('/workspace/a.txt'))
+  const aPath = join(wsDir, 'a.txt')
+  await writeFile(aPath, 'original content', 'utf8')
+  // The next user message anchors the turn that will edit a.txt (seq 5).
+  session.append('user/message', user('third question'), { surfaceOp: 'append' })
+  const anchorSeq = 5
+  await runWrite(agent, 'c1', aPath, 'rewritten') // before-capture: 'original content'
+  const createdPath = join(wsDir, 'created.txt')
+  await runWrite(agent, 'c2', createdPath, 'new') // file did not exist: before-capture = created
+  await writeFile(aPath, 'v3', 'utf8') // later edit lands after the backups
+
+  const preview = await call(agent, `preview @${anchorSeq} both`)
+  check('preview reports the file impact', preview.kind === 'success' && preview.text.includes(aPath) && preview.text.includes('还原'), preview.text)
+
+  const both = await call(agent, `@${anchorSeq} both`)
+  check('rewind both succeeds', both.kind === 'success' && both.text.includes('还原 1 个文件') && both.text.includes('删除 1 个文件'), both.text)
+  check('modified file restored to pre-edit content', await readFile(aPath, 'utf8') === 'original content', await readFile(aPath, 'utf8'))
+  let createdGone = false
+  try { await readFile(createdPath, 'utf8') } catch { createdGone = true }
+  check('created file deleted', createdGone, `exists=${!createdGone}`)
 }
 
-// 5. a denied call never captures (no pending leak: nothing recorded after it)
+// 5. a denied call never commits (no phantom entry)
 {
-  const exec = writeExec('c2', '/workspace/a.txt', 'denied write')
-  const gate = await ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'deny', reason: 'no' }))
-  check('pre-execute gate denies', gate.kind === 'deny', JSON.stringify(gate))
-  // Denied calls do not dispatch: post-execute must record nothing for c2.
+  const deniedPath = join(wsDir, 'denied.txt')
+  await writeFile(deniedPath, 'x', 'utf8')
+  const exec = { callId: 'c3', name: 'write', arguments: { file_path: deniedPath, content: 'denied write' }, agent, signal: aborted() }
+  await ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'deny', reason: 'no' }))
   await ctx.waterfall('tools/post-execute', exec, { isError: true, error: { message: 'denied', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
+  const preview = await call(agent, 'preview @5 both')
+  check('denied call is not in the impact list', !preview.text.includes(deniedPath), preview.text)
 }
 
 // 6. relative paths resolve against the session cwd (fs-tools rule)
 {
-  const cwdSession = buildSession('verify-cwd', '/workspace')
+  const cwdSession = buildSession('verify-cwd', wsDir)
   const cwdAgent = { id: cwdSession.id, session: cwdSession, status: 'idle' }
-  fs.files.set('/workspace/rel.txt', 'relative original')
-  const exec = { callId: 'c3', name: 'write', arguments: { file_path: 'rel.txt', content: 'relative new' }, agent: cwdAgent, signal: aborted() }
-  await ctx.waterfall('tools/execute', exec, async () => ({ isError: false, content: [] }))
-  await fs.writeText({ targetKey: FsTargetKey('/workspace/rel.txt'), displayPath: '/workspace/rel.txt' }, 'relative new')
-  await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  // Rewind to seq 2 in the cwd session must report the cwd-resolved path.
-  const preview = await call(cwdAgent, 'preview @2 both')
-  check('preview resolves relative path via session cwd', preview.kind === 'success' && preview.text.includes('/workspace/rel.txt'), preview.text)
-  const both = await call(cwdAgent, '@2 both')
-  check('both restores cwd-resolved file', both.kind === 'success' && fs.files.get('/workspace/rel.txt') === 'relative original', both.text)
+  const relPath = join(wsDir, 'rel.txt')
+  await writeFile(relPath, 'relative original', 'utf8')
+  cwdSession.append('user/message', user('relative question'), { surfaceOp: 'append' })
+  await runWrite(cwdAgent, 'c4', 'rel.txt', 'relative new') // relative path
+
+  const preview = await call(cwdAgent, 'preview @4 both')
+  check('relative path resolved via session cwd', preview.kind === 'success' && preview.text.includes(relPath), preview.text)
+  const both = await call(cwdAgent, '@4 both')
+  check('both restores cwd-resolved file', both.kind === 'success' && await readFile(relPath, 'utf8') === 'relative original', both.text)
 }
 
-// 7. preview reports the impact (rewind to seq 0 — still on the surface after
-//    the earlier withdraw — reverts the anchor-0 write)
-const previewResult = await call(agent, 'preview @0 both')
-check('preview shows file impact', previewResult.kind === 'success' && previewResult.text.includes('/workspace/a.txt'), previewResult.text)
-
-// 8. both mode restores the file
-const bothResult = await call(agent, '@0 both')
-check('rewind both restores file', bothResult.kind === 'success' && bothResult.text.includes('还原 1 个文件'), bothResult.text)
-check('file content restored', fs.files.get('/workspace/a.txt') === 'original content', fs.files.get('/workspace/a.txt'))
-
-// 9. a running agent is force-stopped before the rewind (not refused)
-const runningSession = buildSession('verify-running')
-const running = {
-  ...{ id: runningSession.id, session: runningSession, status: 'idle' }, status: 'running',
-  cancel: () => { cancelled = true; running.status = 'idle' },
+// 7. preview on a message with no recorded changes reports none
+{
+  const cleanSession = buildSession('verify-norec')
+  const cleanAgent = { id: cleanSession.id, session: cleanSession, status: 'idle' }
+  const previewResult = await call(cleanAgent, 'preview @2 both')
+  check('preview with no entries reports no changes', previewResult.kind === 'success' && previewResult.text.includes('无需还原文件'), previewResult.text)
 }
-let cancelled = false
-const runningResult = await registered.handler({ commandId: Symbol('cid'), agent: running, rawInput: '@2 chat', signal: aborted() })
-check('running agent is cancelled first', cancelled === true, `cancelled=${cancelled}`)
-check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
 
-// 9b. a cancel that never quiesces aborts the rewind (timeout path)
-const stuck = { ...{ id: runningSession.id, session: runningSession, status: 'idle' }, status: 'running', cancel: () => {} }
-const stuckResult = await registered.handler({ commandId: Symbol('cid'), agent: stuck, rawInput: '@2 chat', signal: aborted() })
-check('stuck agent aborts rewind', stuckResult.kind === 'error', stuckResult.text)
+// 8. a running agent is force-stopped before the rewind (not refused)
+{
+  const runningSession = buildSession('verify-running')
+  let cancelled = false
+  const running = { id: runningSession.id, session: runningSession, status: 'running', cancel: () => { cancelled = true; running.status = 'idle' } }
+  const runningResult = await call(running, '@2 chat')
+  check('running agent is cancelled first', cancelled === true, `cancelled=${cancelled}`)
+  check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
+}
 
+// 9. a cancel that never quiesces aborts the rewind (timeout path)
+{
+  const stuckSession = buildSession('verify-stuck')
+  const stuck = { id: stuckSession.id, session: stuckSession, status: 'running', cancel: () => {} }
+  const stuckResult = await call(stuck, '@2 chat')
+  check('stuck agent aborts rewind', stuckResult.kind === 'error', stuckResult.text)
+}
+
+await rm(tmpRoot, { recursive: true, force: true })
 console.log(failures === 0 ? '\nverify-host: all checks passed' : `\nverify-host: ${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

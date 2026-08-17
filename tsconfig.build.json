@@ -9,5 +9,5 @@
     "rootDir": "src",
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["src/index.ts", "src/rewind.ts", "src/ledger.ts", "src/session-cwd.ts"]
+  "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts", "src/session-cwd.ts"]
 }
