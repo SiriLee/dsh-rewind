@@ -16,7 +16,7 @@ export const zh = {
   'popover.impact.none': '目标之后没有台账记录的写类变更，无需还原文件。',
   'popover.confirm': '确认回退',
   'popover.back': '返回',
-  'guard.hint': '/rewind 不接受参数，只能撤回最近一条消息；回退到更早消息请用该消息旁的 ↶ 按钮',
+  'guard.hint': '/rewind 命令不支持手动输入，请使用消息旁的 ↶ 回退按钮',
 } satisfies Record<string, string>
 
 /** The rewind namespace key union. */
@@ -45,5 +45,5 @@ export const en = {
   'popover.impact.none': 'No ledger-recorded file changes after the target; nothing to restore.',
   'popover.confirm': 'Confirm rewind',
   'popover.back': 'Back',
-  'guard.hint': '/rewind takes no parameters — it only withdraws the most recent message. To rewind to an earlier message, use the ↶ button on that message.',
+  'guard.hint': '/rewind cannot be typed manually — use the ↶ button on a message to rewind.',
 } satisfies Record<RewindKey, string>

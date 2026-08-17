@@ -16,10 +16,10 @@
  * before executing. Execution always goes through `session.command(...)`, the
  * same host path the `/rewind` command uses.
  *
- * Manual composer input of `/rewind` is deliberately restricted (the guard
- * below): it takes no parameters — a bare `/rewind` withdraws the most recent
- * message, and any `/rewind <args>` line is blocked with a hint pointing at
- * the per-message button.
+ * Manual composer input of `/rewind` is deliberately blocked (the guard
+ * below): the command exists only as the per-message button's internal
+ * channel, so any `/rewind` line typed by hand — bare or with arguments — is
+ * stopped with a hint pointing at the button.
  *
  * @module dsh-rewind/client
  */
@@ -282,20 +282,20 @@ export function apply(ctx: ClientContext): void {
     }
 
     // ---- manual /rewind guard ----
-    // Manual composer input of `/rewind` accepts NO parameters: a bare
-    // `/rewind` line withdraws the most recent message (host behavior). Any
-    // `/rewind <args>` line is blocked here with a hint, because parameterized
-    // rewinds belong to the per-message ↶ button flow — which drives this same
-    // host command with an explicit `@seq` target internally.
-    const REWIND_WITH_ARGS = /^\s*\/rewind\s+\S/i
+    // Manual composer input of `/rewind` is fully blocked: the command exists
+    // only as the per-message ↶ button's internal channel (it drives the same
+    // host command with an explicit `@seq` target). Any `/rewind` line typed
+    // by hand — bare or with arguments — is stopped here with a hint pointing
+    // at the button.
+    const MANUAL_REWIND = /^\s*\/rewind(?:\s|$)/i
 
     const composerTextarea = (): HTMLTextAreaElement | null =>
       document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
 
-    /** True when the composer draft is a parameterized /rewind line. */
+    /** True when the composer draft is a manually typed /rewind line. */
     const hasBlockedRewindDraft = (): boolean => {
       const textarea = composerTextarea()
-      return textarea !== null && REWIND_WITH_ARGS.test(textarea.value)
+      return textarea !== null && MANUAL_REWIND.test(textarea.value)
     }
 
     let guardHintEl: HTMLElement | null = null

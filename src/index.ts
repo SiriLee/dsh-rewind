@@ -334,12 +334,12 @@ async function handleRewind(
   const input = invocation.rawInput.trim()
 
   if (input === '') {
-    // Manual /rewind takes NO parameters: it only withdraws the most recent
-    // user message (time-travel back one turn; the withdrawn text is offered
-    // back in the composer for re-sending). Rewinding to an EARLIER message is
-    // the per-message ↶ button's job — it drives this same host path with an
-    // explicit `@seq` target. Parameterized manual input is blocked in the
-    // client composer guard (see src/client/index.ts).
+    // Manual `/rewind` input is blocked entirely in the client composer guard
+    // (see src/client/index.ts): the command exists as the per-message ↶
+    // button's internal channel, which always drives this host path with an
+    // explicit `@seq` target. The bare form below is a defensive fallback for
+    // non-composer callers: it withdraws the most recent user message
+    // (time-travel back one turn; the text is offered back in the composer).
     const candidates = listRewindCandidates(session.events, session.surface.nodes, 1)
     if (candidates.length === 0) {
       return { kind: 'error', text: '当前会话还没有可回退的用户消息。' }

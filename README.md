@@ -6,13 +6,13 @@ DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Clau
 
 ## 实现状态（v0.1.10）
 
-- ✅ host 端 `/rewind` 命令（手动单动作：不接受参数、撤回最近一条；参数化形式保留为按钮内部调用）
+- ✅ host 端 `/rewind` 命令（参数化形式作为 ↶ 按钮的内部调用通道；手动输入由 client 拦截）
 - ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
 - ✅ **与其他审批类插件共存**：捕获在 around-dispatch 阶段，`tools/pre-execute` 被 `ask` 短路（如 dsh-edit-approval）后批准仍能记录；被拒绝的调用不留 pending 残留
 - ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径台账/还原指向真实文件；台账记录解析后的 display path
 - ✅ **fs 服务动态获取**（`ctx.inject(['fs'])`）：fs 后挂载也不失效，无 fs 部署时命令仍可用
 - ✅ 同窗口 in-place 回退：追加空内容标记 + `surfaceOp: replace` 替换目标及之后全部 surface（真实 `dsh-session` 集成测试通过）
-- ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）+ 手动 `/rewind` 参数拦截
+- ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）+ 手动 `/rewind` 输入拦截
 - ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（14 项，含审批短路/会话 cwd 场景）
 - ⏳ 二期：快捷键、git-first 快照式文件回退
 
@@ -68,12 +68,12 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 - 每条用户消息 hover 出现「↶ 回退」按钮：点击 → 选择「仅回退对话」或
   「回退对话和代码」（后者先展示影响清单再确认）。
-- **回退 = 撤回（时间回溯）**：对**任意**用户消息回退（按钮，或 `/rewind` 撤回最近一条），
+- **回退 = 撤回（时间回溯）**：对**任意**用户消息回退（使用消息旁的 ↶ 按钮），
   效果是**撤回该消息及它之后的所有内容**（含 agent 回复、工具调用）——对话界面与
   Agent 上下文都回到这条消息发送之前；**该消息的文本自动填入输入框（编辑区）**，
   可直接修改后重发。命令结果提示"已撤回 seq N 及之后内容"。
-- 手动 `/rewind` **不接受参数**：直接撤回最近一条用户消息（内容填回输入框可修改重发）；
-  回退到更早的消息请用该消息旁的 ↶ 按钮（参数化命令保留为按钮内部调用）。
+- **手动 `/rewind` 不支持**：在输入框手动输入 `/rewind`（含裸命令）会被 client 拦截并
+  提示改用按钮——`/rewind` 命令仅作为按钮的内部调用通道存在。
 - **回退后前端与 Agent 一致**：回退标记是空内容消息（deriveMessages 会跳过，模型
   上下文无任何标记噪音）；client 端隐藏被撤回范围内的消息行与 `/rewind` 命令结果，
   可见对话即"撤回点之前的内容"。会话日志（append-only 审计）不受影响。
@@ -93,10 +93,10 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 社区 rewind 类插件（`dsh-recall-plugin`、`dsh-checkpoint-rewind`、`dsh-turn-rewind`）均为 **fork 路线**（回退 = fork 出新会话，用户切换会话继续），且没有「仅回退对话 / 对话+代码」的选项。本插件提供：**在当前会话窗口内**改写模型上下文 + 可选还原工作区文件。
 
-## 交互设计（按钮两步；手动命令为单动作）
+## 交互设计（按钮两步；手动命令不支持）
 
 按钮流程遵循两步：**第一步选择要回退到的 user 消息，第二步选择回退模式**。手动
-`/rewind` 命令不参与两步流程——它不接受参数，只撤回最近一条消息。
+`/rewind` 命令不支持输入——client 端在输入框拦截所有手动 `/rewind` 并提示改用按钮。
 
 ### 1. 用户消息旁的「回退」按钮（主入口）
 
@@ -109,16 +109,11 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 - 选「回退对话和代码」时，浮层内先显示将受影响的内容清单（将还原/删除的文件名与数量），确认后执行。
 - 执行结果以一条对话内消息呈现（如「已回退到 seq N，移除 M 条上下文；还原 2 个文件」）。
 
-### 2. 命令（辅助入口，仅支持手动撤回最近一条）
+### 2. 命令（仅作按钮内部通道，不支持手动输入）
 
-```
-/rewind   撤回最近一条用户消息（不接受参数；内容填回输入框可修改重发）
-```
-
-- 手动 `/rewind` 是**单动作**：不接受任何参数，直接撤回最近一条用户消息（对话回到
-  上一条消息之前）。参数化形式（`@seq chat|both`、`preview`）仍存在于 host 端，
-  但**仅供 ↶ 按钮内部调用**——client 端会在输入框拦截带参数的手动 `/rewind` 并提示
-  改用按钮。回退到更早的消息请使用该消息旁的「回退」按钮。
+- **手动输入 `/rewind`（含裸命令）会被 client 端在输入框直接拦截**，并提示改用消息旁
+  的 ↶ 按钮。`/rewind` 命令仅作为按钮的内部调用通道存在
+  （`/rewind @seq chat|both`、`/rewind preview @seq both`）。
 - UI 按钮与命令共享同一套 host 端回退逻辑（`/rewind @seq <mode>`）。
 
 ## 回退机制（host 端，全部公开 API）
@@ -152,7 +147,7 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 - 按钮注入锚点：用户行 `[data-chat-flow-kind="user"]`（行容器 `data-chat-anchor-key` 为节点 key）；用 MutationObserver 跟踪新增行。
 - 消息 seq 获取：从行元素的 `data-chat-anchor-key` → 运行时快照 `session.getSnapshot().chat.nodes.get(key)` → `UserMessageNode.seq`（DOM 只用于定位，数据取自 runtime，不解析 DOM 文本）。
-- **按钮两步选择浮层**：点击消息旁按钮时，客户端接管交互——目标即该消息，第二步展示模式选项（仅回退对话 / 回退对话和代码 / 取消）；确认后调 `session.command('/rewind @<seq> <mode>')` 执行。**手动 `/rewind` 不经过浮层**：它不接受参数，直接撤回最近一条消息；client 端在输入框拦截带参数的手动 `/rewind` 并提示改用按钮。
+- **按钮两步选择浮层**：点击消息旁按钮时，客户端接管交互——目标即该消息，第二步展示模式选项（仅回退对话 / 回退对话和代码 / 取消）；确认后调 `session.command('/rewind @<seq> <mode>')` 执行。**手动 `/rewind` 被 client 整体拦截**（含裸命令）：输入框 guard 阻止提交并提示改用按钮；`/rewind` 命令仅作为按钮内部调用通道存在。
 - 执行结果以命令节点出现在对话中。
 - 注入按钮与「在新对话中分支」等官方操作并排，样式遵循 dsh 设计 token。
 
