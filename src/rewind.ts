@@ -166,7 +166,7 @@ export function planRewind(
     targetSeq = candidate.seq
   }
 
-  const targetEvent = events[targetSeq]
+  const targetEvent = events.find(event => event.seq === targetSeq)
   if (targetEvent === undefined) {
     throw new RewindError('not-a-user-message', `no session event at seq ${targetSeq}`)
   }

@@ -83,7 +83,10 @@ export function apply(ctx: ClientContext): void {
       if (key === undefined || attached.has(seat)) return
       const hoverRoot = seat.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
       const actions = hoverRoot?.lastElementChild
-      if (actions === null || actions === undefined) return
+      // The actions row is the last child of the user row and holds the
+      // copy/branch IconActions; refuse to inject when the DOM does not match
+      // (a layout change must not break the conversation).
+      if (!(actions instanceof HTMLElement) || actions.querySelector('button') === null) return
       attached.add(seat)
 
       const button = document.createElement('button')
@@ -95,7 +98,12 @@ export function apply(ctx: ClientContext): void {
       button.addEventListener('click', event => {
         event.stopPropagation()
         const session = sessionFor()
-        if (session === undefined) return
+        if (session === undefined) {
+          // No current session (hero/transition): nothing to rewind, say so
+          // instead of failing silently.
+          console.warn('[dsh-rewind] rewind button clicked with no current session')
+          return
+        }
         const node = userNodeFor(key, session)
         if (node === undefined) return
         openPopover({
@@ -113,6 +121,10 @@ export function apply(ctx: ClientContext): void {
     }
 
     const scan = (): void => {
+      // Drop buttons whose seat rows were removed from the DOM (React unmount).
+      for (const [key, button] of buttons) {
+        if (!button.isConnected) buttons.delete(key)
+      }
       for (const seat of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) attach(seat)
     }
 

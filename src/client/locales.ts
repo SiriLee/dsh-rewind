@@ -16,7 +16,6 @@ export const zh = {
   'popover.impact.none': '目标之后没有台账记录的写类变更，无需还原文件。',
   'popover.confirm': '确认回退',
   'popover.back': '返回',
-  'popover.noSession': '会话不可用，无法回退。',
 } satisfies Record<string, string>
 
 /** The rewind namespace key union. */
@@ -45,5 +44,4 @@ export const en = {
   'popover.impact.none': 'No ledger-recorded file changes after the target; nothing to restore.',
   'popover.confirm': 'Confirm rewind',
   'popover.back': 'Back',
-  'popover.noSession': 'Session unavailable; cannot rewind.',
 } satisfies Record<RewindKey, string>

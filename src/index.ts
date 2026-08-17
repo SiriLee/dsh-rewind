@@ -16,11 +16,11 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import type { FileSystem } from '@deepseek-ai/dsh-fs'
+import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Session, UserMessage } from '@deepseek-ai/dsh-session'
 import type {
-  PostToolDecision, PreToolDecision, ToolExecution, ToolExecutionResult,
+  PostToolDecision, ToolExecution, ToolExecutionResult,
 } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
 import { RewindLedger } from './ledger.ts'
@@ -28,6 +28,7 @@ import {
   formatCandidate, listRewindCandidates, parseRewindTarget, planRewind,
   RewindError, type RewindMode, type RewindPlan, type RewindTarget,
 } from './rewind.ts'
+import { execSessionCwd } from './session-cwd.ts'
 
 export const name = 'dsh-rewind'
 export const inject = ['commands', 'tools']
@@ -38,9 +39,11 @@ const TRACKED_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
 /** str_replace_editor commands that mutate the filesystem. */
 const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
 
-/** Before-state captured for one in-flight tool call, keyed by callId. */
+/** Before-state captured for one in-flight tool call, keyed by agent+callId. */
 interface PendingCapture {
   readonly path: string
+  /** Session cwd the path was resolved against (mirrors the fs tools). */
+  readonly cwd: string | undefined
   readonly before: string | undefined
 }
 
@@ -75,10 +78,26 @@ function anchorSeqOf(session: Session): number | undefined {
   return undefined
 }
 
-/** Read the full current text of a path, or undefined when the file is absent. */
-async function readMaybe(fs: FileSystem, path: string, signal?: AbortSignal): Promise<string | undefined> {
+/** Resolve a path against the session cwd (fs-tools rule), or undefined on resolution failure. */
+async function resolveTarget(
+  fs: FileSystem,
+  path: string,
+  cwd: string | undefined,
+  signal?: AbortSignal,
+): Promise<Awaited<ReturnType<FileSystem['resolve']>> | undefined> {
   try {
-    const target = await fs.resolve(path, { signal })
+    return await fs.resolve(path, {
+      ...cwd !== undefined ? { cwd } : {},
+      signal,
+    })
+  } catch {
+    return undefined
+  }
+}
+
+/** Read a target's full text, or undefined when the file is absent. */
+async function readTextOrUndefined(fs: FileSystem, target: FsTarget, signal?: AbortSignal): Promise<string | undefined> {
+  try {
     return await fs.readText(target, signal)
   } catch (error) {
     const code = (error as { code?: string })?.code
@@ -88,8 +107,13 @@ async function readMaybe(fs: FileSystem, path: string, signal?: AbortSignal): Pr
 }
 
 /**
- * Capture the before-state of a tracked mutation during `tools/pre-execute`
- * (the file still holds the old content at this point).
+ * Capture the before-state of a tracked mutation during `tools/execute` (the
+ * around-dispatch wrapper): the file still holds the old content, and this
+ * stage only runs after any pre-execute approval gate allowed the call — so a
+ * `{ kind: 'ask' }` short-circuit from another plugin (e.g. dsh-edit-approval)
+ * cannot skip the capture, and a denied call never captures (no pending leak).
+ * The recorded path is the RESOLVED display path, so previews and restores
+ * always name the real file regardless of how the model spelled it.
  */
 async function captureBefore(
   fs: FileSystem,
@@ -99,8 +123,11 @@ async function captureBefore(
   if (!TRACKED_TOOLS.has(exec.name)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
-  const before = await readMaybe(fs, path, exec.signal)
-  pending.set(`${exec.agent?.id ?? 'anon'}:${exec.callId}`, { path, before })
+  const cwd = execSessionCwd(exec, path)
+  const target = await resolveTarget(fs, path, cwd, exec.signal)
+  if (target === undefined) return
+  const before = await readTextOrUndefined(fs, target, exec.signal)
+  pending.set(`${exec.agent?.id ?? 'anon'}:${exec.callId}`, { path: target.displayPath, cwd, before })
 }
 
 /**
@@ -123,9 +150,13 @@ async function commitEntry(
   if (agent === undefined) return
   const anchorSeq = anchorSeqOf(agent.session)
   if (anchorSeq === undefined) return
+  // The recorded path is already resolved (display path); re-resolving with
+  // the captured cwd keeps remote/relative backends consistent.
+  const target = await resolveTarget(fs, capture.path, capture.cwd, exec.signal)
+  if (target === undefined) return
   let after: string
   try {
-    after = await readMaybe(fs, capture.path, exec.signal) ?? ''
+    after = await readTextOrUndefined(fs, target, exec.signal) ?? ''
   } catch {
     return // unreadable post-state: nothing dependable to restore later
   }
@@ -226,7 +257,12 @@ async function executeRewind(
     if (fs === undefined) {
       restore = '；未找到文件系统服务，未还原文件（可仅用 chat 模式回退对话）'
     } else {
-      const outcome = await ledger.restoreAfter(fs, processPath => unlink(processPath), plan.targetSeq)
+      const outcome = await ledger.restoreAfter(fs, processPath => unlink(processPath), plan.targetSeq, {
+        // Relative ledger paths resolve against the session workspace, exactly
+        // as the fs tools resolve them (per-entry in src/ledger.ts).
+        cwd: agent.session.header.cwd,
+        signal: invocation.signal,
+      })
       restore = `；还原 ${outcome.restored.length} 个文件、删除 ${outcome.deleted.length} 个文件${renderFailures(outcome.failed)}`
     }
   }
@@ -305,6 +341,18 @@ async function handleRewind(
 
 /**
  * Register the `/rewind` command and the tools-pipeline ledger hooks.
+ *
+ * The command is fs-independent and registers immediately. The ledger needs
+ * `fs`, so its hooks mount through a dynamic `ctx.inject(['fs'])` — they take
+ * effect whenever the fs service becomes available (and never fail the
+ * plugin's load when a deployment has no fs).
+ *
+ * Capture runs in `tools/execute` (the around-dispatch stage), NOT in
+ * `tools/pre-execute`: a pre-execute `{ kind: 'ask' }` short-circuit from
+ * another plugin (e.g. dsh-edit-approval) skips later pre-execute listeners,
+ * and a denied call never dispatches — so approved calls are still captured,
+ * denied calls never leave a pending entry behind.
+ *
  * @param ctx - context carrying `commands`, `tools`, and an optional `fs`.
  */
 export function apply(ctx: Context): void {
@@ -318,32 +366,9 @@ export function apply(ctx: Context): void {
     }
     return ledger
   }
-  const fs = ctx.get('fs', false) as FileSystem | undefined
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
-
-  ctx.on('tools/pre-execute', async (exec: ToolExecution, next): Promise<PreToolDecision> => {
-    if (fs !== undefined) {
-      try {
-        await captureBefore(fs, exec, pending)
-      } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] before-capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    return next()
-  })
-
-  ctx.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
-    if (fs !== undefined) {
-      try {
-        await commitEntry(fs, ledgerFor, pending, exec, result)
-      } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] ledger commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-    return next()
-  })
 
   ctx.effect(function* () {
     yield ctx.commands.register({
@@ -351,5 +376,26 @@ export function apply(ctx: Context): void {
       description: '在同窗口内将对话回退到更早的用户消息（可同时还原文件）',
       handler: invocation => handleRewind(ctx, ledgerFor(invocation.agent.session), invocation),
     })
-  }, 'dsh-rewind lifecycle')
+  }, 'dsh-rewind command')
+
+  ctx.inject(['fs'], (scope) => {
+    const fs = scope.fs
+    scope.on('tools/execute', async (exec: ToolExecution, next): Promise<ToolExecutionResult> => {
+      try {
+        await captureBefore(fs, exec, pending)
+      } catch (error) {
+        ctx.logger.warn(`[dsh-rewind] before-capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return next()
+    })
+
+    scope.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
+      try {
+        await commitEntry(fs, ledgerFor, pending, exec, result)
+      } catch (error) {
+        ctx.logger.warn(`[dsh-rewind] ledger commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      return next()
+    })
+  })
 }

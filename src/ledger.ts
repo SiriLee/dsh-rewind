@@ -12,6 +12,7 @@
  */
 
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
+import { sessionCwd } from './session-cwd.ts'
 
 /** One recorded write-class mutation. */
 export interface LedgerEntry {
@@ -93,13 +94,14 @@ export class RewindLedger {
    * @param fs - the filesystem service (resolve/readText/writeText/processPath).
    * @param deleteFile - backend-appropriate file deletion by process path.
    * @param targetSeq - the rewind target; only later changes are reverted.
-   * @param signal - optional abort for the fs round-trips.
+   * @param options - session workspace cwd (relative ledger paths resolve
+   *   against it, mirroring the fs tools) and an optional abort signal.
    */
   async restoreAfter(
     fs: FileSystem,
     deleteFile: DeleteFile,
     targetSeq: number,
-    signal?: AbortSignal,
+    options: { cwd?: string; signal?: AbortSignal } = {},
   ): Promise<RestoreOutcome> {
     const restored: string[] = []
     const deleted: string[] = []
@@ -108,7 +110,11 @@ export class RewindLedger {
     const deletedSet = new Set<string>()
     for (const entry of this.changesAfter(targetSeq)) {
       try {
-        const target = await fs.resolve(entry.path, { signal })
+        const cwd = sessionCwd(options.cwd, entry.path)
+        const target = await fs.resolve(entry.path, {
+          ...cwd !== undefined ? { cwd } : {},
+          signal: options.signal,
+        })
         if (entry.before === undefined) {
           await deleteFile(fs.processPath(target))
           if (!deletedSet.has(entry.path)) {
@@ -116,7 +122,7 @@ export class RewindLedger {
             deleted.push(entry.path)
           }
         } else {
-          await fs.writeText(target, entry.before, undefined, signal)
+          await fs.writeText(target, entry.before, undefined, options.signal)
           if (!restoredSet.has(entry.path)) {
             restoredSet.add(entry.path)
             restored.push(entry.path)

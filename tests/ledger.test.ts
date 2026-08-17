@@ -4,6 +4,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import type { FsEditOutcome, FsInfo, FsTarget, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { RewindLedger } from '../src/ledger.ts'
 
@@ -11,8 +12,9 @@ import { RewindLedger } from '../src/ledger.ts'
 class FakeFs extends FileSystem {
   files = new Map<string, string>()
 
-  override async resolve(path: string): Promise<FsTarget> {
-    return { targetKey: FsTargetKey(path), displayPath: path }
+  override async resolve(path: string, opts?: { cwd?: string }): Promise<FsTarget> {
+    const displayPath = opts?.cwd !== undefined && !path.startsWith('/') ? join(opts.cwd, path) : path
+    return { targetKey: FsTargetKey(displayPath), displayPath }
   }
 
   override processPath(target: FsTarget): string {
@@ -144,6 +146,19 @@ describe('RewindLedger', () => {
     expect(outcome.restored).toEqual(['/good.txt'])
     expect(outcome.failed).toEqual([{ path: '/bad.txt', message: 'disk full' }])
     spy.mockRestore()
+  })
+
+  it('restores relative paths against the session cwd', async () => {
+    const fs = new FakeFs(new Context())
+    fs.files.set('/workspace/rel.txt', 'new content')
+    const ledger = new RewindLedger()
+    ledger.record(entry('write', 2, 'rel.txt', 'original', 'new content'))
+
+    const outcome = await ledger.restoreAfter(fs, async () => {}, 0, { cwd: '/workspace' })
+
+    expect(outcome.restored).toEqual(['rel.txt'])
+    expect(fs.files.get('/workspace/rel.txt')).toBe('original')
+    expect(fs.files.has('rel.txt')).toBe(false) // never resolved at the process cwd
   })
 
   it('records the marker-tool writes as regular entries too', () => {

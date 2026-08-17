@@ -7,10 +7,13 @@ DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Clau
 ## 实现状态（v0.1.0）
 
 - ✅ host 端 `/rewind` 命令（两步文本引导 + 直接执行 + `preview` 影响清单）
-- ✅ host 端变更台账（`tools/pre-execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
+- ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
+- ✅ **与其他审批类插件共存**：捕获在 around-dispatch 阶段，`tools/pre-execute` 被 `ask` 短路（如 dsh-edit-approval）后批准仍能记录；被拒绝的调用不留 pending 残留
+- ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径台账/还原指向真实文件；台账记录解析后的 display path
+- ✅ **fs 服务动态获取**（`ctx.inject(['fs'])`）：fs 后挂载也不失效，无 fs 部署时命令仍可用
 - ✅ 同窗口 in-place 回退：追加标记节点 + `surfaceOp: replace` 替换目标点之后的 surface（真实 `dsh-session` 集成测试通过）
 - ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）
-- ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试（25 个用例）
+- ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（14 项，含审批短路/会话 cwd 场景）
 - ⏳ 二期：快捷键、git-first 快照式文件回退、命令路径的 client 两步浮层接管
 
 ## 安装
@@ -88,7 +91,13 @@ dsh plugin --profile web add github:SiriLee/dsh-rewind
 
 ### 4. 文件回退：变更台账
 
-- 监听 `tools/post-execute`，记录每次 `write` / `edit` / `str-replace-editor`：`{ 消息锚点 seq, 文件路径, before, after }`。
+- 在 `tools/execute`（around-dispatch 阶段）读取目标文件 before，`tools/post-execute` 记录
+  `{ 消息锚点 seq, 文件路径(解析后), before, after }`。捕获放在 execute 而非
+  pre-execute：**审批类插件（如 dsh-edit-approval）在 `tools/pre-execute` 返回 `ask`
+  会短路后续监听器**，但批准后 dispatch 阶段必然执行——共存的写操作照样入台账；
+  被拒绝的调用不 dispatch，不会留下 pending 残留。
+- 相对路径按**会话 cwd** 解析（与 `dsh-tool-fs` 同规则，`src/session-cwd.ts`），
+  台账记录解析后的 display path，preview/还原始终指向真实文件。
 - 回退「对话和代码」时，把目标点之后发生的变更**逆序还原**（内容写回 before、新建文件删除）。
 - 边界（已知限制）：台账只覆盖**插件运行期间、经写类工具**的变更；bash 命令或外部程序的修改不在台账内，无法还原（二期可加 git-first 快照层）。
 
@@ -124,14 +133,16 @@ dsh plugin --profile web add /home/slev/workspace/projects/dsh-rewind
 ## 目录结构（实际）
 
 ```
-src/index.ts           host 插件：/rewind 命令 + tools/pre|post-execute 台账
+src/index.ts           host 插件：/rewind 命令 + tools/execute|post-execute 台账（fs 动态注入）
 src/rewind.ts          planRewind 纯函数（目标解析、surface 范围计算、候选列表）
-src/ledger.ts          变更台账（记录、查询、逆序还原、影响清单）
+src/ledger.ts          变更台账（记录、查询、逆序还原、影响清单；按会话 cwd 解析）
+src/session-cwd.ts     会话 cwd 解析（复刻 dsh-tool-fs 规则，可单测）
 src/client/index.ts    client 插件：消息行「回退」按钮 + 模式选择浮层
 src/client/popover.ts  浮层 DOM（含 both 模式影响清单确认）
 src/client/locales.ts  zh/en 文案（LocaleNamespaceMap 合并）
 src/client/styles.ts   注入样式（dsh 设计 token）
 scripts/build.mjs      esbuild 构建：lib/index.js（host ESM）+ lib/client.js（loader 闭包）
+scripts/verify-host.mjs  端到端验证（真实 cordis + dsh-session，14 项断言）
 tests/                 rewind/ledger 单测 + 真实 dsh-session 集成测试
 cordis.patch.yml       bundle patch（插入 dsh-rewind 一行，双面）
 package.json           dsh.bundle + dsh.client 声明
@@ -160,7 +171,7 @@ package.json           dsh.bundle + dsh.client 声明
 | `createUserMessage`、`MessageSource` | [packages/llm/llm/src/message.ts](../../oss/deepseek-harness/packages/llm/llm/src/message.ts) |
 | `CommandDefinition`、`CommandInvocation` | [packages/interaction/commands/src/index.ts](../../oss/deepseek-harness/packages/interaction/commands/src/index.ts) |
 | `Agent`（`status`/`session`） | [packages/core/agent/src/runtime-types.ts](../../oss/deepseek-harness/packages/core/agent/src/runtime-types.ts) |
-| `tools/pre-execute` / `post-execute` | [packages/core/tools/src/index.ts](../../oss/deepseek-harness/packages/core/tools/src/index.ts) |
+| `tools/pre-execute` / `execute` / `post-execute` | [packages/core/tools/src/index.ts](../../oss/deepseek-harness/packages/core/tools/src/index.ts) |
 | 客户端 DOM 锚点（`data-chat-flow-kind`/`data-chat-anchor-key`） | [packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx](../../oss/deepseek-harness/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx) |
 | 用户气泡渲染 | [packages/client/ui-conversation/src/client/chat/MessageItem.tsx](../../oss/deepseek-harness/packages/client/ui-conversation/src/client/chat/MessageItem.tsx) |
 | 客户端 `SessionFace`（`command`/`cancel`） | [packages/client/runtime/src/client/contract/session.ts](../../oss/deepseek-harness/packages/client/runtime/src/client/contract/session.ts) |
