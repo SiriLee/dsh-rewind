@@ -72,6 +72,10 @@ function hiddenSeqsOf(session: SessionFace): Set<number> {
     if (node === undefined || node.kind !== 'command') continue
     const command = node.data as CommandNode
     if (command.name !== 'rewind') continue
+    // Only SUCCESSFUL rewind commands are hidden (their result is noise once
+    // the conversation is rewound). A failed rewind must stay visible so the
+    // user sees the error instead of silently missing the rewind.
+    if (command.outcome?.kind !== 'success') continue
     hidden.add(command.seq)
     const marker = command.outcome?.sourceEventSeq
     const target = targetOfOutcome(command.outcome?.text)
