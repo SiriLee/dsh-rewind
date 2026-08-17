@@ -1,7 +1,10 @@
-# dsh-rewind bundle patch: one row, dual-face.
+# dsh-rewind-plugin bundle patch: one row, dual-face.
 # The node half is the package's default export (host plugin: /rewind command
-# + tools/post-execute ledger); the browser half is served from ./client
-# (dsh.client declaration in package.json) and injected into the web roster.
+# + tools/execute|post-execute ledger); the browser half is served from
+# ./client (dsh.client declaration in package.json) and injected into the web
+# roster. The row name MUST equal the package name — the client-modules node
+# half resolves `require.resolve('<row-name>/package.json')` to find the
+# package and its dsh.client declaration.
 - insert:
-    - id: dsh-rewind
-      name: 'dsh-rewind'
+    - id: dsh-rewind-plugin
+      name: 'dsh-rewind-plugin'

@@ -18,18 +18,24 @@ DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Clau
 
 ## 安装
 
+> 发布名：**`dsh-rewind-plugin`**（npm 上的 `dsh-rewind` 已被功能重叠的既有包占用）。
+> 本地 / GitHub 路径不受影响（仓库仍为 `SiriLee/dsh-rewind`）。
+
 ```sh
 # 本地 checkout
 dsh plugin --profile web add /home/slev/workspace/projects/dsh-rewind
 
 # 或 GitHub（git 安装会运行 prepare 构建；需按提示在 profile 的
 # pnpm-workspace.yaml 中 allowBuilds 授权）
-dsh plugin --profile web add github:SiriLee/dsh-rewind
+dsh plugin --profile web add github:SiriLee/dsh-rewind#<commit-sha>
+
+# 或 npm 发布后（预构建产物，无需授权）
+dsh plugin --profile web add dsh-rewind-plugin
 ```
 
-`cordis.patch.yml` 插入一行 `dsh-rewind`（node 半面 = host 插件）；包声明
-`dsh.bundle` + `dsh.client`，浏览器半面由 `dsh-client-modules` 从
-`exports["./client"]` 解析并注入 web roster。
+`cordis.patch.yml` 插入一行 `dsh-rewind-plugin`（node 半面 = host 插件；行名必须
+等于包名）；包声明 `dsh.bundle` + `dsh.client`，浏览器半面由
+`dsh-client-modules` 从 `exports["./client"]` 解析并注入 web roster。
 
 ## 使用
 
@@ -122,14 +128,6 @@ dsh plugin --profile web add github:SiriLee/dsh-rewind
 - fork/分支回退——官方已有（「在新对话中分支」）。
 - 快照式文件回退（git-first）——二期（台账方案先行）。
 
-## 安装（预期）
-
-```sh
-dsh plugin --profile web add /home/slev/workspace/projects/dsh-rewind
-```
-
-包声明 `dsh.bundle` + `dsh.client`（双面：host 回退逻辑 + 浏览器按钮），可发布 GitHub 并打 `dsh-plugin` topic。
-
 ## 目录结构（实际）
 
 ```
@@ -144,8 +142,8 @@ src/client/styles.ts   注入样式（dsh 设计 token）
 scripts/build.mjs      esbuild 构建：lib/index.js（host ESM）+ lib/client.js（loader 闭包）
 scripts/verify-host.mjs  端到端验证（真实 cordis + dsh-session，14 项断言）
 tests/                 rewind/ledger 单测 + 真实 dsh-session 集成测试
-cordis.patch.yml       bundle patch（插入 dsh-rewind 一行，双面）
-package.json           dsh.bundle + dsh.client 声明
+cordis.patch.yml       bundle patch（插入 dsh-rewind-plugin 一行，双面）
+package.json           dsh.bundle + dsh.client 声明、optional peerDependencies
 ```
 
 ## 参考：deepseek-harness 接口文档
