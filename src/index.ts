@@ -169,12 +169,16 @@ async function commitEntry(
   })
 }
 
-/** Build the rewind marker message the surface replacement lands on. */
+/**
+ * Build the rewind marker message the surface replacement lands on. The
+ * leading structured prefix lets the client hide the marker (and the
+ * withdrawn messages) from the rendered transcript.
+ */
 function buildMarker(targetSeq: number): UserMessage {
   return createUserMessage({
     content: [{
       type: 'text',
-      text: `[回退标记 / rewind marker] 对话已回退到 seq ${targetSeq}，此标记之后的历史已从模型上下文中移除。请忽略此标记本身，等待用户的下一条消息。`,
+      text: `__DSH_REWIND__:{"target":${targetSeq}}\n[回退标记 / rewind marker] 对话已回退到 seq ${targetSeq}，此标记之后的历史已从模型上下文中移除。请忽略此标记本身，等待用户的下一条消息。`,
     }],
     source: { kind: 'user' },
   })

@@ -20,7 +20,7 @@
  */
 
 import type {
-  ClientContext, SessionFace, UserMessageNode,
+  ClientContext, CommandNode, SessionFace, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -33,7 +33,11 @@ export const inject = ['sessions', 'locale']
 
 const NS = 'rewind'
 const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"]'
+const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
+
+/** Structured prefix the host marker carries: `__DSH_REWIND__:{"target":N}`. */
+const REWIND_MARKER_RE = /__DSH_REWIND__:\{"target":(\d+)\}/
 
 /** Join the text blocks of a user message into one plain preview. */
 function messagePreviewOf(node: UserMessageNode): string {
@@ -43,6 +47,46 @@ function messagePreviewOf(node: UserMessageNode): string {
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80)
+}
+
+/**
+ * Anchor seqs that must be hidden from the rendered transcript so the user
+ * sees the conversation as it was before the rewind (matching what the agent
+ * sees): every rewind marker, every `/rewind` command row, and every message
+ * withdrawn between the latest marker's target and the marker itself.
+ */
+function hiddenSeqsOf(session: SessionFace): Set<number> {
+  const hidden = new Set<number>()
+  const snap = session.getSnapshot()
+  let latest: { marker: number; target: number } | null = null
+  for (const key of snap.chat.order) {
+    const node = snap.chat.nodes.get(key)
+    if (node === undefined) continue
+    if (node.kind === 'command') {
+      const command = node.data as CommandNode
+      if (command.name === 'rewind') hidden.add(command.seq)
+    } else if (node.kind === 'user') {
+      const user = node.data as UserMessageNode
+      const text = user.content
+        .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+        .join('')
+      const match = text.match(REWIND_MARKER_RE)
+      if (match !== null) {
+        hidden.add(user.seq)
+        const target = Number(match[1])
+        if (latest === null || user.seq > latest.marker) latest = { marker: user.seq, target }
+      }
+    }
+  }
+  if (latest !== null) {
+    for (const key of snap.chat.order) {
+      const node = snap.chat.nodes.get(key)
+      if (node === undefined) continue
+      const anchor = node.anchorSeq
+      if (anchor > latest.target && anchor <= latest.marker) hidden.add(anchor)
+    }
+  }
+  return hidden
 }
 
 /**
@@ -60,6 +104,7 @@ export function apply(ctx: ClientContext): void {
     document.head.appendChild(style)
 
     const attached = new WeakSet<HTMLElement>()
+    const hidden = new WeakSet<HTMLElement>()
     const buttons = new Map<string, HTMLButtonElement>()
     let observer: MutationObserver | null = null
 
@@ -125,7 +170,28 @@ export function apply(ctx: ClientContext): void {
       for (const [key, button] of buttons) {
         if (!button.isConnected) buttons.delete(key)
       }
-      for (const seat of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) attach(seat)
+      const session = sessionFor()
+      const hiddenSeqs = session !== undefined ? hiddenSeqsOf(session) : new Set<number>()
+      // Hide withdrawn rows (rewind markers, /rewind command rows, and every
+      // message between the latest marker's target and the marker) so the
+      // rendered transcript matches the agent's context. React re-renders
+      // recreate rows, so this runs on every mutation.
+      for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
+        const key = seat.dataset.chatAnchorKey
+        const anchor = key !== undefined && session !== undefined
+          ? session.getSnapshot().chat.nodes.get(key)?.anchorSeq
+          : undefined
+        if (anchor !== undefined && hiddenSeqs.has(anchor)) {
+          seat.style.display = 'none'
+          hidden.add(seat)
+        } else if (hidden.has(seat)) {
+          seat.style.display = ''
+          hidden.delete(seat)
+        }
+      }
+      for (const seat of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) {
+        if (!hidden.has(seat)) attach(seat)
+      }
     }
 
     observer = new MutationObserver(scan)

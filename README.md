@@ -2,9 +2,9 @@
 
 DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Claude Code `/rewind` 语义）。主交互为**用户消息旁的「回退」按钮**，点击后选择回退模式；命令仅作辅助。
 
-> 状态：v0.1.2 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
+> 状态：v0.1.3 已实现并发布（`dsh-rewind-plugin`，npm + GitHub Actions Trusted Publishing）。交互以 Claude Code 行为为参考，并贴合 dsh Web 实际 UI（利用现有 DOM 锚点与运行时快照，纯插件、不改仓库核心）。
 
-## 实现状态（v0.1.2）
+## 实现状态（v0.1.3）
 
 - ✅ host 端 `/rewind` 命令（两步文本引导 + 直接执行 + `preview` 影响清单）
 - ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
@@ -73,8 +73,9 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
   提示"已撤回 seq N，可重新发送"。
 - 键盘流：`/rewind` → 选消息 → `/rewind <序号> chat|both`；`/rewind preview <目标>`
   只输出影响清单不执行。
-- 回退后：模型上下文从目标消息重新开始；会话日志与可见对话完整保留
-  （append-only）；标记节点不渲染为气泡（非 append surface 事件），结果以命令节点呈现。
+- **回退后前端与 Agent 一致**：回退/撤回后，client 端自动隐藏回退标记、`/rewind`
+  命令结果以及被回退范围内的消息（含 agent 回复），可见对话回到回退点之前的样子；
+  之后新发的消息正常显示。会话日志（append-only 审计）不受影响。
 
 ## 已知限制（v0.1）
 
