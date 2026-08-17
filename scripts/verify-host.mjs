@@ -8,8 +8,8 @@
  *
  * What it proves:
  *  1. the plugin registers a `rewind` command on the ctx;
- *  2. `/rewind` (no args) lists recent user messages;
- *  3. `/rewind @<seq> chat` cuts the surface in-place (log untouched);
+ *  2. `/rewind` (no args) withdraws the most recent user message;
+ *  3. `/rewind @<seq> chat` (the button's call form) cuts the surface in-place (log untouched);
  *  4. the ledger captures through `tools/execute` (NOT pre-execute): a
  *     pre-execute `ask` short-circuit still gets captured after approval, and
  *     a denied call never captures (no pending leak);
@@ -86,17 +86,25 @@ const check = (name, ok, detail) => {
 // 1. command registered
 check('command registered', typeof registered?.handler === 'function' && registered.name === 'rewind', JSON.stringify(registered))
 
-// 2. bare /rewind lists candidates
-const listResult = await call(agent, '')
-check('bare /rewind lists candidates', listResult.kind === 'success' && listResult.text.includes('second question') && listResult.text.includes('first question'), listResult.text)
+// 2. bare /rewind (manual, no parameters) withdraws the most recent user
+//    message (seq 2 "second question") and everything after it
+const bareBefore = [...session.surface.nodes]
+const bareResult = await call(agent, '')
+const bareAfter = [...session.surface.nodes]
+check('bare /rewind succeeds', bareResult.kind === 'success', bareResult.text)
+check('bare /rewind withdraws the latest message', bareAfter.length === 3 && bareAfter[0] === 0 && bareAfter[1] === 1 && bareAfter[2] > 3, `before ${JSON.stringify(bareBefore)} -> after ${JSON.stringify(bareAfter)}`)
+check('log stays append-only (5 events)', session.events.length === 5, `events=${session.events.length}`)
 
-// 3. /rewind @2 chat withdraws the target (seq 2) and everything after it
-const before = [...session.surface.nodes]
-const chatResult = await call(agent, '@2 chat')
-const after = [...session.surface.nodes]
+// 3. /rewind @<seq> chat (the button's exact call form) cuts the surface on a
+//    fresh session
+const paramSession = buildSession('verify-param')
+const paramAgent = { id: paramSession.id, session: paramSession, status: 'idle' }
+const before = [...paramSession.surface.nodes]
+const chatResult = await call(paramAgent, '@2 chat')
+const after = [...paramSession.surface.nodes]
 check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
 check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
-check('log stays append-only (5 events)', session.events.length === 5, `events=${session.events.length}`)
+check('log stays append-only (5 events)', paramSession.events.length === 5, `events=${paramSession.events.length}`)
 
 const writeExec = (callId, filePath, content) => ({
   callId, name: 'write', arguments: { file_path: filePath, content }, agent, signal: aborted(),

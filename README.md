@@ -6,15 +6,15 @@ DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Clau
 
 ## 实现状态（v0.1.8）
 
-- ✅ host 端 `/rewind` 命令（两步文本引导 + 直接执行 + `preview` 影响清单）
+- ✅ host 端 `/rewind` 命令（手动单动作：不接受参数、撤回最近一条；参数化形式保留为按钮内部调用）
 - ✅ host 端变更台账（`tools/execute` 捕获 before、`tools/post-execute` 提交），按会话隔离
 - ✅ **与其他审批类插件共存**：捕获在 around-dispatch 阶段，`tools/pre-execute` 被 `ask` 短路（如 dsh-edit-approval）后批准仍能记录；被拒绝的调用不留 pending 残留
 - ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径台账/还原指向真实文件；台账记录解析后的 display path
 - ✅ **fs 服务动态获取**（`ctx.inject(['fs'])`）：fs 后挂载也不失效，无 fs 部署时命令仍可用
 - ✅ 同窗口 in-place 回退：追加空内容标记 + `surfaceOp: replace` 替换目标及之后全部 surface（真实 `dsh-session` 集成测试通过）
-- ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）
+- ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）+ 手动 `/rewind` 参数拦截
 - ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（14 项，含审批短路/会话 cwd 场景）
-- ⏳ 二期：快捷键、git-first 快照式文件回退、命令路径的 client 两步浮层接管
+- ⏳ 二期：快捷键、git-first 快照式文件回退
 
 ## 安装
 
@@ -68,12 +68,12 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 - 每条用户消息 hover 出现「↶ 回退」按钮：点击 → 选择「仅回退对话」或
   「回退对话和代码」（后者先展示影响清单再确认）。
-- **回退 = 撤回（时间回溯）**：对**任意**用户消息回退（按钮或 `/rewind <目标>`），
+- **回退 = 撤回（时间回溯）**：对**任意**用户消息回退（按钮，或 `/rewind` 撤回最近一条），
   效果是**撤回该消息及它之后的所有内容**（含 agent 回复、工具调用）——对话界面与
   Agent 上下文都回到这条消息发送之前；**该消息的文本自动填入输入框（编辑区）**，
   可直接修改后重发。命令结果提示"已撤回 seq N 及之后内容"。
-- 键盘流：`/rewind` → 选消息 → `/rewind <序号> chat|both`；`/rewind preview <目标>`
-  只输出影响清单不执行。
+- 手动 `/rewind` **不接受参数**：直接撤回最近一条用户消息（内容填回输入框可修改重发）；
+  回退到更早的消息请用该消息旁的 ↶ 按钮（参数化命令保留为按钮内部调用）。
 - **回退后前端与 Agent 一致**：回退标记是空内容消息（deriveMessages 会跳过，模型
   上下文无任何标记噪音）；client 端隐藏被撤回范围内的消息行与 `/rewind` 命令结果，
   可见对话即"撤回点之前的内容"。会话日志（append-only 审计）不受影响。
@@ -93,9 +93,10 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 社区 rewind 类插件（`dsh-recall-plugin`、`dsh-checkpoint-rewind`、`dsh-turn-rewind`）均为 **fork 路线**（回退 = fork 出新会话，用户切换会话继续），且没有「仅回退对话 / 对话+代码」的选项。本插件提供：**在当前会话窗口内**改写模型上下文 + 可选还原工作区文件。
 
-## 交互设计（Claude Code 式两步：先选消息，再选模式）
+## 交互设计（按钮两步；手动命令为单动作）
 
-所有入口（按钮、命令）都遵循同一流程：**第一步选择要回退到的 user 消息，第二步选择回退模式**。不会在一开始就要求指定模式。
+按钮流程遵循两步：**第一步选择要回退到的 user 消息，第二步选择回退模式**。手动
+`/rewind` 命令不参与两步流程——它不接受参数，只撤回最近一条消息。
 
 ### 1. 用户消息旁的「回退」按钮（主入口）
 
@@ -108,18 +109,16 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 - 选「回退对话和代码」时，浮层内先显示将受影响的内容清单（将还原/删除的文件名与数量），确认后执行。
 - 执行结果以一条对话内消息呈现（如「已回退到 seq N，移除 M 条上下文；还原 2 个文件」）。
 
-### 2. 命令（辅助入口，面向键盘流与 headless；同样两步）
+### 2. 命令（辅助入口，仅支持手动撤回最近一条）
 
 ```
-/rewind                   第一步：列出最近的 user 消息（序号 + 时间 + 内容预览），等待选择
-/rewind <序号|@seq>        第二步：对选中的消息展示模式选项，等待选择
-/rewind <序号|@seq> chat   执行：仅回退对话
-/rewind <序号|@seq> both   执行：对话 + 代码
-/rewind preview <目标>     只输出影响清单，不执行
+/rewind   撤回最近一条用户消息（不接受参数；内容填回输入框可修改重发）
 ```
 
-- 分步示例：`/rewind` → 返回「1. 14:02 … / 2. 13:47 …」→ 输 `/rewind 1` → 返回「回退到消息 1：/rewind 1 chat 或 /rewind 1 both」→ 输 `/rewind 1 both` 执行。
-- 若输入直接带全参数（`/rewind 1 both`），等价于跳过前两步直接执行——高级用法，不强制。
+- 手动 `/rewind` 是**单动作**：不接受任何参数，直接撤回最近一条用户消息（对话回到
+  上一条消息之前）。参数化形式（`@seq chat|both`、`preview`）仍存在于 host 端，
+  但**仅供 ↶ 按钮内部调用**——client 端会在输入框拦截带参数的手动 `/rewind` 并提示
+  改用按钮。回退到更早的消息请使用该消息旁的「回退」按钮。
 - UI 按钮与命令共享同一套 host 端回退逻辑（`/rewind @seq <mode>`）。
 
 ## 回退机制（host 端，全部公开 API）
@@ -153,7 +152,7 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 - 按钮注入锚点：用户行 `[data-chat-flow-kind="user"]`（行容器 `data-chat-anchor-key` 为节点 key）；用 MutationObserver 跟踪新增行。
 - 消息 seq 获取：从行元素的 `data-chat-anchor-key` → 运行时快照 `session.getSnapshot().chat.nodes.get(key)` → `UserMessageNode.seq`（DOM 只用于定位，数据取自 runtime，不解析 DOM 文本）。
-- **两步选择浮层（命令与按钮共用）**：输入 `/rewind` 或点击消息旁按钮时，客户端接管交互——第一步展示最近 user 消息列表（序号 + 时间 + 预览），选中后第二步展示模式选项（仅回退对话 / 回退对话和代码 / 取消）；确认后调 `session.command('/rewind @<seq> <mode>')` 执行。host 端分步文本引导作为无客户端/headless 场景的降级。
+- **按钮两步选择浮层**：点击消息旁按钮时，客户端接管交互——目标即该消息，第二步展示模式选项（仅回退对话 / 回退对话和代码 / 取消）；确认后调 `session.command('/rewind @<seq> <mode>')` 执行。**手动 `/rewind` 不经过浮层**：它不接受参数，直接撤回最近一条消息；client 端在输入框拦截带参数的手动 `/rewind` 并提示改用按钮。
 - 执行结果以命令节点出现在对话中。
 - 注入按钮与「在新对话中分支」等官方操作并排，样式遵循 dsh 设计 token。
 

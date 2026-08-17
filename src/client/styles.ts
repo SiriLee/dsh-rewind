@@ -22,6 +22,7 @@ export const CLASS = {
   popoverActions: 'dsh-rewind-popover-actions',
   popoverPrimary: 'dsh-rewind-popover-primary',
   popoverGhost: 'dsh-rewind-popover-ghost',
+  guardHint: 'dsh-rewind-guard-hint',
 } as const
 
 /** The ↶ glyph, drawn inline so the bundle stays dependency-free. */
@@ -143,5 +144,19 @@ export const STYLE = `
 }
 .dsh-rewind-popover-ghost:hover {
   background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.dsh-rewind-guard-hint {
+  position: fixed;
+  z-index: 1000;
+  max-width: min(440px, calc(100vw - 24px));
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--dsw-specific-surface-1, var(--dsw-alias-surface-1, #1f2127));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary);
+  pointer-events: none;
 }
 `

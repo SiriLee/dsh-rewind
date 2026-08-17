@@ -26,7 +26,7 @@ import type {
 import { unlink } from 'node:fs/promises'
 import { RewindLedger } from './ledger.ts'
 import {
-  formatCandidate, listRewindCandidates, parseRewindTarget, planRewind,
+  listRewindCandidates, parseRewindTarget, planRewind,
   RewindError, type RewindMode, type RewindPlan, type RewindTarget,
 } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
@@ -50,11 +50,8 @@ interface PendingCapture {
 
 const USAGE = [
   'Usage:',
-  '  /rewind                        list recent user messages to rewind to',
-  '  /rewind <序号|@seq>             choose a mode for that message',
-  '  /rewind <序号|@seq> chat        rewind the conversation only',
-  '  /rewind <序号|@seq> both        rewind conversation and restore files',
-  '  /rewind preview <目标>           show the impact list without executing',
+  '  /rewind                        撤回最近一条用户消息（不接受参数）',
+  '  回退到更早的消息请使用该消息旁的「回退」按钮',
 ].join('\n')
 
 /** Extract the file path a tracked tool call mutates, or undefined. */
@@ -337,14 +334,17 @@ async function handleRewind(
   const input = invocation.rawInput.trim()
 
   if (input === '') {
-    const candidates = listRewindCandidates(session.events, session.surface.nodes)
+    // Manual /rewind takes NO parameters: it only withdraws the most recent
+    // user message (time-travel back one turn; the withdrawn text is offered
+    // back in the composer for re-sending). Rewinding to an EARLIER message is
+    // the per-message ↶ button's job — it drives this same host path with an
+    // explicit `@seq` target. Parameterized manual input is blocked in the
+    // client composer guard (see src/client/index.ts).
+    const candidates = listRewindCandidates(session.events, session.surface.nodes, 1)
     if (candidates.length === 0) {
       return { kind: 'error', text: '当前会话还没有可回退的用户消息。' }
     }
-    return {
-      kind: 'success',
-      text: `选择要回退到的用户消息（最近在上）：\n${candidates.map(formatCandidate).join('\n')}\n\n继续：/rewind <序号|@seq>，或直接 /rewind <序号|@seq> chat|both 执行。`,
-    }
+    return executeRewind(ctx, ledger, invocation, `@${candidates[0]!.seq}`, 'chat')
   }
 
   const parts = input.split(/\s+/)

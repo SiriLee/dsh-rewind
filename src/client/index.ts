@@ -16,6 +16,11 @@
  * before executing. Execution always goes through `session.command(...)`, the
  * same host path the `/rewind` command uses.
  *
+ * Manual composer input of `/rewind` is deliberately restricted (the guard
+ * below): it takes no parameters — a bare `/rewind` withdraws the most recent
+ * message, and any `/rewind <args>` line is blocked with a hint pointing at
+ * the per-message button.
+ *
  * @module dsh-rewind/client
  */
 
@@ -265,6 +270,82 @@ export function apply(ctx: ClientContext): void {
       }
     }
 
+    // ---- manual /rewind guard ----
+    // Manual composer input of `/rewind` accepts NO parameters: a bare
+    // `/rewind` line withdraws the most recent message (host behavior). Any
+    // `/rewind <args>` line is blocked here with a hint, because parameterized
+    // rewinds belong to the per-message ↶ button flow — which drives this same
+    // host command with an explicit `@seq` target internally.
+    const REWIND_WITH_ARGS = /^\s*\/rewind\s+\S/i
+
+    const composerTextarea = (): HTMLTextAreaElement | null =>
+      document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
+
+    /** True when the composer draft is a parameterized /rewind line. */
+    const hasBlockedRewindDraft = (): boolean => {
+      const textarea = composerTextarea()
+      return textarea !== null && REWIND_WITH_ARGS.test(textarea.value)
+    }
+
+    let guardHintEl: HTMLElement | null = null
+    let guardHintTimer: number | undefined
+
+    /** Transient hint above the composer: manual /rewind takes no parameters. */
+    const showGuardHint = (): void => {
+      if (guardHintEl !== null) guardHintEl.remove()
+      if (guardHintTimer !== undefined) window.clearTimeout(guardHintTimer)
+      const textarea = composerTextarea()
+      if (textarea === null) return
+      const card = textarea.closest('[data-composer-card]')
+      const hint = document.createElement('div')
+      hint.className = CLASS.guardHint
+      hint.setAttribute('role', 'status')
+      hint.textContent = t('guard.hint')
+      document.body.appendChild(hint)
+      const rect = card instanceof HTMLElement ? card.getBoundingClientRect() : textarea.getBoundingClientRect()
+      // Bottom-anchored above the card: the hint grows upward, never covering
+      // the input.
+      hint.style.left = `${Math.round(rect.left)}px`
+      hint.style.bottom = `${Math.round(window.innerHeight - rect.top + 8)}px`
+      guardHintEl = hint
+      guardHintTimer = window.setTimeout(() => {
+        hint.remove()
+        if (guardHintEl === hint) guardHintEl = null
+        guardHintTimer = undefined
+      }, 3200)
+    }
+
+    // Capture phase on document: fires before React's root handlers, so
+    // preventDefault + stopPropagation here stops the submit path entirely.
+    const onKeyDownGuard = (event: KeyboardEvent): void => {
+      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
+      if (!hasBlockedRewindDraft()) return
+      event.preventDefault()
+      event.stopPropagation()
+      showGuardHint()
+    }
+
+    const onClickGuard = (event: MouseEvent): void => {
+      if (event.button !== 0 || !hasBlockedRewindDraft()) return
+      const target = event.target
+      if (!(target instanceof Element)) return
+      const button = target.closest('button')
+      if (button === null) return
+      const card = button.closest('[data-composer-card]')
+      if (card === null) return
+      // Only the composer's primary submit button is guarded. The stop button
+      // (renders a <rect>) must keep working with a /rewind draft present.
+      const all = card.querySelectorAll<HTMLButtonElement>('button')
+      if (all[all.length - 1] !== button) return
+      if (button.querySelector('rect') !== null) return
+      event.preventDefault()
+      event.stopPropagation()
+      showGuardHint()
+    }
+
+    document.addEventListener('keydown', onKeyDownGuard, true)
+    document.addEventListener('click', onClickGuard, true)
+
     observer = new MutationObserver(scan)
     // attributes: watch style so a React re-render that resets display is
     // re-hidden on the next mutation instead of flickering back.
@@ -272,6 +353,10 @@ export function apply(ctx: ClientContext): void {
     scan()
 
     yield () => {
+      document.removeEventListener('keydown', onKeyDownGuard, true)
+      document.removeEventListener('click', onClickGuard, true)
+      if (guardHintEl !== null) guardHintEl.remove()
+      if (guardHintTimer !== undefined) window.clearTimeout(guardHintTimer)
       observer?.disconnect()
       for (const button of buttons.values()) button.remove()
       buttons.clear()
