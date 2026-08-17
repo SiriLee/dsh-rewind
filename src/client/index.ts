@@ -93,6 +93,34 @@ function hiddenSeqsOf(session: SessionFace): Set<number> {
 }
 
 /**
+ * Hide marker rows by text, regardless of how they are rendered: the marker
+ * is a replacement surface node that may not exist in the chat view nodes, so
+ * walk text nodes for the marker prefix and hide the enclosing message row
+ * (a `data-chat-anchor-key` / `data-chat-flow-kind` container, or the nearest
+ * ancestor block otherwise).
+ */
+function hideMarkerRows(hidden: WeakSet<HTMLElement>): void {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+  const rows: HTMLElement[] = []
+  while (walker.nextNode()) {
+    const text = walker.currentNode.textContent ?? ''
+    if (!text.includes(MARKER_TEXT)) continue
+    let el = walker.currentNode.parentElement
+    while (el !== null && el !== document.body
+      && el.dataset?.chatAnchorKey === undefined
+      && el.dataset?.chatFlowKind === undefined
+      && !el.classList.contains('dsh-rewind-popover')) {
+      el = el.parentElement
+    }
+    if (el !== null && el !== document.body && !hidden.has(el)) rows.push(el)
+  }
+  for (const row of rows) {
+    row.style.display = 'none'
+    hidden.add(row)
+  }
+}
+
+/**
  * Client plugin body: button injection + popover wiring.
  * @param ctx - client root context carrying `sessions` and `locale`.
  */
@@ -185,18 +213,19 @@ export function apply(ctx: ClientContext): void {
         const anchor = key !== undefined && session !== undefined
           ? session.getSnapshot().chat.nodes.get(key)?.anchorSeq
           : undefined
-        // DOM fallback: a marker row that is not a chat view node (the marker
-        // is a replacement surface node) carries the structured prefix.
-        const isMarker = anchor === undefined && seat.textContent?.includes(MARKER_TEXT) === true
-        if ((anchor !== undefined && hiddenSeqs.has(anchor)) || isMarker) {
+        if (anchor !== undefined && hiddenSeqs.has(anchor)) {
           seat.style.display = 'none'
           hidden.add(seat)
           hiddenCount += 1
-        } else if (hidden.has(seat)) {
+        } else if (hidden.has(seat) && !seat.textContent?.includes(MARKER_TEXT)) {
           seat.style.display = ''
           hidden.delete(seat)
         }
       }
+      // Marker rows are replacement surface nodes that may not be chat view
+      // nodes at all (no data-chat-anchor-key), so locate them by their text:
+      // walk text nodes for the marker prefix and hide the enclosing row.
+      hideMarkerRows(hidden)
       // Diagnostics (only when something is hidden): confirm the hiding path
       // actually fires in the browser.
       if (hiddenSeqs.size > 0 || hiddenCount > 0) {
@@ -210,7 +239,9 @@ export function apply(ctx: ClientContext): void {
     }
 
     observer = new MutationObserver(scan)
-    observer.observe(document.body, { childList: true, subtree: true })
+    // attributes: watch style so a React re-render that resets display is
+    // re-hidden on the next mutation instead of flickering back.
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
     scan()
 
     yield () => {
