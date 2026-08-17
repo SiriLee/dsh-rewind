@@ -30,6 +30,7 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
     "test": "vitest run",
+    "verify:host": "node scripts/verify-host.mjs",
     "prepare": "npm run build"
   },
   "license": "MIT",
