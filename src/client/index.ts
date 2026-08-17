@@ -175,6 +175,7 @@ export function apply(ctx: ClientContext): void {
       }
       const session = sessionFor()
       const hiddenSeqs = session !== undefined ? hiddenSeqsOf(session) : new Set<number>()
+      let hiddenCount = 0
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
       // message between the latest marker's target and the marker) so the
       // rendered transcript matches the agent's context. React re-renders
@@ -190,10 +191,18 @@ export function apply(ctx: ClientContext): void {
         if ((anchor !== undefined && hiddenSeqs.has(anchor)) || isMarker) {
           seat.style.display = 'none'
           hidden.add(seat)
+          hiddenCount += 1
         } else if (hidden.has(seat)) {
           seat.style.display = ''
           hidden.delete(seat)
         }
+      }
+      // Diagnostics (only when something is hidden): confirm the hiding path
+      // actually fires in the browser.
+      if (hiddenSeqs.size > 0 || hiddenCount > 0) {
+        console.info(
+          `[dsh-rewind] hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
+        )
       }
       for (const seat of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) {
         if (!hidden.has(seat)) attach(seat)
