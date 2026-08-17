@@ -58,9 +58,10 @@ export const STYLE = `
   z-index: 1000;
   width: 288px;
   padding: 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
-  background: var(--dsw-specific-surface-1, var(--dsw-alias-surface-1, #1f2127));
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-3));
+  box-shadow: var(--dsw-shadow-lv3);
   font-size: 14px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
@@ -135,8 +136,11 @@ export const STYLE = `
   cursor: pointer;
 }
 .dsh-rewind-popover-primary {
-  background: var(--dsw-alias-accent, var(--dsw-accent, #5b8cff));
-  color: var(--dsw-alias-on-accent, #fff);
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+.dsh-rewind-popover-primary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
 }
 .dsh-rewind-popover-primary:disabled {
   opacity: 0.5;
@@ -155,9 +159,10 @@ export const STYLE = `
   z-index: 1000;
   max-width: min(440px, calc(100vw - 24px));
   padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
-  background: var(--dsw-specific-surface-1, var(--dsw-alias-surface-1, #1f2127));
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32);
+  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-3));
+  box-shadow: var(--dsw-shadow-lv3);
   font-size: 13px;
   line-height: 18px;
   color: var(--dsw-alias-label-primary);

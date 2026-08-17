@@ -107,6 +107,19 @@ export function apply(ctx: ClientContext): void {
     const buttons = new Map<string, HTMLButtonElement>()
     let observer: MutationObserver | null = null
 
+    // Buttons are plain DOM (attached once per seat), so their labels are
+    // snapshotted at attach time. Re-apply them when the active locale
+    // switches so the injected chrome keeps following the dsh language
+    // preference — the popover and guard hint are created fresh each time and
+    // already read the current locale via `t`.
+    const refreshButtonLabels = (): void => {
+      for (const button of buttons.values()) {
+        button.setAttribute('aria-label', t('button.aria'))
+        button.title = t('button.title')
+      }
+    }
+    const unsubscribeLocale = ctx.locale.subscribe(refreshButtonLabels)
+
     /** The current session face, or undefined in no-session mode. */
     const sessionFor = (): SessionFace | undefined => {
       const sessionId = ctx.sessions.list.getSnapshot().current
@@ -313,6 +326,7 @@ export function apply(ctx: ClientContext): void {
     scan()
 
     yield () => {
+      unsubscribeLocale()
       document.removeEventListener('keydown', onKeyDownGuard, true)
       document.removeEventListener('click', onClickGuard, true)
       if (guardHintEl !== null) guardHintEl.remove()
