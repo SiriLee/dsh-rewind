@@ -150,10 +150,20 @@ const bothResult = await call(agent, '@2 both')
 check('rewind both restores file', bothResult.kind === 'success' && bothResult.text.includes('还原 1 个文件'), bothResult.text)
 check('file content restored', fs.files.get('/workspace/a.txt') === 'original content', fs.files.get('/workspace/a.txt'))
 
-// 9. safety guard: running agent refuses
-const running = { ...agent, status: 'running' }
+// 9. a running agent is force-stopped before the rewind (not refused)
+let cancelled = false
+const running = {
+  ...agent, status: 'running',
+  cancel: () => { cancelled = true; running.status = 'idle' },
+}
 const runningResult = await registered.handler({ commandId: Symbol('cid'), agent: running, rawInput: '@2 chat', signal: aborted() })
-check('running agent refused', runningResult.kind === 'error', runningResult.text)
+check('running agent is cancelled first', cancelled === true, `cancelled=${cancelled}`)
+check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
+
+// 9b. a cancel that never quiesces aborts the rewind (timeout path)
+const stuck = { ...agent, status: 'running', cancel: () => {} }
+const stuckResult = await registered.handler({ commandId: Symbol('cid'), agent: stuck, rawInput: '@2 chat', signal: aborted() })
+check('stuck agent aborts rewind', stuckResult.kind === 'error', stuckResult.text)
 
 console.log(failures === 0 ? '\nverify-host: all checks passed' : `\nverify-host: ${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

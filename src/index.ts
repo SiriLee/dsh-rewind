@@ -15,6 +15,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -222,6 +223,16 @@ function renderFailures(failed: readonly { path: string; message: string }[]): s
   return `；${failed.length} 个文件还原失败：${failed.map(f => `${f.path}（${f.message}）`).join('、')}`
 }
 
+/** Wait until an agent reaches `idle` (a running turn stops), or the deadline/abort hits. */
+async function waitForAgentIdle(agent: Agent, signal: AbortSignal, timeoutMs = 15_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (agent.status !== 'idle') {
+    if (signal.aborted || Date.now() > deadline) return false
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  return true
+}
+
 /** Execute a validated rewind: append the marker, then optionally restore files. */
 async function executeRewind(
   ctx: Context,
@@ -231,8 +242,15 @@ async function executeRewind(
   mode: RewindMode,
 ): Promise<CommandResult> {
   const { agent } = invocation
+  // A running turn (the LLM is thinking or streaming) must be stopped before
+  // the surface can be cut: force-cancel it (user cause), wait for quiescence,
+  // then rewind. Queued/steering inbox items are discarded with the turn.
   if (agent.status !== 'idle') {
-    return { kind: 'error', text: 'agent 正在运行中，无法回退。请等待当前回合结束后再试。' }
+    agent.cancel({ kind: 'user' })
+    const stopped = await waitForAgentIdle(agent, invocation.signal)
+    if (!stopped) {
+      return { kind: 'error', text: '无法停止运行中的 agent，回退已取消。请稍后再试。' }
+    }
   }
   let plan: RewindPlan
   try {
