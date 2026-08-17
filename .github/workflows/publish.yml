@@ -36,6 +36,8 @@ jobs:
     timeout-minutes: 15
     environment:
       name: npm
+      # The package page appears once the first publish lands; until then this
+      # URL 404s, which is expected (the workflow still runs).
       url: https://www.npmjs.com/package/dsh-rewind-plugin
     steps:
       - uses: actions/checkout@v5

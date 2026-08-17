@@ -50,8 +50,9 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
   registry 校验 GitHub OIDC token 后授权发布（Node 24 自带 npm ≥11.5.1，
   OIDC 必需）；自动生成 SLSA provenance；版本已发布则幂等跳过；tag 自动建
   GitHub Release。
-- **一次性 npm 侧配置**（仓库内无法代做）：
-  1. [npmjs.com 账号 → Access Tokens](https://www.npmjs.com/settings/account/access-tokens)
+- **一次性 npm 侧配置**（仓库内无法代做；配置**不需要包先存在**，发布后
+  `npmjs.com/package/dsh-rewind-plugin` 才会出现）：
+  1. 浏览器打开 [npmjs.com → sirilee → Access Tokens](https://www.npmjs.com/settings/sirilee/access-tokens)，
      顶部 **Enable Trusted Publishing**；
   2. **Add publisher** → GitHub → repo `SiriLee/dsh-rewind`、branch `main`
      （与 workflow 的 `environment: npm` 对应时可选 environment）。
