@@ -52,10 +52,13 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
   GitHub Release。
 - **一次性 npm 侧配置**（仓库内无法代做；配置**不需要包先存在**，发布后
   `npmjs.com/package/dsh-rewind-plugin` 才会出现）：
-  1. 浏览器打开 [npmjs.com → sirilee → Access Tokens](https://www.npmjs.com/settings/sirilee/access-tokens)，
-     顶部 **Enable Trusted Publishing**；
-  2. **Add publisher** → GitHub → repo `SiriLee/dsh-rewind`、branch `main`
-     （与 workflow 的 `environment: npm` 对应时可选 environment）。
+  1. 打开 [dsh-rewind-plugin 包页](https://www.npmjs.com/package/dsh-rewind-plugin)
+     → 右上角 **settings** → **Trusted Publisher** → **Add**；
+  2. 字段：Provider **GitHub Actions** · Organization or user **`SiriLee`** ·
+     Repository **`dsh-rewind`**（GitHub 仓库名，与 npm 包名可不同）·
+     Workflow filename **`publish.yml`**（只填文件名）· Environment **留空**
+     （本 workflow 无 `environment` 块，OIDC subject 携带 ref，此为已验证组合）·
+     **Allowed actions：`npm publish`**（2026-05-20 起必选）。
 - 质量门禁（PR / push main）：`.github/workflows/ci.yml` 跑 typecheck + 测试
   + 构建 + `verify-host`。
 
