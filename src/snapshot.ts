@@ -23,13 +23,14 @@
  * Restore semantics (identical to Claude Code): for every path with entries
  * anchored at or after the target message, apply the EARLIEST entry — write
  * the before content back, or delete the file when that entry recorded a
- * creation. Symbolic links are skipped and reported, never written through.
+ * creation. Symlinked and hard-linked paths are skipped and reported, never
+ * written through.
  *
  * @module dsh-rewind/snapshot
  */
 
 import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
 /** Default store root: the dsh data directory. */
@@ -65,6 +66,7 @@ export interface FileImpact {
 export interface RestoreOutcome {
   readonly restored: readonly string[]
   readonly deleted: readonly string[]
+  /** Symlinked or hard-linked paths left untouched. */
   readonly skipped: readonly string[]
   readonly failed: readonly { path: string; message: string }[]
 }
@@ -105,10 +107,17 @@ async function readEntry(file: string): Promise<CheckpointEntry | undefined> {
   }
 }
 
-/** True when the path currently resolves to a symbolic link (never written through). */
-async function isSymbolicLink(path: string): Promise<boolean> {
+/**
+ * True when the path is a symlink or a hard link (nlink > 1) — both are never
+ * written through on restore: a symlink would redirect the write to its target
+ * (bypassing the checkpoint), and a hard link would clobber every other name
+ * pointing at the same inode (e.g. pnpm-installed files). Mirrors Claude Code's
+ * "symlinked and hard-linked paths not restored".
+ */
+async function isLinkPath(path: string): Promise<boolean> {
   try {
-    return (await lstat(path)).isSymbolicLink()
+    const stat = await lstat(path)
+    return stat.isSymbolicLink() || stat.nlink > 1
   } catch {
     return false
   }
@@ -119,6 +128,11 @@ async function isSymbolicLink(path: string): Promise<boolean> {
  * restore reliably lands on the real file system.
  */
 export class SnapshotStore {
+  /** Debounce window for the per-commit prune (keeps the readdir+sort off the hot path). */
+  private static readonly PRUNE_INTERVAL_MS = 1000
+
+  private lastPruneAt = 0
+
   constructor(readonly root: string = process.env[SNAPSHOT_ROOT_ENV] ?? DEFAULT_SNAPSHOT_ROOT) {}
 
   /** Absolute path of one session's snapshot directory (id sanitized). */
@@ -140,7 +154,14 @@ export class SnapshotStore {
     await mkdir(dir, { recursive: true })
     const committed: CheckpointEntry = { ...entry, time: Date.now() }
     await writeFile(join(dir, `${safeFileId(entry.callId)}.json`), JSON.stringify(committed), 'utf8')
-    await this.prune(sessionId)
+    // Prune at most once per interval: a turn with many writes would otherwise
+    // pay a readdir + sort on every commit. The 100-group cap still holds —
+    // the debounce only skips redundant scans within a burst.
+    const now = Date.now()
+    if (now - this.lastPruneAt >= SnapshotStore.PRUNE_INTERVAL_MS) {
+      this.lastPruneAt = now
+      await this.prune(sessionId)
+    }
   }
 
   /**
@@ -202,8 +223,10 @@ export class SnapshotStore {
    * Restore the workspace to the target message's checkpoint: for every path
    * with entries anchored at or after it, apply the EARLIEST entry — write the
    * before content back, or delete the file when it was created after the
-   * target. Symbolic links are skipped (reported, never written through).
-   * Failures are per-file and never abort the pass.
+   * target. Symlinked and hard-linked paths are skipped (reported, never
+   * written through); a restored file's parent directory is created when it
+   * was deleted after the backup. Failures are per-file and never abort the
+   * pass.
    */
   async restoreAfter(sessionId: string, targetSeq: number, deleteFile: DeleteFile): Promise<RestoreOutcome> {
     const restored: string[] = []
@@ -212,7 +235,7 @@ export class SnapshotStore {
     const failed: { path: string; message: string }[] = []
     for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
       try {
-        if (await isSymbolicLink(entry.path)) {
+        if (await isLinkPath(entry.path)) {
           skipped.push(entry.path)
           continue
         }
@@ -220,6 +243,7 @@ export class SnapshotStore {
           await deleteFile(entry.path)
           deleted.push(entry.path)
         } else {
+          await mkdir(dirname(entry.path), { recursive: true })
           await writeFile(entry.path, entry.before, 'utf8')
           restored.push(entry.path)
         }

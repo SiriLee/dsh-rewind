@@ -12,10 +12,11 @@ DeepSeek Harness 插件：**同一会话窗口的 in-place 对话回退**（Clau
 - ✅ **路径按会话 cwd 解析**（复刻 `dsh-tool-fs` 的 session-cwd 规则），相对路径备份/还原指向真实文件；记录解析后的 display path
 - ✅ **fs 服务动态获取**（`ctx.inject(['fs'])`）：fs 后挂载也不失效，无 fs 部署时命令仍可用
 - ✅ 同窗口 in-place 回退：追加空内容标记 + `surfaceOp: replace` 替换目标及之后全部 surface（真实 `dsh-session` 集成测试通过）
-- ✅ **还原走 `node:fs` 直写**（不经 fs 服务）：文件内容真正落盘；符号链接跳过并警告
+- ✅ **还原走 `node:fs` 直写**（不经 fs 服务）：文件内容真正落盘；符号/硬链接跳过并警告
 - ✅ client 端「回退」按钮（MutationObserver 注入用户消息行操作区）+ 模式选择浮层（含 both 模式影响清单确认）+ 手动 `/rewind` 输入拦截
 - ✅ 测试：纯函数单测 + 真实 `dsh-session` 集成测试 + `verify-host` 端到端（18 项，含审批短路/会话 cwd/新建文件删除/重启持久化场景）
-- ⏳ 二期：快捷键、bash/外部修改的快照覆盖（整树快照）
+- ⏳ 二期：快捷键（输入框为空时 esc+esc 打开回退菜单，对齐 Claude Code）
+- ❌ 明确不做：整树快照（覆盖 bash/外部修改）——Claude Code 原生同样不覆盖（官方把这类回退交给用户 git），本插件保持一致
 
 ## 安装
 
@@ -83,15 +84,18 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 ## 已知限制（v0.2）
 
 - checkpoint 只覆盖**插件运行期间、经 `write` / `edit` / `str_replace_editor` 的变更**；
-  bash 或外部程序的修改无法还原（与 Claude Code 相同的限制，二期可加整树快照层）。
-  备份按消息分组**落盘**（每会话保留最近 100 组，最旧先清理），dsh 重启不丢失。
+  bash 或外部程序的修改无法还原（与 Claude Code 相同的限制，官方同样不覆盖，此类回退
+  交由用户 git 处理）。备份按消息分组**落盘**（每会话保留最近 100 组，最旧先清理），dsh
+  重启不丢失。
   写前备份读取失败时（如权限错误）该次变更不会入备份，`both` 回退无法还原它——插件会在
   日志中警告，但不会阻塞写操作本身。
 - 文件删除/还原走真实路径直删直写（本地 backend）；sandbox/远程 backend 下路径解析
-  可能受限。
+  可能受限。符号链接与硬链接不写入（与 Claude Code 一致，恢复时跳过并在结果中提示）。
 - 回退本身可再回退（标记进入日志），但文件还原动作不再记录新备份。
 - 回退按钮只出现在**当前会话**渲染的用户消息行上（DOM 注入范围即当前视图）；
   subagent/分屏等非当前会话的对话需要先切到该会话再回退。
+- 目标消息之后没有跟踪的文件变更时，模式浮层不显示「回退对话和代码」（与 Claude Code
+  隐藏 code-restore 选项的行为一致），仅提供「仅回退对话」。
 
 ## 背景与定位
 
@@ -140,10 +144,11 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
   备份记录解析后的 display path，preview/还原始终指向真实文件。
 - 回退「对话和代码」到消息 N 时：对锚点 ≥ N 的每条备份取**该文件最早一条**——内容写回
   before、新建文件删除（与 Claude Code 的 rewind 语义一致）。恢复用 `node:fs` 直写真实
-  文件，不经过 fs 服务；符号链接跳过并在结果中提示。
+  文件，不经过 fs 服务；符号/硬链接跳过并在结果中提示。
 - 持久化：备份在磁盘上，**dsh 重启后仍可还原**；每会话保留最近 100 个消息分组，最旧先清理。
 - 边界（已知限制）：只覆盖**插件运行期间、经写类工具**的变更；bash 命令或外部程序的修改
-  不在备份内，无法还原（与 Claude Code 相同的限制，二期可加整树快照层）。
+  不在备份内，无法还原（与 Claude Code 相同的限制，官方同样不覆盖，此类回退交由用户 git
+  处理）。
 
 ### 5. 安全守卫
 
@@ -156,7 +161,7 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 
 - 按钮注入锚点：用户行 `[data-chat-flow-kind="user"]`（行容器 `data-chat-anchor-key` 为节点 key）；用 MutationObserver 跟踪新增行。
 - 消息 seq 获取：从行元素的 `data-chat-anchor-key` → 运行时快照 `session.getSnapshot().chat.nodes.get(key)` → `UserMessageNode.seq`（DOM 只用于定位，数据取自 runtime，不解析 DOM 文本）。
-- **按钮两步选择浮层**：点击消息旁按钮时，客户端接管交互——目标即该消息，第二步展示模式选项（仅回退对话 / 回退对话和代码 / 取消）；确认后调 `session.command('/rewind @<seq> <mode>')` 执行。**手动 `/rewind` 被 client 整体拦截**（含裸命令）：输入框 guard 阻止提交并提示改用按钮；`/rewind` 命令仅作为按钮内部调用通道存在。
+- **按钮两步选择浮层**：点击消息旁按钮时，客户端接管交互——目标即该消息，第二步展示模式选项（仅回退对话 / 回退对话和代码 / 取消；目标之后无文件变更时只显示「仅回退对话」，与 Claude Code 隐藏 code-restore 选项一致）；确认后调 `session.command('/rewind @<seq> <mode>')` 执行。**手动 `/rewind` 被 client 整体拦截**（含裸命令）：输入框 guard 阻止提交并提示改用按钮；`/rewind` 命令仅作为按钮内部调用通道存在。
 - 执行结果以命令节点出现在对话中。
 - 注入按钮与「在新对话中分支」等官方操作并排，样式遵循 dsh 设计 token。
 
@@ -165,7 +170,8 @@ git push --tags      # push v<version> tag → 触发 .github/workflows/publish.
 - 快捷键（esc+esc 回退等）——独立的快捷键插件，二期。
 - 压缩（`/compact`）——官方已有。
 - fork/分支回退——官方已有（「在新对话中分支」）。
-- 快照式文件回退（整树/git-first，覆盖 bash 与外部修改）——二期（checkpoint 方案先行）。
+- 快照式文件回退（整树/git-first，覆盖 bash 与外部修改）——**明确不做**（与 Claude Code
+  一致：官方原生同样不覆盖，把这类回退交给用户 git；见「已知限制」）。
 
 ## 目录结构（实际）
 

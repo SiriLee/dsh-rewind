@@ -94,6 +94,25 @@ function waitForCommand(
   })
 }
 
+/** Outcome of a `/rewind preview` command, or null when it never settled. */
+type PreviewOutcome = { kind: 'success' | 'error'; text?: string } | null
+
+/** True for the `/rewind preview @<seq> both` command node of one target. */
+function isPreviewFor(node: CommandNode, seq: number): boolean {
+  const args = node.args ?? ''
+  return node.name === 'rewind' && args.includes('preview') && new RegExp(`(?:^|\\s)@${seq}(?=\\s|$)`).test(args)
+}
+
+/**
+ * Run `/rewind preview @seq both` and await its outcome. Returns null when the
+ * command was not matched or timed out.
+ */
+async function previewImpact(session: SessionFace, seq: number): Promise<PreviewOutcome> {
+  const result = await session.command(`/rewind preview @${seq} both`)
+  if (!result.ok || result.value?.matched !== true) return null
+  return waitForCommand(session, node => isPreviewFor(node, seq))
+}
+
 /** Element factory helpers (kept local so no framework is involved). */
 function el(tag: string, className: string, text?: string): HTMLElement {
   const node = document.createElement(tag)
@@ -113,8 +132,14 @@ function modeOption(label: string, hint: string, onClick: () => void): HTMLButto
   return button
 }
 
-/** Render the impact step: fetch the preview outcome, then confirm/back. */
-function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => void): void {
+/**
+ * Render the impact step: show the impact outcome, then confirm/back.
+ * Reuses the outcome already fetched when the popover opened (the "both"
+ * option is only clickable after that fetch settles) — running a second
+ * preview command here would duplicate its command row in the transcript; a
+ * fresh preview is only fetched when the popover-open probe never resolved.
+ */
+function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => void, cached?: PreviewOutcome): void {
   const { session, seq, t } = opts
   const impact = el('div', CLASS.popoverImpact, t('popover.impact.loading'))
   const actions = el('div', CLASS.popoverActions)
@@ -133,24 +158,10 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
   actions.append(confirm)
   root.replaceChildren(impact, actions)
 
-  let outcome: { kind: 'success' | 'error'; text?: string } | null = null
   void (async () => {
-    const result = await session.command(`/rewind preview @${seq} both`)
-    if (!result.ok || result.value?.matched !== true) {
-      impact.textContent = t('popover.impact.failed', {
-        message: result.ok ? 'command not matched' : (result.error?.message ?? 'unknown error'),
-      })
-      return
-    }
-    outcome = await waitForCommand(
-      session,
-      node => {
-        const args = node.args ?? ''
-        return node.name === 'rewind' && args.includes('preview') && new RegExp(`(?:^|\\s)@${seq}(?=\\s|$)`).test(args)
-      },
-    )
+    const outcome = cached ?? await previewImpact(session, seq)
     if (outcome === null) {
-      impact.textContent = t('popover.impact.failed', { message: 'timeout' })
+      impact.textContent = t('popover.impact.failed', { message: 'preview command failed or timed out' })
       return
     }
     if (outcome.kind === 'error') {
@@ -176,46 +187,82 @@ export function openPopover(opts: PopoverOptions): void {
   const root = el('div', CLASS.popover)
   root.setAttribute('role', 'dialog')
   root.setAttribute('aria-label', t('popover.title'))
-  root.append(
-    el('div', CLASS.popoverTitle, t('popover.title')),
-    el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
-  )
+
+  /** Availability of the "rewind conversation and code" mode, resolved from a preview. */
+  type BothState = { state: 'loading' } | { state: 'hasChanges' } | { state: 'noChanges' }
+  let bothState: BothState = { state: 'loading' }
+  /** Impact outcome fetched at open; reused by the both-step (no second command row). */
+  let impactOutcome: PreviewOutcome = null
 
   const renderModes = (): void => {
-    root.replaceChildren(
+    const children: HTMLElement[] = [
       el('div', CLASS.popoverTitle, t('popover.title')),
       el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
       modeOption(t('popover.chat'), t('popover.chat.hint'), () => {
         closePopover()
         void session.command(`/rewind @${seq} chat`)
       }),
-      modeOption(t('popover.both'), t('popover.both.hint'), () => {
-        renderImpactStep(root, opts, renderModes)
-      }),
-      (() => {
-        const actions = el('div', CLASS.popoverActions)
-        const cancel = document.createElement('button')
-        cancel.type = 'button'
-        cancel.className = CLASS.popoverGhost
-        cancel.textContent = t('popover.cancel')
-        cancel.addEventListener('click', closePopover)
-        actions.append(cancel)
-        return actions
-      })(),
-    )
+    ]
+    if (bothState.state === 'noChanges') {
+      // Claude Code shows the code-restore options only when the checkpoint has
+      // tracked file changes; a muted note keeps the layout stable.
+      children.push(el('div', CLASS.popoverImpact, t('popover.noChanges')))
+    } else {
+      const option = modeOption(
+        t('popover.both'),
+        bothState.state === 'loading' ? t('popover.checking') : t('popover.both.hint'),
+        () => {
+          renderImpactStep(root, opts, renderModes, impactOutcome)
+        },
+      )
+      if (bothState.state === 'loading') option.disabled = true
+      children.push(option)
+    }
+    const actions = el('div', CLASS.popoverActions)
+    const cancel = document.createElement('button')
+    cancel.type = 'button'
+    cancel.className = CLASS.popoverGhost
+    cancel.textContent = t('popover.cancel')
+    cancel.addEventListener('click', closePopover)
+    actions.append(cancel)
+    children.push(actions)
+    root.replaceChildren(...children)
   }
+
+  /** Position below the anchor (right-aligned), flipping above near the edge. */
+  const position = (): void => {
+    const rect = anchor.getBoundingClientRect()
+    const gap = 4
+    const height = root.offsetHeight
+    const top = rect.bottom + gap + height <= window.innerHeight - 8
+      ? rect.bottom + gap
+      : Math.max(8, rect.top - gap - height)
+    root.style.top = `${Math.round(top)}px`
+    root.style.left = `${Math.round(Math.min(rect.right, window.innerWidth - 8 - root.offsetWidth))}px`
+  }
+
   renderModes()
   document.body.append(root)
+  position()
 
-  // Position: below the anchor, right-aligned; flip above near the viewport edge.
-  const rect = anchor.getBoundingClientRect()
-  const gap = 4
-  const height = root.offsetHeight
-  const top = rect.bottom + gap + height <= window.innerHeight - 8
-    ? rect.bottom + gap
-    : Math.max(8, rect.top - gap - height)
-  root.style.top = `${Math.round(top)}px`
-  root.style.left = `${Math.round(Math.min(rect.right, window.innerWidth - 8 - root.offsetWidth))}px`
+  // Resolve the "both" mode's availability up front (Claude Code hides the
+  // code-restore options when the checkpoint has no tracked file changes).
+  // An unknown outcome (preview failed/timeout) keeps "both" enabled — degrade
+  // to always-shown rather than hiding a working option.
+  const hasFileImpact = (text: string | undefined): boolean => text === undefined || text.includes('将影响')
+  void (async () => {
+    const outcome = await previewImpact(session, seq)
+    impactOutcome = outcome
+    if (outcome !== null && outcome.kind === 'success') {
+      bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
+    }
+    renderModes()
+    position()
+  })().catch(() => {
+    bothState = { state: 'hasChanges' }
+    renderModes()
+    position()
+  })
 
   popoverEl = root
 

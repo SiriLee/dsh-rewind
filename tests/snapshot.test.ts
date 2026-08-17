@@ -5,7 +5,7 @@
  */
 import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SnapshotStore } from '../src/snapshot.ts'
 
@@ -28,7 +28,7 @@ afterEach(async () => {
 
 async function touch(rel: string, content: string): Promise<string> {
   const abs = join(root, 'ws', rel)
-  await mkdir(join(root, 'ws'), { recursive: true })
+  await mkdir(dirname(abs), { recursive: true })
   await writeFile(abs, content, 'utf8')
   return abs
 }
@@ -146,6 +146,36 @@ describe('SnapshotStore', () => {
     const outcome = await store.restoreAfter(session, 5, unlink)
     expect(outcome.skipped).toEqual([link])
     expect(await readFile(real, 'utf8')).toBe('rewritten')
+  })
+
+  it('skips hard links without writing through them', async () => {
+    const real = await touch('real.txt', 'original')
+    const hard = join(root, 'ws', 'hard.txt')
+    const { link } = await import('node:fs/promises')
+    try {
+      await link(real, hard)
+    } catch {
+      return // filesystem without hard-link support: nothing to assert
+    }
+    // The hard link shares the inode with `real`, so a restore through it
+    // would clobber both names — it must be skipped like a symlink.
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: hard, before: 'original' })
+    await writeFile(real, 'rewritten', 'utf8')
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.skipped).toEqual([hard])
+    expect(await readFile(real, 'utf8')).toBe('rewritten')
+  })
+
+  it('creates a deleted parent directory when restoring', async () => {
+    const file = await touch('sub/deep/a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    // The file's whole parent tree is gone after the backup.
+    await rm(join(root, 'ws', 'sub'), { recursive: true, force: true })
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('original')
   })
 
   it('restores with no entries as an empty no-op', async () => {

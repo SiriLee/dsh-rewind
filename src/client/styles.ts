@@ -95,6 +95,10 @@ export const STYLE = `
 .dsh-rewind-popover-option:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
+.dsh-rewind-popover-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .dsh-rewind-popover-option-label {
   font-weight: 500;
 }

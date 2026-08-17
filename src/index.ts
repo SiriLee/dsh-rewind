@@ -83,13 +83,35 @@ function mutationPathOf(exec: ToolExecution): string | undefined {
   return undefined
 }
 
-/** Latest `user/message` seq in the session log — the turn's anchor. */
-function anchorSeqOf(session: Session): number | undefined {
-  for (let i = session.events.length - 1; i >= 0; i--) {
-    const event = session.events[i]!
-    if (event.type === 'user/message') return event.seq
+/** One cached anchor computation for a session. */
+interface AnchorCacheEntry {
+  /** Anchor seq as of `eventsLength` events. */
+  readonly anchor: number | undefined
+  /** Number of events the anchor was computed against. */
+  readonly eventsLength: number
+}
+
+/**
+ * Latest `user/message` seq in the session log — the turn's anchor.
+ *
+ * Incremental: a cached anchor is reused until a NEW user/message lands. Tool
+ * and assistant events appended between two tool results move the log tail but
+ * never the anchor, so only the events since the last computation are scanned —
+ * amortized O(1) per commit instead of a full backward walk every time.
+ */
+function anchorSeqOf(session: Session, cache: Map<string, AnchorCacheEntry>): number | undefined {
+  const events = session.events
+  const cached = cache.get(session.id)
+  if (cached !== undefined && cached.eventsLength === events.length) return cached.anchor
+  let anchor: number | undefined = cached?.anchor
+  for (let i = events.length - 1; i >= (cached?.eventsLength ?? 0); i--) {
+    if (events[i]!.type === 'user/message') {
+      anchor = events[i]!.seq
+      break
+    }
   }
-  return undefined
+  cache.set(session.id, { anchor, eventsLength: events.length })
+  return anchor
 }
 
 /** Resolve a path against the session cwd (fs-tools rule), or undefined on resolution failure. */
@@ -152,6 +174,7 @@ async function captureBefore(
 async function commitEntry(
   store: SnapshotStore,
   pending: Map<string, PendingCapture>,
+  anchorCache: Map<string, AnchorCacheEntry>,
   exec: ToolExecution,
   result: ToolExecutionResult,
 ): Promise<void> {
@@ -162,7 +185,7 @@ async function commitEntry(
   if (result.isError) return
   const agent = exec.agent
   if (agent === undefined) return
-  const anchorSeq = anchorSeqOf(agent.session)
+  const anchorSeq = anchorSeqOf(agent.session, anchorCache)
   if (anchorSeq === undefined) return
   await store.recordEntry(agent.session.id, {
     callId: exec.callId,
@@ -296,7 +319,7 @@ async function executeRewind(
     const parts: string[] = []
     if (outcome.restored.length > 0) parts.push(`还原 ${outcome.restored.length} 个文件`)
     if (outcome.deleted.length > 0) parts.push(`删除 ${outcome.deleted.length} 个文件`)
-    if (outcome.skipped.length > 0) parts.push(`跳过 ${outcome.skipped.length} 个符号链接`)
+    if (outcome.skipped.length > 0) parts.push(`跳过 ${outcome.skipped.length} 个链接`)
     restore = parts.length > 0 ? `；${parts.join('、')}` : '；目标之后没有可还原的写类变更'
     restore += renderFailures(outcome.failed)
   }
@@ -403,6 +426,8 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
+  // Incremental turn-anchor cache (see anchorSeqOf).
+  const anchorCache = new Map<string, AnchorCacheEntry>()
 
   ctx.effect(function* () {
     yield ctx.commands.register({
@@ -425,11 +450,22 @@ export function apply(ctx: Context, config?: RewindConfig): void {
 
     scope.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
       try {
-        await commitEntry(store, pending, exec, result)
+        await commitEntry(store, pending, anchorCache, exec, result)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }
       return next()
+    })
+
+    scope.on('tools/result', (exec: ToolExecution): undefined => {
+      // A tool body (or another execute wrapper) that THROWS skips
+      // `tools/post-execute` — the registry's dispatch catch short-circuits
+      // straight to final-result — so its before-capture would otherwise leak
+      // in `pending` forever (holding a full file content in memory).
+      // `tools/result` fires on BOTH the normal and the throw path: delete
+      // here as the safety net (a no-op when commitEntry already consumed it).
+      pending.delete(`${exec.agent?.id ?? 'anon'}:${exec.callId}`)
+      return undefined
     })
   })
 }
