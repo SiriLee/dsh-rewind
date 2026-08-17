@@ -205,37 +205,64 @@ export function apply(ctx: ClientContext): void {
       seat.setAttribute(REWIND_ATTACHED, '')
     }
 
+    // Last successful rewind command seq seen; the hidden-range computation
+    // only re-runs when a NEW rewind lands (not on every mutation).
+    let lastRewindSeq = -1
+    let hiddenSeqsCache: Set<number> | null = null
+
     const scan = (): void => {
       // Drop buttons whose seat rows were removed from the DOM (React unmount).
       for (const [key, button] of buttons) {
         if (!button.isConnected) buttons.delete(key)
       }
       const session = sessionFor()
-      const hiddenSeqs = session !== undefined ? hiddenSeqsOf(session) : new Set<number>()
-      let hiddenCount = 0
-      // Hide withdrawn rows (rewind markers, /rewind command rows, and every
-      // message between the latest marker's target and the marker) so the
-      // rendered transcript matches the agent's context. React re-renders
-      // recreate rows, so this runs on every mutation.
-      for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
-        const key = seat.dataset.chatAnchorKey
-        const anchor = key !== undefined && session !== undefined
-          ? session.getSnapshot().chat.nodes.get(key)?.anchorSeq
-          : undefined
-        if (anchor !== undefined && hiddenSeqs.has(anchor)) {
-          seat.style.display = 'none'
-          hidden.add(seat)
-          hiddenCount += 1
-        } else if (hidden.has(seat)) {
-          seat.style.display = ''
-          hidden.delete(seat)
+
+      // Cheap pass: find the newest successful rewind command. Nothing else in
+      // this scan is allowed to do heavy work when there has never been one.
+      let newestRewind = -1
+      if (session !== undefined) {
+        const snap = session.getSnapshot()
+        for (const key of snap.chat.order) {
+          const node = snap.chat.nodes.get(key)
+          if (node === undefined || node.kind !== 'command') continue
+          const command = node.data as CommandNode
+          if (command.name === 'rewind' && command.outcome?.kind === 'success' && command.seq > newestRewind) {
+            newestRewind = command.seq
+          }
         }
       }
-      // Fill the composer with the withdrawn target's text, once per target.
-      if (session !== undefined) fillComposerForRewind(session, filledTargets)
-      // Diagnostics (only when something is hidden): confirm the hiding path
-      // actually fires in the browser.
-      if (hiddenSeqs.size > 0 || hiddenCount > 0) {
+
+      // A new rewind landed: recompute the hidden range and refill the composer
+      // with the withdrawn message's text (once per target).
+      if (newestRewind > lastRewindSeq) {
+        lastRewindSeq = newestRewind
+        hiddenSeqsCache = session !== undefined ? hiddenSeqsOf(session) : null
+        if (session !== undefined) fillComposerForRewind(session, filledTargets)
+      }
+      const hiddenSeqs = hiddenSeqsCache
+
+      // Apply hiding only when there is something withdrawn (cheap no-op
+      // otherwise). React re-renders recreate rows, so this runs per mutation
+      // while a rewind range exists — but never on style-only mutations (the
+      // observer no longer watches attributes, so streaming is not blocked).
+      let hiddenCount = 0
+      if (hiddenSeqs !== null && hiddenSeqs.size > 0 && session !== undefined) {
+        for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
+          const key = seat.dataset.chatAnchorKey
+          const anchor = key !== undefined
+            ? session.getSnapshot().chat.nodes.get(key)?.anchorSeq
+            : undefined
+          if (anchor !== undefined && hiddenSeqs.has(anchor)) {
+            seat.style.display = 'none'
+            hidden.add(seat)
+            hiddenCount += 1
+          } else if (hidden.has(seat)) {
+            seat.style.display = ''
+            hidden.delete(seat)
+          }
+        }
+        // Diagnostics (only when something is hidden): confirm the hiding path
+        // actually fires in the browser.
         console.info(
           `[dsh-rewind] hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
         )
@@ -266,9 +293,11 @@ export function apply(ctx: ClientContext): void {
     }
 
     observer = new MutationObserver(scan)
-    // attributes: watch style so a React re-render that resets display is
-    // re-hidden on the next mutation instead of flickering back.
-    observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
+    // childList only: style-attribute watching fired on every render/animation
+    // (streaming tokens set element styles constantly), making the scan run
+    // continuously and delaying message bubbles. Re-hiding on React re-render
+    // still happens because the scan re-runs on childList mutations.
+    observer.observe(document.body, { childList: true, subtree: true })
     scan()
 
     yield () => {
