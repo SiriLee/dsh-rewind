@@ -136,8 +136,9 @@ function modeOption(label: string, hint: string, onClick: () => void): HTMLButto
  * Render the impact step: show the impact outcome, then confirm/back.
  * Reuses the outcome already fetched when the popover opened (the "both"
  * option is only clickable after that fetch settles) — running a second
- * preview command here would duplicate its command row in the transcript; a
- * fresh preview is only fetched when the popover-open probe never resolved.
+ * preview command here would re-run the probe and emit a second (now-hidden)
+ * command row; a fresh preview is only fetched when the popover-open probe
+ * never resolved.
  */
 function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => void, cached?: PreviewOutcome): void {
   const { session, seq, t } = opts

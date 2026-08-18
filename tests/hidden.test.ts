@@ -17,9 +17,9 @@ function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = 
 }
 
 /** A `/rewind` command row with an explicit settled outcome. */
-function rewindCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome']): ChatConversationViewNode {
+function rewindCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome'], args: string | null = null): ChatConversationViewNode {
   return viewNode(key, 'command', anchorSeq, {
-    kind: 'command', seq, time: 0, commandId: 'cid', name: 'rewind', args: null, outcome,
+    kind: 'command', seq, time: 0, commandId: 'cid', name: 'rewind', args, outcome,
   } as unknown as CommandNode)
 }
 
@@ -29,7 +29,7 @@ function executed(key: string, anchorSeq: number, seq: number, target: number): 
     kind: 'success',
     text: `已撤回 seq ${target} 及之后内容（对话已回到此前）。`,
     sourceEventSeq: seq,
-  })
+  }, `@${target} both`)
 }
 
 /** A preview-only rewind: success but no marker appended. */
@@ -38,7 +38,7 @@ function preview(key: string, anchorSeq: number, seq: number, target: number): C
     kind: 'success',
     text: `将回退到 seq ${target}，从模型上下文移除 1 个节点（对话日志保留）。`,
     sourceEventSeq: undefined,
-  })
+  }, `preview @${target} both`)
 }
 
 function snap(nodes: readonly ChatConversationViewNode[]): HiddenChat {
@@ -103,16 +103,34 @@ describe('hiddenSeqsOf', () => {
     expect(hiddenSeqsOf(snap(nodes)).has(10)).toBe(false)
   })
 
-  it('ignores preview-only commands (no marker appended)', () => {
+  it('hides preview-only command rows without extending a cut range', () => {
     const nodes = [
       viewNode('u0', 'user', 0),
       preview('cmd', 6, 6, 2),
       viewNode('u7', 'user', 7),
     ]
-    expect(sorted(hiddenSeqsOf(snap(nodes)))).toEqual([])
+    // The preview row (seq 6) is hidden; its target must NOT cut message rows.
+    const hidden = hiddenSeqsOf(snap(nodes))
+    expect(sorted(hidden)).toEqual([6])
+    expect(hidden.has(0)).toBe(false)
+    expect(hidden.has(7)).toBe(false)
   })
 
-  it('keeps a failed rewind row visible', () => {
+  it('hides preview rows while still pending and on error too', () => {
+    const nodes = [
+      viewNode('u0', 'user', 0),
+      rewindCommand('pending', 6, 6, null, 'preview @2 both'),
+      rewindCommand('errored', 7, 7, { kind: 'error', text: 'preview failed', sourceEventSeq: undefined }, 'preview @3 both'),
+      viewNode('u8', 'user', 8),
+    ]
+    const hidden = hiddenSeqsOf(snap(nodes))
+    // Both the in-flight (outcome null) and the errored preview rows are hidden.
+    expect(sorted(hidden)).toEqual([6, 7])
+    expect(hidden.has(0)).toBe(false)
+    expect(hidden.has(8)).toBe(false)
+  })
+
+  it('keeps a failed EXECUTED rewind row visible (not a preview)', () => {
     const nodes = [
       viewNode('u0', 'user', 0),
       rewindCommand('cmd', 6, 6, { kind: 'error', text: '回退失败：无法停止运行中的 agent。', sourceEventSeq: undefined }),
