@@ -40,8 +40,6 @@
 
 ## 📸 截图
 
-所有截图以固定宽度渲染，尺寸不随说明文字长短变化。
-
 <table>
   <tr>
     <td align="center"><img src="assets/screenshots/rewind-button.png" width="440" alt="用户消息旁的 ↶ 回退按钮"><br><sub>用户消息旁的 ↶ 回退按钮</sub></td>

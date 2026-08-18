@@ -40,9 +40,6 @@ In-place conversation rewind for [DeepSeek Harness](https://github.com/deepseek-
 
 ## 📸 Screenshots
 
-All screenshots render at a fixed width, so their size stays consistent
-regardless of caption length.
-
 <table>
   <tr>
     <td align="center"><img src="assets/screenshots/rewind-button.png" width="440" alt="Per-message ↶ rewind button"><br><sub>Per-message ↶ rewind button</sub></td>
