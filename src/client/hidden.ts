@@ -37,17 +37,18 @@ function isPreviewCommand(command: CommandNode): boolean {
  * withdrawn by a rewind — the target message itself, everything after it, and
  * the (empty, unrendered) marker.
  *
- * The cut span is [min target, max marker] across ALL executed rewinds, not
- * just the newest one: every rewind withdraws its target and everything after
- * it, and a later rewind to a LATER point (after new traffic) must not re-show
- * rows an earlier rewind already cut. Endpoints come from the command nodes:
+ * Each executed rewind cuts ONE span `[target, marker]`: the target message
+ * and everything after it, up to the marker appended at rewind time. Spans are
+ * kept SEPARATE (never collapsed to a single `[min target, max marker]`)
+ * because a later rewind to a LATER point leaves a visible gap of new traffic
+ * between the earlier marker and the later target — collapsing the spans would
+ * hide that still-on-surface gap. Endpoints come from the command nodes:
  * `sourceEventSeq` is the marker's log seq, and the outcome text carries the
  * target seq.
  */
 export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
   const hidden = new Set<number>()
-  let minTarget = Number.POSITIVE_INFINITY
-  let maxMarker = Number.NEGATIVE_INFINITY
+  const spans: Array<{ start: number; end: number }> = []
   for (const key of snap.order) {
     const node = snap.nodes.get(key)
     if (node === undefined || node.kind !== 'command') continue
@@ -73,16 +74,15 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
     hidden.add(command.seq)
     const target = targetOfOutcome(command.outcome.text)
     if (target !== undefined) {
-      if (target < minTarget) minTarget = target
-      if (marker > maxMarker) maxMarker = marker
+      spans.push({ start: target, end: marker })
     }
   }
-  if (Number.isFinite(minTarget)) {
-    for (const key of snap.order) {
-      const node = snap.nodes.get(key)
-      if (node === undefined) continue
-      const anchor = node.anchorSeq
-      if (anchor >= minTarget && anchor <= maxMarker) hidden.add(anchor)
+  for (const key of snap.order) {
+    const node = snap.nodes.get(key)
+    if (node === undefined) continue
+    const anchor = node.anchorSeq
+    if (spans.some(span => anchor >= span.start && anchor <= span.end)) {
+      hidden.add(anchor)
     }
   }
   return hidden

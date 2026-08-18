@@ -103,6 +103,38 @@ describe('hiddenSeqsOf', () => {
     expect(hiddenSeqsOf(snap(nodes)).has(10)).toBe(false)
   })
 
+  it('keeps the visible gap between an earlier rewind and a later rewind', () => {
+    // rewind1 withdraws 2..10; new traffic 11/12 lands (still on the surface);
+    // rewind2 to 13 withdraws 13..15. Rows in the gap 11/12 must STAY visible —
+    // collapsing to a single [2, 15] span would wrongly hide them.
+    const nodes = [
+      viewNode('u0', 'user', 0),
+      viewNode('a1', 'assistant', 1),
+      viewNode('u2', 'user', 2),
+      viewNode('a3', 'assistant', 3),
+      viewNode('u4', 'user', 4),
+      viewNode('a5', 'assistant', 5),
+      viewNode('m10', 'assistant', 10), // marker1 row
+      executed('cmd1', 10, 10, 2),
+      viewNode('u11', 'user', 11), // visible gap: after rewind1, before rewind2's target
+      viewNode('a12', 'assistant', 12),
+      viewNode('u13', 'user', 13), // rewind2's target
+      viewNode('a14', 'assistant', 14),
+      viewNode('m15', 'assistant', 15), // marker2 row
+      executed('cmd2', 15, 15, 13),
+      viewNode('u16', 'user', 16), // visible: after rewind2
+    ]
+    const hidden = hiddenSeqsOf(snap(nodes))
+    expect(hidden.has(11)).toBe(false)
+    expect(hidden.has(12)).toBe(false)
+    expect(hidden.has(13)).toBe(true)
+    expect(hidden.has(14)).toBe(true)
+    expect(hidden.has(2)).toBe(true)
+    expect(hidden.has(3)).toBe(true)
+    expect(hidden.has(10)).toBe(true)
+    expect(hidden.has(16)).toBe(false)
+  })
+
   it('hides preview-only command rows without extending a cut range', () => {
     const nodes = [
       viewNode('u0', 'user', 0),
