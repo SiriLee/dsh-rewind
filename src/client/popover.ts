@@ -50,6 +50,14 @@ function formatTarget(t: Translate, seq: number, time: number, preview: string):
   return `seq ${seq} · ${hh}:${mm} · ${previewText}`
 }
 
+/**
+ * Strip the host's machine-readable `impact=<n>` trailer (the last line of a
+ * preview outcome, see formatPlan in src/index.ts) before showing the text.
+ */
+function stripImpactToken(text: string): string {
+  return text.replace(/\n?impact=\d+\s*$/, '')
+}
+
 /** Find the newest rewind command node matching a predicate. */
 function findCommand(snapshot: ReturnType<SessionFace['getSnapshot']>, match: (node: CommandNode) => boolean): CommandNode | undefined {
   let found: CommandNode | undefined
@@ -169,7 +177,7 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
       impact.textContent = t('popover.impact.failed', { message: outcome.text ?? 'unknown error' })
       return
     }
-    impact.textContent = outcome.text ?? t('popover.impact.none')
+    impact.textContent = outcome.text === undefined ? t('popover.impact.none') : stripImpactToken(outcome.text)
     confirm.disabled = false
     confirm.addEventListener('click', () => {
       closePopover()
@@ -248,9 +256,15 @@ export function openPopover(opts: PopoverOptions): void {
 
   // Resolve the "both" mode's availability up front (Claude Code hides the
   // code-restore options when the checkpoint has no tracked file changes).
+  // The host preview carries a stable machine-readable trailer (`impact=<n>`,
+  // see formatPlan in src/index.ts) so this never depends on the human copy.
   // An unknown outcome (preview failed/timeout) keeps "both" enabled — degrade
   // to always-shown rather than hiding a working option.
-  const hasFileImpact = (text: string | undefined): boolean => text === undefined || text.includes('将影响')
+  const IMPACT_TOKEN = /impact=(\d+)/
+  const hasFileImpact = (text: string | undefined): boolean => {
+    const match = text?.match(IMPACT_TOKEN)
+    return match === null || match === undefined || Number(match[1]) > 0
+  }
   void (async () => {
     const outcome = await previewImpact(session, seq)
     impactOutcome = outcome

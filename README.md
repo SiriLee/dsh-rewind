@@ -163,6 +163,7 @@ Rewinding to a message **withdraws** it and everything after it — the transcri
 ## Behavior details & limitations
 
 - Only **write-class tools** running while the plugin is active are tracked (`write` / `edit` / `str_replace_editor`). Changes made by `bash`, other tools, or external programs are not backed up and cannot be restored — the same limitation as Claude Code, which also defers such rollbacks to the user's git.
+- **Subagent edits are not tracked** — same as Claude Code. A subagent runs its own session, so its backups could never be restored by a rewind of the parent session; the capture is skipped instead of recording to an unreachable store.
 - If a before-capture read fails (e.g. a permission error), that change is simply not backed up and a `both` rewind cannot restore it — the plugin logs a warning but **does not block the write**.
 - File restore/delete writes through the **real local filesystem**; under sandbox / remote backends path resolution may be restricted.
 - Symbolic links and hard links are not written through (they share the inode with another name; a restore would clobber both) — they are skipped and reported.

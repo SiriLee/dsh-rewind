@@ -21,13 +21,14 @@
  *  8. `/rewind @<seq> both` restores the real file to its pre-edit content
  *     and deletes files created after the target;
  *  9. a running agent is force-stopped before the rewind (not refused);
- * 10. a cancel that never quiesces aborts the rewind (timeout path).
+ * 10. a cancel that never quiesces aborts the rewind (timeout path);
+ * 11. subagent edits are NOT tracked (Claude Code alignment).
  */
 import { Context } from '@deepseek-ai/cordis'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
@@ -58,10 +59,10 @@ const fs = new FakeFs(new Context())
 const user = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
 const assistant = text => createAssistantMessage({ content: [{ type: 'text', text }], source: { provider: 'test', model: 'test' } })
 
-function buildSession(id, cwd) {
+function buildSession(id, cwd, extra = {}) {
   const session = Session.create(SessionId(id), undefined,
     cwd !== undefined
-      ? { version: 0, id: SessionId(id), createdAt: Date.now(), cwd }
+      ? { version: 0, id: SessionId(id), createdAt: Date.now(), cwd, ...extra }
       : undefined)
   session.append('user/message', user('first question'), { surfaceOp: 'append' })
   session.append('assistant/message', { turn: 0, step: 0, message: assistant('first answer') }, { surfaceOp: 'append' })
@@ -148,6 +149,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 
   const preview = await call(agent, `preview @${anchorSeq} both`)
   check('preview reports the file impact', preview.kind === 'success' && preview.text.includes(aPath) && preview.text.includes('还原'), preview.text)
+  check('preview carries the machine impact token', preview.kind === 'success' && /impact=2/.test(preview.text), preview.text)
 
   const both = await call(agent, `@${anchorSeq} both`)
   check('rewind both succeeds', both.kind === 'success' && both.text.includes('还原 1 个文件') && both.text.includes('删除 1 个文件'), both.text)
@@ -195,7 +197,18 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 {
   const runningSession = buildSession('verify-running')
   let cancelled = false
-  const running = { id: runningSession.id, session: runningSession, status: 'running', cancel: () => { cancelled = true; running.status = 'idle' } }
+  // `whenIdle` resolves once cancel flips status back to idle (the real
+  // harness loop's activity promise settles the same way).
+  const running = {
+    id: runningSession.id,
+    session: runningSession,
+    status: 'running',
+    cancel: () => { cancelled = true; running.status = 'idle' },
+    whenIdle: () => new Promise(resolve => {
+      const poll = () => { if (running.status === 'idle') resolve(); else setTimeout(poll, 10) }
+      poll()
+    }),
+  }
   const runningResult = await call(running, '@2 chat')
   check('running agent is cancelled first', cancelled === true, `cancelled=${cancelled}`)
   check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
@@ -204,9 +217,39 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 // 9. a cancel that never quiesces aborts the rewind (timeout path)
 {
   const stuckSession = buildSession('verify-stuck')
-  const stuck = { id: stuckSession.id, session: stuckSession, status: 'running', cancel: () => {} }
+  // `whenIdle` never settles and cancel does nothing: the rewind must give up
+  // at the idle-wait deadline instead of appending mid-turn.
+  const stuck = {
+    id: stuckSession.id,
+    session: stuckSession,
+    status: 'running',
+    cancel: () => {},
+    whenIdle: () => new Promise(() => {}),
+  }
   const stuckResult = await call(stuck, '@2 chat')
   check('stuck agent aborts rewind', stuckResult.kind === 'error', stuckResult.text)
+}
+
+// 10. subagent edits are NOT tracked (Claude Code alignment): the backup
+//     would land under the subagent session id where a parent-session rewind
+//     could never restore it, so the capture is skipped entirely.
+{
+  const subSession = buildSession('verify-sub', wsDir, { origin: 'subagent', delegationDepth: 1 })
+  const subAgent = { id: subSession.id, session: subSession, status: 'idle' }
+  const subFile = join(wsDir, 'sub.txt')
+  await writeFile(subFile, 'sub original', 'utf8')
+  subSession.append('user/message', user('sub question'), { surfaceOp: 'append' })
+  await runWrite(subAgent, 'c5', subFile, 'sub new')
+  // The main session's own rewinds consumed seq 2/4/5; seq 0 (the first user
+  // message) is still on its surface and covers every backup anchored at or
+  // after it.
+  const preview = await call(agent, 'preview @0 both')
+  check('subagent edit is not tracked', preview.kind === 'success' && !preview.text.includes(subFile), preview.text)
+  // And the snapshot root holds no subagent session directory.
+  const subSessionDir = join(snapRoot, subSession.id)
+  let subDirExists = false
+  try { await readdir(subSessionDir); subDirExists = true } catch { subDirExists = false }
+  check('no snapshot dir for the subagent session', !subDirExists, subSessionDir)
 }
 
 await rm(tmpRoot, { recursive: true, force: true })

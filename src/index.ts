@@ -98,10 +98,14 @@ interface AnchorCacheEntry {
  * and assistant events appended between two tool results move the log tail but
  * never the anchor, so only the events since the last computation are scanned —
  * amortized O(1) per commit instead of a full backward walk every time.
+ *
+ * Keyed by the Session OBJECT (WeakMap): a session id is a branded string that
+ * an exotic lifecycle could reuse, and a stale `eventsLength`-match against a
+ * recycled id would hand back another session's anchor.
  */
-function anchorSeqOf(session: Session, cache: Map<string, AnchorCacheEntry>): number | undefined {
+function anchorSeqOf(session: Session, cache: WeakMap<Session, AnchorCacheEntry>): number | undefined {
   const events = session.events
-  const cached = cache.get(session.id)
+  const cached = cache.get(session)
   if (cached !== undefined && cached.eventsLength === events.length) return cached.anchor
   let anchor: number | undefined = cached?.anchor
   for (let i = events.length - 1; i >= (cached?.eventsLength ?? 0); i--) {
@@ -110,7 +114,7 @@ function anchorSeqOf(session: Session, cache: Map<string, AnchorCacheEntry>): nu
       break
     }
   }
-  cache.set(session.id, { anchor, eventsLength: events.length })
+  cache.set(session, { anchor, eventsLength: events.length })
   return anchor
 }
 
@@ -157,6 +161,14 @@ async function captureBefore(
   pending: Map<string, PendingCapture>,
 ): Promise<void> {
   if (!TRACKED_TOOLS.has(exec.name)) return
+  // Claude Code alignment: subagent edits are NOT tracked (official
+  // checkpointing limitation). A subagent runs its own session, so a backup
+  // recorded under the subagent session id could never be restored by a
+  // rewind of the parent session — it would only leak on disk (the subagent
+  // log is short, so the per-session 100-group prune never fires for it).
+  // Skipping the capture here mirrors Claude Code's behavior exactly.
+  const header = exec.agent?.session.header
+  if (header !== undefined && (header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
   const cwd = execSessionCwd(exec, path)
@@ -174,7 +186,7 @@ async function captureBefore(
 async function commitEntry(
   store: SnapshotStore,
   pending: Map<string, PendingCapture>,
-  anchorCache: Map<string, AnchorCacheEntry>,
+  anchorCache: WeakMap<Session, AnchorCacheEntry>,
   exec: ToolExecution,
   result: ToolExecutionResult,
 ): Promise<void> {
@@ -235,6 +247,10 @@ function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'r
   } else {
     lines.push('目标之后没有快照记录的写类变更，无需还原文件。')
   }
+  // Machine-readable trailer (stable literal, locale-independent): the client
+  // parses `impact=<n>` to decide whether the code-restore mode is available
+  // and strips the line before showing the text — never the human copy above.
+  lines.push(`impact=${files.length}`)
   return lines.join('\n')
 }
 
@@ -253,15 +269,39 @@ function renderFailures(failed: readonly { path: string; message: string }[]): s
   return `；${failed.length} 个文件还原失败：${failed.map(f => `${f.path}（${f.message}）`).join('、')}`
 }
 
-/** Wait until an agent reaches `idle` (a running turn stops), or the deadline/abort hits. */
+/**
+ * Wait until an agent reaches `idle` (a running turn stops), or the
+ * deadline/abort hits. Uses the agent's own `whenIdle()` — the loop's
+ * activity promise — instead of polling `status` every 50ms. The agent's
+ * status reads `idle` during a `maintenance` phase too, so we ALWAYS race
+ * `whenIdle()` (which follows the activity promise, maintenance included)
+ * rather than short-circuiting on the status: its concurrent session writes
+ * would otherwise race the rewind's append.
+ */
 async function waitForAgentIdle(agent: Agent, signal: AbortSignal, timeoutMs = 15_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (agent.status !== 'idle') {
-    if (signal.aborted || Date.now() > deadline) return false
-    await new Promise(resolve => setTimeout(resolve, 50))
+  if (signal.aborted) return false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
+  try {
+    await Promise.race([
+      agent.whenIdle(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('rewind idle wait timed out')), timeoutMs)
+        onAbort = () => reject(new Error('rewind idle wait aborted'))
+        signal.addEventListener('abort', onAbort, { once: true })
+      }),
+    ])
+    return true
+  } catch {
+    return false
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
   }
-  return true
 }
+
+/** Sessions with a rewind currently executing (per-session in-flight guard). */
+type InflightRewinds = Set<string>
 
 /** Execute a validated rewind: append the marker, then optionally restore files. */
 async function executeRewind(
@@ -270,60 +310,79 @@ async function executeRewind(
   invocation: CommandInvocation,
   rawTarget: string,
   mode: RewindMode,
+  inflight: InflightRewinds,
 ): Promise<CommandResult> {
   const { agent } = invocation
-  // A running turn (the LLM is thinking or streaming) must be stopped before
-  // the surface can be cut: force-cancel it (user cause), wait for quiescence,
-  // then rewind. Queued/steering inbox items are discarded with the turn.
-  if (agent.status !== 'idle') {
-    agent.cancel({ kind: 'user' })
-    const stopped = await waitForAgentIdle(agent, invocation.signal)
-    if (!stopped) {
-      return { kind: 'error', text: '无法停止运行中的 agent，回退已取消。请稍后再试。' }
+  const sessionId = agent.session.id
+  // Per-session in-flight guard: two concurrent rewinds (double-click, a
+  // second tab) would both plan against the same surface; the second append's
+  // replace range would then target nodes the first marker already shadowed,
+  // and `Session.append` rejects with "start seq not found in surface".
+  if (inflight.has(sessionId)) {
+    return { kind: 'error', text: '该会话已有一个回退正在执行，请稍候。' }
+  }
+  inflight.add(sessionId)
+  try {
+    // A running turn (the LLM is thinking or streaming) must be stopped before
+    // the surface can be cut: force-cancel it (user cause), wait for quiescence,
+    // then rewind. Queued/steering inbox items are discarded with the turn.
+    if (agent.status !== 'idle') {
+      agent.cancel({ kind: 'user' })
+      const stopped = await waitForAgentIdle(agent, invocation.signal)
+      if (!stopped) {
+        return { kind: 'error', text: '无法停止运行中的 agent，回退已取消。请稍后再试。' }
+      }
     }
-  }
-  let plan: RewindPlan
-  try {
-    plan = resolveOrError(agent.session.events, agent.session.surface.nodes, rawTarget)
-  } catch (error) {
-    return rewindErrorResult(error)
-  }
+    // The command was cancelled (or its caller aborted) while we waited for
+    // quiescence: stop here instead of executing a rewind nobody asked for.
+    if (invocation.signal.aborted) {
+      return { kind: 'error', text: '回退已取消。' }
+    }
+    let plan: RewindPlan
+    try {
+      plan = resolveOrError(agent.session.events, agent.session.surface.nodes, rawTarget)
+    } catch (error) {
+      return rewindErrorResult(error)
+    }
 
-  const marker = buildMarker()
-  let event: ReturnType<Session['append']>
-  try {
-    // The marker is an EMPTY assistant/message: it derives to null in the
-    // model context and renders nothing, so the surface simply ends before
-    // the withdrawn messages — agent and user both see the conversation as
-    // it was before the target.
-    event = agent.session.append('assistant/message', { turn: markerTurnOf(agent.session.events), step: 0, message: marker }, {
-      surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-      sourceEventSeqs: [...plan.shadowedSeqs],
-    })
-  } catch (error) {
+    const marker = buildMarker()
+    let event: ReturnType<Session['append']>
+    try {
+      // The marker is an EMPTY assistant/message: it derives to null in the
+      // model context and renders nothing, so the surface simply ends before
+      // the withdrawn messages — agent and user both see the conversation as
+      // it was before the target.
+      event = agent.session.append('assistant/message', { turn: markerTurnOf(agent.session.events), step: 0, message: marker }, {
+        surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
+        sourceEventSeqs: [...plan.shadowedSeqs],
+      })
+    } catch (error) {
+      return {
+        kind: 'error',
+        text: `回退失败：${error instanceof Error ? error.message : String(error)}。会话未改变。`,
+      }
+    }
+
+    let restore = ''
+    if (mode === 'both') {
+      const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
+      const parts: string[] = []
+      if (outcome.restored.length > 0) parts.push(`还原 ${outcome.restored.length} 个文件`)
+      if (outcome.deleted.length > 0) parts.push(`删除 ${outcome.deleted.length} 个文件`)
+      if (outcome.skipped.length > 0) parts.push(`跳过 ${outcome.skipped.length} 个链接`)
+      restore = parts.length > 0 ? `；${parts.join('、')}` : '；目标之后没有可还原的写类变更'
+      restore += renderFailures(outcome.failed)
+    }
+
+    // Every rewind withdraws the target message and everything after it; its
+    // content is offered back in the composer for re-sending.
     return {
-      kind: 'error',
-      text: `回退失败：${error instanceof Error ? error.message : String(error)}。会话未改变。`,
+      kind: 'success',
+      text: `已撤回 seq ${plan.targetSeq} 及之后内容（对话已回到此前）${restore}。`,
+      sourceEventSeq: event.seq,
     }
-  }
-
-  let restore = ''
-  if (mode === 'both') {
-    const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
-    const parts: string[] = []
-    if (outcome.restored.length > 0) parts.push(`还原 ${outcome.restored.length} 个文件`)
-    if (outcome.deleted.length > 0) parts.push(`删除 ${outcome.deleted.length} 个文件`)
-    if (outcome.skipped.length > 0) parts.push(`跳过 ${outcome.skipped.length} 个链接`)
-    restore = parts.length > 0 ? `；${parts.join('、')}` : '；目标之后没有可还原的写类变更'
-    restore += renderFailures(outcome.failed)
-  }
-
-  // Every rewind withdraws the target message and everything after it; its
-  // content is offered back in the composer for re-sending.
-  return {
-    kind: 'success',
-    text: `已撤回 seq ${plan.targetSeq} 及之后内容（对话已回到此前）${restore}。`,
-    sourceEventSeq: event.seq,
+  } finally {
+    inflight.delete(sessionId)
   }
 }
 
@@ -346,6 +405,7 @@ async function handleRewind(
   ctx: Context,
   store: SnapshotStore,
   invocation: CommandInvocation,
+  inflight: InflightRewinds,
 ): Promise<CommandResult> {
   const session = invocation.agent.session
   const input = invocation.rawInput.trim()
@@ -361,7 +421,7 @@ async function handleRewind(
     if (candidates.length === 0) {
       return { kind: 'error', text: '当前会话还没有可回退的用户消息。' }
     }
-    return executeRewind(ctx, store, invocation, `@${candidates[0]!.seq}`, 'chat')
+    return executeRewind(ctx, store, invocation, `@${candidates[0]!.seq}`, 'chat', inflight)
   }
 
   const parts = input.split(/\s+/)
@@ -391,7 +451,7 @@ async function handleRewind(
       text: `将回退到 ${describeTarget(parsed)}。选择模式：\n  /rewind ${target} chat  仅回退对话\n  /rewind ${target} both  回退对话并还原文件`,
     }
   }
-  return executeRewind(ctx, store, invocation, target, mode)
+  return executeRewind(ctx, store, invocation, target, mode, inflight)
 }
 
 /**
@@ -420,14 +480,17 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
-  // Incremental turn-anchor cache (see anchorSeqOf).
-  const anchorCache = new Map<string, AnchorCacheEntry>()
+  // Incremental turn-anchor cache, keyed by the Session object (see
+  // anchorSeqOf).
+  const anchorCache = new WeakMap<Session, AnchorCacheEntry>()
+  // Sessions with a rewind currently executing (per-session in-flight guard).
+  const inflight: InflightRewinds = new Set()
 
   ctx.effect(function* () {
     yield ctx.commands.register({
       name: 'rewind',
       description: '在同窗口内将对话回退到更早的用户消息（可同时还原文件）',
-      handler: invocation => handleRewind(ctx, store, invocation),
+      handler: invocation => handleRewind(ctx, store, invocation, inflight),
     })
   }, 'dsh-rewind command')
 
@@ -452,9 +515,11 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     })
 
     scope.on('tools/result', (exec: ToolExecution): undefined => {
-      // A tool body (or another execute wrapper) that THROWS skips
-      // `tools/post-execute` — the registry's dispatch catch short-circuits
-      // straight to final-result — so its before-capture would otherwise leak
+      // A THROW inside the `tools/execute` waterfall — from another wrapper,
+      // not from the tool body (`dispatchToolBody` catches body errors and
+      // still produces a post-result, so the body path keeps post-execute) —
+      // short-circuits the registry's catch straight to `final-result`,
+      // skipping `tools/post-execute`; its before-capture would otherwise leak
       // in `pending` forever (holding a full file content in memory).
       // `tools/result` fires on BOTH the normal and the throw path: delete
       // here as the safety net (a no-op when commitEntry already consumed it).
