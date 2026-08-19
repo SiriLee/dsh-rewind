@@ -21,6 +21,22 @@ export function targetOfOutcome(text: string | undefined): number | undefined {
   return match !== null ? Number(match[1]) : undefined
 }
 
+/**
+ * True when a `/rewind` command node is an EXECUTED rewind for `seq` — the
+ * admission form the popover drives (`@<seq> chat` / `both`) that settled
+ * with a marker-carrying success outcome. The composer refill waits for
+ * exactly this node after the user confirms, so a history-loaded command can
+ * never trigger a fill.
+ */
+export function isExecutedRewindCommand(node: CommandNode, seq: number): boolean {
+  if (node.name !== 'rewind' || node.outcome?.kind !== 'success') return false
+  // A success WITHOUT a marker rewound nothing (an impact preview, or the
+  // step-2 "choose a mode" hint from the now-blocked manual text flow).
+  if (node.outcome.sourceEventSeq === undefined) return false
+  const args = node.args ?? ''
+  return new RegExp(`(?:^|\\s)@${seq}(?:\\s|$)`).test(args)
+}
+
 /** True when a `/rewind` command node is an impact preview — the internal probe
  * the popover runs (`/rewind preview @seq both`) to fetch the restore/delete
  * list. Previews never surface in the transcript (their result is shown in the

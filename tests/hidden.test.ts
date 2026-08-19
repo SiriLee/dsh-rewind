@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode, CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hiddenSeqsOf, targetOfOutcome, type HiddenChat } from '../src/client/hidden.ts'
+import { hiddenSeqsOf, isExecutedRewindCommand, targetOfOutcome, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A chat view node for one row; only fields the hiding logic reads are real. */
 function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = null): ChatConversationViewNode {
@@ -183,5 +183,40 @@ describe('targetOfOutcome', () => {
     expect(targetOfOutcome('将回退到 seq 5，从模型上下文移除 1 个节点。')).toBe(5)
     expect(targetOfOutcome(undefined)).toBeUndefined()
     expect(targetOfOutcome('回退失败，会话未改变。')).toBeUndefined()
+  })
+})
+
+describe('isExecutedRewindCommand (composer refill waits only for THIS page\'s rewind)', () => {
+  const node = (outcome: CommandNode['outcome'], args: string | null): CommandNode =>
+    rewindCommand('cmd', 6, 6, outcome, args).data as CommandNode
+
+  it('matches an executed rewind for the exact target seq', () => {
+    expect(isExecutedRewindCommand(node({ kind: 'success', text: '已撤回 seq 5 及之后内容。', sourceEventSeq: 12 }, '@5 both'), 5)).toBe(true)
+    expect(isExecutedRewindCommand(node({ kind: 'success', text: '已撤回 seq 5 及之后内容。', sourceEventSeq: 12 }, '@5 chat'), 5)).toBe(true)
+  })
+
+  it('does not match a different target seq', () => {
+    const executed = node({ kind: 'success', text: '已撤回 seq 5 及之后内容。', sourceEventSeq: 12 }, '@5 both')
+    expect(isExecutedRewindCommand(executed, 4)).toBe(false)
+  })
+
+  it('does not match previews or other successes without a marker', () => {
+    const preview = node({ kind: 'success', text: '将回退到 seq 5。', sourceEventSeq: undefined }, 'preview @5 both')
+    expect(isExecutedRewindCommand(preview, 5)).toBe(false)
+    // The step-2 "choose a mode" hint is a success without a marker too.
+    const hint = node({ kind: 'success', text: '将回退到 seq 5。选择模式：…', sourceEventSeq: undefined }, '@5')
+    expect(isExecutedRewindCommand(hint, 5)).toBe(false)
+  })
+
+  it('does not match failed or pending rewinds', () => {
+    expect(isExecutedRewindCommand(node({ kind: 'error', text: '回退失败。' }, '@5 both'), 5)).toBe(false)
+    expect(isExecutedRewindCommand(node(null, '@5 both'), 5)).toBe(false)
+  })
+
+  it('does not match non-rewind commands', () => {
+    const other = viewNode('cmd', 'command', 6, {
+      kind: 'command', seq: 6, time: 0, commandId: 'cid', name: 'approval-edit', args: 'on', outcome: { kind: 'success', text: 'ok' },
+    } as unknown as CommandNode)
+    expect(isExecutedRewindCommand(other.data as CommandNode, 5)).toBe(false)
   })
 })

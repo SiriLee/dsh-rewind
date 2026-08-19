@@ -25,13 +25,13 @@
  */
 
 import type {
-  ClientContext, CommandNode, SessionFace, UserMessageNode,
+  ClientContext, SessionFace, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { hiddenSeqsOf, targetOfOutcome } from './hidden.ts'
+import { hiddenSeqsOf, isExecutedRewindCommand } from './hidden.ts'
 import { en, zh } from './locales.ts'
-import { closePopover, openPopover } from './popover.ts'
+import { closePopover, openPopover, waitForCommand } from './popover.ts'
 import { CLASS, REWIND_ATTACHED, REWIND_ICON_SVG, STYLE } from './styles.ts'
 
 export const name = 'dsh-rewind'
@@ -170,6 +170,7 @@ export function apply(ctx: ClientContext): void {
           preview: messagePreviewOf(node),
           anchor: button,
           t,
+          onRewind: mode => { void runRewindAndFill(session, node.seq, mode) },
         })
       })
       actions.appendChild(button)
@@ -203,24 +204,6 @@ export function apply(ctx: ClientContext): void {
           hidden.delete(seat)
         }
       }
-      // Snapshot the composer-fill baseline on the first scan that sees any
-      // chat content: everything already present is "pre-existing" and must
-      // not re-fill the composer on this page load.
-      if (session !== undefined) {
-        const snap = session.getSnapshot()
-        if (!fillBaselineTaken && snap.chat.order.length > 0) {
-          fillBaselineTaken = true
-          for (const key of snap.chat.order) {
-            const node = snap.chat.nodes.get(key)
-            if (node?.kind === 'command') {
-              const command = node.data as CommandNode
-              if (command.seq > fillBaselineSeq) fillBaselineSeq = command.seq
-            }
-          }
-        }
-        // Fill the composer with the withdrawn target's text, once per target.
-        fillComposerForRewind(session, filledTargets)
-      }
       // Diagnostics (only when something is hidden): confirm the hiding path
       // actually fires in the browser.
       if (hiddenSeqs.size > 0 || hiddenCount > 0) {
@@ -233,41 +216,33 @@ export function apply(ctx: ClientContext): void {
       }
     }
 
-    const filledTargets = new Set<number>()
-    // The highest command-node seq already present when this page's chat first
-    // populated. Rewind commands that settled BEFORE this page loaded must not
-    // re-fill the composer on every reload — the withdrawn text belongs to the
-    // moment of the rewind, not to every future visit. Only commands with a
-    // seq ABOVE this baseline (i.e. executed in this page) fill the composer.
-    let fillBaselineSeq = -1
-    let fillBaselineTaken = false
     /**
-     * When a rewind command settles successfully, put the withdrawn target
-     * message's text back into the composer so the user can edit and re-send.
+     * Execute one rewind from the popover and, when it settles successfully,
+     * put the withdrawn target message's text back into the composer so the
+     * user can edit and re-send.
+     *
+     * THE COMPOSER FILL IS EVENT-DRIVEN: it runs only when THIS page performed
+     * the rewind (the user clicked confirm moments ago). It must NEVER scan
+     * loaded history for rewind commands: a session window opens with only
+     * the tail page and grows via loadOlder, so a "command already in the
+     * snapshot" cannot be told apart from "command executed in this page" —
+     * the old baseline heuristic refilled withdrawn text into the composer
+     * after switching sessions or restarting dsh.
      */
-    const fillComposerForRewind = (session: SessionFace, filled: Set<number>): void => {
-      const snap = session.getSnapshot()
-      for (const key of snap.chat.order) {
-        const node = snap.chat.nodes.get(key)
-        if (node === undefined || node.kind !== 'command') continue
-        const command = node.data as CommandNode
-        if (command.name !== 'rewind' || command.outcome?.kind !== 'success') continue
-        // Pre-existing commands (loaded with the initial window) already filled
-        // the composer in the page where they ran; refilling on a later visit
-        // would resurrect withdrawn text the user already re-sent or edited.
-        if (command.seq <= fillBaselineSeq) continue
-        // Only commands that ACTUALLY rewound (a marker event exists, carried
-        // as `sourceEventSeq`) fill the composer. A `preview` outcome is also
-        // 'success' and its text contains "seq N", but it appends no marker —
-        // filling on preview would move the withdrawn text into the editor
-        // BEFORE the user confirms the both-mode rewind.
-        if (command.outcome.sourceEventSeq === undefined) continue
-        const target = targetOfOutcome(command.outcome.text)
-        if (target === undefined || filled.has(target)) continue
-        const text = userTextAt(session, target)
-        if (text === undefined || text === '') continue
-        if (fillComposer(text)) filled.add(target)
-      }
+    const runRewindAndFill = async (session: SessionFace, seq: number, mode: 'chat' | 'both'): Promise<void> => {
+      const result = await session.command(`/rewind @${seq} ${mode}`)
+      if (!result.ok || result.value?.matched !== true) return
+      // The executed rewind lands as a CommandNode with a marker-carrying
+      // success outcome; wait for exactly that (longer than the preview wait:
+      // a running turn is cancelled first, which can take seconds).
+      const outcome = await waitForCommand(session, node => isExecutedRewindCommand(node, seq), 20_000)
+      if (outcome === null || outcome.kind !== 'success') return
+      // The user may have switched sessions while the rewind ran — fill only
+      // the composer of the session the rewind actually happened in.
+      if (sessionFor() !== session) return
+      const text = userTextAt(session, seq)
+      if (text === undefined || text === '') return
+      fillComposer(text)
     }
 
     // ---- manual /rewind guard ----

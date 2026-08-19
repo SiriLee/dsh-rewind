@@ -22,6 +22,12 @@ export interface PopoverOptions {
   /** The button that opened the popover (outside-click ignore target). */
   readonly anchor: HTMLElement
   readonly t: Translate
+  /**
+   * Execute one rewind in the given mode. The popover closes itself first;
+   * the callback owns the command + composer-refill lifecycle (see
+   * runRewindAndFill in index.ts).
+   */
+  readonly onRewind: (mode: 'chat' | 'both') => void
 }
 
 /** The single live popover element, or null when closed. */
@@ -76,7 +82,7 @@ function findCommand(snapshot: ReturnType<SessionFace['getSnapshot']>, match: (n
  * session snapshot (command/run + command/done land as one CommandNode).
  * @returns the outcome text-bearing node, or null on timeout.
  */
-function waitForCommand(
+export function waitForCommand(
   session: SessionFace,
   match: (node: CommandNode) => boolean,
   timeoutMs = 8000,
@@ -181,7 +187,7 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
     confirm.disabled = false
     confirm.addEventListener('click', () => {
       closePopover()
-      void session.command(`/rewind @${seq} both`)
+      opts.onRewind('both')
     })
   })().catch(() => {
     impact.textContent = t('popover.impact.failed', { message: 'unexpected error' })
@@ -209,7 +215,7 @@ export function openPopover(opts: PopoverOptions): void {
       el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
       modeOption(t('popover.chat'), t('popover.chat.hint'), () => {
         closePopover()
-        void session.command(`/rewind @${seq} chat`)
+        opts.onRewind('chat')
       }),
     ]
     if (bothState.state === 'noChanges') {
