@@ -37,6 +37,23 @@ export function isExecutedRewindCommand(node: CommandNode, seq: number): boolean
   return new RegExp(`(?:^|\\s)@${seq}(?:\\s|$)`).test(args)
 }
 
+/**
+ * Whether a preview outcome reports tracked file changes — the availability
+ * of the "rewind conversation and code" option (Claude Code hides the
+ * code-restore options when the checkpoint has no tracked changes).
+ *
+ * Prefers the machine-readable `impact=<n>` trailer the current host appends
+ * to preview text. Older host output (or a history-loaded preview row from
+ * before the trailer existed) has none, so it falls back to the human copy
+ * ("将影响 …") to keep mixed-version deployments correct.
+ */
+export function hasFileImpact(text: string | undefined): boolean {
+  if (text === undefined) return true
+  const match = text.match(/impact=(\d+)/)
+  if (match !== null) return Number(match[1]) > 0
+  return text.includes('将影响')
+}
+
 /** True when a `/rewind` command node is an impact preview — the internal probe
  * the popover runs (`/rewind preview @seq both`) to fetch the restore/delete
  * list. Previews never surface in the transcript (their result is shown in the

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode, CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hiddenSeqsOf, isExecutedRewindCommand, targetOfOutcome, type HiddenChat } from '../src/client/hidden.ts'
+import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, targetOfOutcome, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A chat view node for one row; only fields the hiding logic reads are real. */
 function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = null): ChatConversationViewNode {
@@ -218,5 +218,22 @@ describe('isExecutedRewindCommand (composer refill waits only for THIS page\'s r
       kind: 'command', seq: 6, time: 0, commandId: 'cid', name: 'approval-edit', args: 'on', outcome: { kind: 'success', text: 'ok' },
     } as unknown as CommandNode)
     expect(isExecutedRewindCommand(other.data as CommandNode, 5)).toBe(false)
+  })
+})
+
+describe('hasFileImpact (code-restore option availability)', () => {
+  it('uses the machine impact token when present', () => {
+    expect(hasFileImpact('将回退到 seq 5。\n将影响 2 个文件：\n 还原 /a\nimpact=2')).toBe(true)
+    expect(hasFileImpact('将回退到 seq 5。\n目标之后没有快照记录的写类变更。\nimpact=0')).toBe(false)
+  })
+
+  it('falls back to the human copy for older host output without a token', () => {
+    expect(hasFileImpact('将回退到 seq 5。\n将影响 1 个文件：\n  还原 /a')).toBe(true)
+    expect(hasFileImpact('将回退到 seq 5。\n目标之后没有快照记录的写类变更，无需还原文件。')).toBe(false)
+  })
+
+  it('degrades to always-show for unknown outcomes', () => {
+    expect(hasFileImpact(undefined)).toBe(true)
+    expect(hasFileImpact('')).toBe(false) // empty text: no changes reported
   })
 })

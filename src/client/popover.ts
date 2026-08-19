@@ -9,6 +9,7 @@
 
 import type { SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
+import { hasFileImpact } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'
 
@@ -78,6 +79,26 @@ function findCommand(snapshot: ReturnType<SessionFace['getSnapshot']>, match: (n
 }
 
 /**
+ * Seqs of the command nodes currently matching `match`. Sample BEFORE issuing
+ * a new command of the same shape so the subsequent wait can exclude them: a
+ * repeated preview/rewind of the same target must not settle on the previous
+ * command's stale outcome (e.g. an older preview that found file changes,
+ * after those changes were already restored).
+ */
+export function knownCommandSeqs(session: SessionFace, match: (node: CommandNode) => boolean): Set<number> {
+  const known = new Set<number>()
+  const snapshot = session.getSnapshot()
+  for (const key of snapshot.chat.order) {
+    const node = snapshot.chat.nodes.get(key)
+    if (node !== undefined && node.kind === 'command') {
+      const command = node.data as CommandNode
+      if (match(command)) known.add(command.seq)
+    }
+  }
+  return known
+}
+
+/**
  * Resolve the outcome of the newest matching rewind command by watching the
  * session snapshot (command/run + command/done land as one CommandNode).
  * @returns the outcome text-bearing node, or null on timeout.
@@ -122,9 +143,13 @@ function isPreviewFor(node: CommandNode, seq: number): boolean {
  * command was not matched or timed out.
  */
 async function previewImpact(session: SessionFace, seq: number): Promise<PreviewOutcome> {
+  // Exclude preview nodes that already exist: a second popover on the same
+  // message must wait for THIS command's node, not settle on the previous
+  // preview's outcome (which may predate a restore).
+  const known = knownCommandSeqs(session, node => isPreviewFor(node, seq))
   const result = await session.command(`/rewind preview @${seq} both`)
   if (!result.ok || result.value?.matched !== true) return null
-  return waitForCommand(session, node => isPreviewFor(node, seq))
+  return waitForCommand(session, node => isPreviewFor(node, seq) && !known.has(node.seq))
 }
 
 /** Element factory helpers (kept local so no framework is involved). */
@@ -262,15 +287,10 @@ export function openPopover(opts: PopoverOptions): void {
 
   // Resolve the "both" mode's availability up front (Claude Code hides the
   // code-restore options when the checkpoint has no tracked file changes).
-  // The host preview carries a stable machine-readable trailer (`impact=<n>`,
-  // see formatPlan in src/index.ts) so this never depends on the human copy.
-  // An unknown outcome (preview failed/timeout) keeps "both" enabled — degrade
-  // to always-shown rather than hiding a working option.
-  const IMPACT_TOKEN = /impact=(\d+)/
-  const hasFileImpact = (text: string | undefined): boolean => {
-    const match = text?.match(IMPACT_TOKEN)
-    return match === null || match === undefined || Number(match[1]) > 0
-  }
+  // `hasFileImpact` prefers the host's machine-readable `impact=<n>` trailer
+  // and falls back to the human copy for older host output. An unknown
+  // outcome (preview failed/timeout) keeps "both" enabled — degrade to
+  // always-shown rather than hiding a working option.
   void (async () => {
     const outcome = await previewImpact(session, seq)
     impactOutcome = outcome

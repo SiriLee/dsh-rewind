@@ -31,14 +31,17 @@ import type {
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { hiddenSeqsOf, isExecutedRewindCommand } from './hidden.ts'
 import { en, zh } from './locales.ts'
-import { closePopover, openPopover, waitForCommand } from './popover.ts'
+import { closePopover, knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
 import { CLASS, REWIND_ATTACHED, REWIND_ICON_SVG, STYLE } from './styles.ts'
 
 export const name = 'dsh-rewind'
 export const inject = ['sessions', 'locale']
 
 const NS = 'rewind'
-const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"]'
+// Both durable user messages and durable steering inputs (a follow-up sent
+// while the agent is running) render user-style bubbles; the newest messages
+// of an active session are often steering, and they must get the button too.
+const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"], [data-chat-flow-kind="steering"]'
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 /** The composer textarea dsh renders for the current session's input. */
@@ -102,7 +105,6 @@ export function apply(ctx: ClientContext): void {
     style.textContent = STYLE
     document.head.appendChild(style)
 
-    const attached = new WeakSet<HTMLElement>()
     const hidden = new WeakSet<HTMLElement>()
     const buttons = new Map<string, HTMLButtonElement>()
     let observer: MutationObserver | null = null
@@ -127,24 +129,30 @@ export function apply(ctx: ClientContext): void {
       return ctx.sessions.binding(sessionId)?.session
     }
 
-    /** Resolve the durable user node behind a seat key via the runtime snapshot. */
+    /** Resolve the durable user/steering node behind a seat key via the runtime snapshot. */
     const userNodeFor = (key: string, session: SessionFace): UserMessageNode | undefined => {
       const node = session.getSnapshot().chat.nodes.get(key)
-      if (node === undefined || node.kind !== 'user') return undefined
+      if (node === undefined || (node.kind !== 'user' && node.kind !== 'steering')) return undefined
+      // SteeringMessageNode carries the same seq/time/content/source fields.
       return node.data as UserMessageNode
     }
 
     /** Append the rewind button into one user seat's actions row. */
     const attach = (seat: HTMLElement): void => {
       const key = seat.dataset.chatAnchorKey
-      if (key === undefined || attached.has(seat)) return
+      if (key === undefined) return
+      // A live button for this seat key is the source of truth — NOT a
+      // WeakSet marker: React re-renders (clock updates, streaming neighbors)
+      // can drop an externally injected button while the seat element itself
+      // survives, and a stale marker would then block re-attachment forever.
+      const existing = buttons.get(key)
+      if (existing !== undefined && existing.isConnected) return
       const hoverRoot = seat.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
       const actions = hoverRoot?.lastElementChild
       // The actions row is the last child of the user row and holds the
       // copy/branch IconActions; refuse to inject when the DOM does not match
       // (a layout change must not break the conversation).
       if (!(actions instanceof HTMLElement) || actions.querySelector('button') === null) return
-      attached.add(seat)
 
       const button = document.createElement('button')
       button.type = 'button'
@@ -230,12 +238,16 @@ export function apply(ctx: ClientContext): void {
      * after switching sessions or restarting dsh.
      */
     const runRewindAndFill = async (session: SessionFace, seq: number, mode: 'chat' | 'both'): Promise<void> => {
+      // Exclude already-present executed-rewind nodes for this target BEFORE
+      // issuing the command: a repeated rewind of the same message must wait
+      // for THIS command's node, not settle on the previous one.
+      const known = knownCommandSeqs(session, node => isExecutedRewindCommand(node, seq))
       const result = await session.command(`/rewind @${seq} ${mode}`)
       if (!result.ok || result.value?.matched !== true) return
       // The executed rewind lands as a CommandNode with a marker-carrying
       // success outcome; wait for exactly that (longer than the preview wait:
       // a running turn is cancelled first, which can take seconds).
-      const outcome = await waitForCommand(session, node => isExecutedRewindCommand(node, seq), 20_000)
+      const outcome = await waitForCommand(session, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
       if (outcome === null || outcome.kind !== 'success') return
       // The user may have switched sessions while the rewind ran — fill only
       // the composer of the session the rewind actually happened in.
