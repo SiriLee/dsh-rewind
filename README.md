@@ -4,7 +4,7 @@
 
 In-place conversation rewind for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): the Claude Code `/rewind` semantics inside the **same session window** — cut the model context back to an earlier user message, and optionally restore workspace files from **disk-persisted before-backups**.
 
-> **Status:** published to npm (`dsh-rewind-plugin`, v0.2.5) via GitHub Actions Trusted Publishing + Sigstore provenance. Targets the web profile (`dsh --profile web`). Interaction mirrors Claude Code's rewind, adapted to dsh's real web UI.
+> **Status:** published to npm (`dsh-rewind-plugin`, v0.2.6) via GitHub Actions Trusted Publishing + Sigstore provenance. Targets the web profile (`dsh --profile web`). Interaction mirrors Claude Code's rewind, adapted to dsh's real web UI.
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![npm license](https://img.shields.io/npm/l/dsh-rewind-plugin.svg)](https://github.com/SiriLee/dsh-rewind/blob/main/LICENSE)
@@ -85,20 +85,26 @@ conversation**: the marker's turn number collided with the next real turn's
 `Failed to load history: conversation Context …:turn-tail… received an update before its start Match (internal)`
 and the history vanished. Rewinds created from 0.2.5 on no longer produce the
 collision, but **already-corrupted sessions need an offline repair** (the log is
-append-only — it cannot be rewritten in memory):
+append-only — it cannot be rewritten in memory).
+
+The repair tool ships **inside the npm package** (`dsh-rewind-repair`) — no
+source checkout needed:
 
 ```sh
 # 1. Fully quit dsh web / host first (while a session is resident in memory,
 #    a disk repair is overwritten by the next checkpoint)
-# 2. Run the offline repair script (scans every session under ~/.dsh/sessions,
+# 2. Run the offline repair (scans every session under ~/.dsh/sessions,
 #    rewriting each marker's turn back to the last started turn)
-node scripts/repair-markers.mjs            # default: scan ~/.dsh/sessions
-node scripts/repair-markers.mjs --dry-run  # report only, no writes
-node scripts/repair-markers.mjs --dir <sessions root>  # custom data dir
+npm exec --yes --package=dsh-rewind-plugin -- dsh-rewind-repair
+npm exec --yes --package=dsh-rewind-plugin -- dsh-rewind-repair -- --dry-run  # preview only
 # 3. Restart dsh web — the repaired sessions load their history again
 ```
 
-The script only rewrites the `data.turn` of `dsh-rewind` empty-marker events
+Or install it globally once (`npm i -g dsh-rewind-plugin`) and run
+`dsh-rewind-repair` directly; from a source checkout the same tool is
+`node scripts/repair-markers.mjs` (identical flags).
+
+The tool only rewrites the `data.turn` of `dsh-rewind` empty-marker events
 (keeping seqs, order, and the zstd frame structure intact), backs up the original
 file to `session.jsonl.zstd.bak-<timestamp>` before writing, and never touches
 any other event — safe to run repeatedly.

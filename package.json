@@ -1,6 +1,6 @@
 {
   "name": "dsh-rewind-plugin",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "DeepSeek Harness plugin: in-place conversation rewind in the same session window (Claude Code /rewind semantics) with optional workspace file restore",
   "keywords": [
     "deepseek-harness",
@@ -23,6 +23,9 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
+  "bin": {
+    "dsh-rewind-repair": "scripts/repair-markers.mjs"
+  },
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -41,7 +44,8 @@
     "README.zh.md",
     "docs",
     "assets",
-    "LICENSE"
+    "LICENSE",
+    "scripts/repair-markers.mjs"
   ],
   "dsh": {
     "bundle": {
