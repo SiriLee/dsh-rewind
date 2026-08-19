@@ -4,7 +4,9 @@
 
 In-place conversation rewind for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): the Claude Code `/rewind` semantics inside the **same session window** — cut the model context back to an earlier user message, and optionally restore workspace files from **disk-persisted before-backups**.
 
-> **Status:** published to npm (`dsh-rewind-plugin`, v0.2.6) via GitHub Actions Trusted Publishing + Sigstore provenance. Targets the web profile (`dsh --profile web`). Interaction mirrors Claude Code's rewind, adapted to dsh's real web UI.
+> **Status:** published to npm (`dsh-rewind-plugin`, v0.2.7) via GitHub Actions Trusted Publishing + Sigstore provenance. Targets the web profile (`dsh --profile web`). Interaction mirrors Claude Code's rewind, adapted to dsh's real web UI.
+>
+> **v0.2.7 highlights:** composer refill is event-driven (reopening a session never resurrects withdrawn text); subagent edits are not tracked (Claude Code alignment); concurrent rewinds are guarded; the code-restore option appears only when tracked changes exist (mixed host/client versions safe).
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![npm license](https://img.shields.io/npm/l/dsh-rewind-plugin.svg)](https://github.com/SiriLee/dsh-rewind/blob/main/LICENSE)

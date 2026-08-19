@@ -4,7 +4,9 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：**同一会话窗口的 in-place 对话回退**（Claude Code `/rewind` 语义）——把模型上下文剪回更早的一条用户消息，并可基于**落盘的写前备份**还原工作区文件。
 
-> **状态**：已发布 npm（`dsh-rewind-plugin`，v0.2.6），经 GitHub Actions Trusted Publishing + Sigstore provenance 构建发布。目标为 web 配置档（`dsh --profile web`）。交互以 Claude Code 的 rewind 为参考，并贴合 dsh Web 实际 UI。
+> **状态**：已发布 npm（`dsh-rewind-plugin`，v0.2.7），经 GitHub Actions Trusted Publishing + Sigstore provenance 构建发布。目标为 web 配置档（`dsh --profile web`）。交互以 Claude Code 的 rewind 为参考，并贴合 dsh Web 实际 UI。
+>
+> **v0.2.7 要点**：输入框回填改为事件驱动（重开会话不再复活已撤回文本）；子代理编辑不跟踪（对齐 Claude Code）；并发回退有防护；「回退代码」选项仅在存在跟踪变更时显示（兼容新旧 host/client 混合版本）。
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![npm license](https://img.shields.io/npm/l/dsh-rewind-plugin.svg)](https://github.com/SiriLee/dsh-rewind/blob/main/LICENSE)
