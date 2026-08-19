@@ -33,7 +33,7 @@ import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, Session } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
-import { listRewindCandidates, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { SnapshotStore } from './snapshot.ts'
 
@@ -202,23 +202,17 @@ async function commitEntry(
  * agent and the user both see the conversation as it was at the target. The
  * marker only exists as the surface-replacement carrier in the append-only
  * log (audit).
+ *
+ * The marker's turn comes from `markerTurnOf` — the LAST STARTED turn, never
+ * `lastTurn + 1`: the harness numbers its next real turn exactly `lastTurn
+ * turn/start + 1`, so a `maxTurn + 1` marker collides with the following
+ * `turn/start` and breaks history replay (see `markerTurnOf`).
  */
 function buildMarker(): AssistantMessage {
   return createAssistantMessage({
     content: [],
     source: { provider: 'dsh-rewind', model: 'rewind-marker' },
   })
-}
-
-/** Next turn number for the marker event (past every recorded turn). */
-function nextTurnOf(session: Session): number {
-  let max = -1
-  for (const event of session.events) {
-    if (event.type === 'turn/start' || event.type === 'turn/end' || event.type === 'assistant/message') {
-      if (event.data.turn > max) max = event.data.turn
-    }
-  }
-  return max + 1
 }
 
 /** Render a parsed target for the step-2 hint. */
@@ -302,7 +296,7 @@ async function executeRewind(
     // model context and renders nothing, so the surface simply ends before
     // the withdrawn messages — agent and user both see the conversation as
     // it was before the target.
-    event = agent.session.append('assistant/message', { turn: nextTurnOf(agent.session), step: 0, message: marker }, {
+    event = agent.session.append('assistant/message', { turn: markerTurnOf(agent.session.events), step: 0, message: marker }, {
       surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
       sourceEventSeqs: [...plan.shadowedSeqs],
     })

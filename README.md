@@ -61,6 +61,7 @@ The plugin appends an **empty-content marker** `assistant/message` into the sess
 
 - The marker carries `sourceEventSeqs` covering every shadowed node, and the `Session.append` surface rules validate the cut (only a contiguous range on the current surface).
 - Because the marker is **empty**, the harness derives it to `null` — it never enters the model context and never renders as conversation content. The agent and the user both see the conversation exactly as it was at the target.
+- The marker's **turn number reuses the LAST STARTED turn** (`markerTurnOf`), never `lastTurn + 1`: the harness's agent loop numbers its next real turn exactly `last turn/start + 1`, so a marker numbered the same way would leave an `assistant/message` BEFORE the `turn/start` of the same turn — the client conversation-context builder rejects that ordering with `conversation Context …:turn-tail… received an update before its start Match`, history load fails, and the whole conversation disappears from the UI (the real defect in ≤ 0.2.4, fixed in 0.2.5). Reusing an already-consumed turn makes the marker a harmless trailing update on the previous completed turn's tail — it can never collide with a future turn.
 - The append-only log is **untouched** — the audit trail keeps every withdrawn event; only the model-visible surface is cut, so the next request derives its context from the target onward.
 
 A running turn (LLM thinking / streaming) is force-stopped first (`cancel({ kind: 'user' })`) and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
@@ -75,6 +76,32 @@ The plugin tracks the write-class tools — `write`, `edit`, `str_replace_editor
 4. A failed tool body that **throws** skips `tools/post-execute`; a `tools/result` safety net clears the pending capture so nothing leaks in memory.
 
 Backups persist across host restarts, bounded to the newest 100 anchor groups per session.
+
+## 🔧 Troubleshooting: history load failure (`…turn-tail… received an update before its start Match`)
+
+Versions ≤ 0.2.4 corrupted client replay when a rewind was **followed by further
+conversation**: the marker's turn number collided with the next real turn's
+`turn/start`, so reopening the session showed
+`Failed to load history: conversation Context …:turn-tail… received an update before its start Match (internal)`
+and the history vanished. Rewinds created from 0.2.5 on no longer produce the
+collision, but **already-corrupted sessions need an offline repair** (the log is
+append-only — it cannot be rewritten in memory):
+
+```sh
+# 1. Fully quit dsh web / host first (while a session is resident in memory,
+#    a disk repair is overwritten by the next checkpoint)
+# 2. Run the offline repair script (scans every session under ~/.dsh/sessions,
+#    rewriting each marker's turn back to the last started turn)
+node scripts/repair-markers.mjs            # default: scan ~/.dsh/sessions
+node scripts/repair-markers.mjs --dry-run  # report only, no writes
+node scripts/repair-markers.mjs --dir <sessions root>  # custom data dir
+# 3. Restart dsh web — the repaired sessions load their history again
+```
+
+The script only rewrites the `data.turn` of `dsh-rewind` empty-marker events
+(keeping seqs, order, and the zstd frame structure intact), backs up the original
+file to `session.jsonl.zstd.bak-<timestamp>` before writing, and never touches
+any other event — safe to run repeatedly.
 
 ## 📦 Install
 

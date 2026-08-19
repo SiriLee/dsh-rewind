@@ -74,6 +74,38 @@ export interface RewindPlan {
 /** Preview length cap for candidate listings. */
 export const CANDIDATE_PREVIEW_CHARS = 80
 
+/**
+ * Turn number for the rewind marker.
+ *
+ * The marker MUST NOT reuse the harness's next-turn number. The agent loop
+ * numbers its next real turn `lastTurn/start + 1` (dsh-agent-loop), so a
+ * marker numbered `maxTurn + 1` collides: the log then holds an
+ * `assistant/message` (the marker) BEFORE the `turn/start` of the same turn,
+ * and the client conversation-context builder rejects that ordering with
+ * `conversation Context …:turn-tail… received an update before its start
+ * Match` — history load fails and the whole conversation disappears from the
+ * UI (reproduced across real sessions).
+ *
+ * The marker therefore reuses the LAST STARTED turn's number: the harness has
+ * already consumed it (its next turn is strictly larger), so it can never be
+ * reused by a future `turn/start`, and the marker lands as a harmless
+ * trailing update on that turn's already-closed tail context (its `turn/end`
+ * is already matched) — no new context, no reordering, nothing rendered, and
+ * the empty content still derives to `null` in the model context.
+ *
+ * @param events - the full session event log.
+ * @returns a turn number the harness can never reuse for a future `turn/start`.
+ */
+export function markerTurnOf(events: readonly SessionEvent[]): number {
+  let lastStarted = 0
+  for (const event of events) {
+    if (event.type === 'turn/start' && event.data.turn > lastStarted) {
+      lastStarted = event.data.turn
+    }
+  }
+  return lastStarted
+}
+
 /** Narrow an event to a user message. */
 export function isUserMessageEvent(
   event: SessionEvent,

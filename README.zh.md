@@ -61,6 +61,7 @@
 
 - 标记携带 `sourceEventSeqs` 覆盖所有被遮蔽节点，`Session.append` 的 surface 规则校验切割合法性（仅限当前 surface 上的连续区间）。
 - 因为标记**内容为空**，harness 会将其派生为 `null`——永不进入模型上下文、也永不渲染成对话内容。agent 与用户看到的对话都回到目标消息当时的样子。
+- 标记的 **turn 号复用最后一个已开始的回合**（`markerTurnOf`），而不是「最后回合 + 1」：harness 的 agent loop 恰好用 `最后 turn/start + 1` 编号下一条真实回合。若标记也取这个数，日志里就会出现同一 turn 的 `assistant/message` 先于 `turn/start` 的乱序，客户端 conversation 构建器会以 `conversation Context …:turn-tail… received an update before its start Match` 拒绝重放——历史加载失败、整个对话从界面消失（0.2.4 及之前的真实缺陷，已在 0.2.5 修复）。复用已消费的 turn 号则标记只是上一个已完成回合尾部的一次无害追加，永不与新回合冲突。
 - append-only 日志**不被改写**——审计轨迹完整保留每条被撤回的事件，只有模型可见的 surface 被剪掉，下一条请求从目标消息起派生上下文。
 
 若 agent 正在运行（LLM 思考/流式输出），会先强制停止（`cancel({ kind: 'user' })`）并等待 quiescence 再回退；停不下来则中止并报错。
@@ -75,6 +76,26 @@
 4. 工具体**抛异常**会跳过 `tools/post-execute`；`tools/result` 兜底清掉 pending，避免内存泄漏。
 
 备份跨 host 重启持久化，每会话有界保留最近 100 组锚点。
+
+## 🔧 故障修复：历史加载失败（`…turn-tail… received an update before its start Match`）
+
+0.2.4 及之前版本在回退**之后继续对话**的场景下会损坏会话的客户端重放：标记的 turn 号
+与下一条真实回合的 `turn/start` 编号冲突，重新打开会话时界面报
+`历史加载失败：conversation Context …:turn-tail… received an update before its start Match（internal）`，
+历史整段消失。0.2.5 起新的回退不再产生该冲突；但**已损坏的会话需要离线修复**（日志是
+append-only 的，不能在内存中改写）：
+
+```sh
+# 1. 先完全退出 dsh web / host（会话处于驻留内存时，磁盘修复会被下次 checkpoint 覆盖）
+# 2. 运行离线修复脚本（扫描 ~/.dsh/sessions 下所有会话，把标记 turn 改回最后一个已开始的回合）
+node scripts/repair-markers.mjs            # 默认扫描 ~/.dsh/sessions
+node scripts/repair-markers.mjs --dry-run  # 只报告不写盘
+node scripts/repair-markers.mjs --dir <sessions 根目录>  # 指定数据目录
+# 3. 重启 dsh web，损坏的会话即可正常加载历史
+```
+
+脚本只改写 `dsh-rewind` 空标记事件的 `data.turn` 字段（保持 seq / 顺序 / 帧结构不变），
+改前自动备份原文件为 `session.jsonl.zstd.bak-<时间戳>`；不改动任何其它事件，可安全重复运行。
 
 ## 📦 安装
 

@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
-  formatCandidate, listRewindCandidates, messagePreview, parseRewindTarget,
+  formatCandidate, listRewindCandidates, markerTurnOf, messagePreview, parseRewindTarget,
   planRewind, RewindError,
 } from '../src/rewind.ts'
 
@@ -45,6 +45,36 @@ function sampleLog(): { events: readonly SessionEvent[]; surface: readonly numbe
     assistantEvent(5, 'third answer'),
   ]
   return { events, surface: [0, 1, 2, 3, 4, 5] }
+}
+
+function turnStartEvent(seq: number, turn: number): SessionEvent<'turn/start'> {
+  return { type: 'turn/start', seq, time: seq * 60_000, data: { turn } } as SessionEvent<'turn/start'>
+}
+
+function turnEndEvent(seq: number, turn: number): SessionEvent<'turn/end'> {
+  return {
+    type: 'turn/end',
+    seq,
+    time: seq * 60_000,
+    data: { turn, reason: { kind: 'completed' } },
+  } as SessionEvent<'turn/end'>
+}
+
+/**
+ * A realistic session log with two completed turns, exactly like the harness
+ * produces: turn 1 (u0..a1), turn 2 (u2..a3), closed by `turn/end 2`.
+ */
+function twoTurnLog(): readonly SessionEvent[] {
+  return [
+    turnStartEvent(0, 1),
+    userEvent(1, 'first question'),
+    assistantEvent(2, 'first answer'),
+    turnEndEvent(3, 1),
+    turnStartEvent(4, 2),
+    userEvent(5, 'second question'),
+    assistantEvent(6, 'second answer'),
+    turnEndEvent(7, 2),
+  ]
 }
 
 describe('parseRewindTarget', () => {
@@ -193,5 +223,56 @@ describe('rewind marker message shape', () => {
     expect(marker.role).toBe('user')
     expect(marker.source.kind).toBe('user')
     expect(marker.content[0]!.type).toBe('text')
+  })
+})
+
+describe('markerTurnOf (regression: marker turn must never collide with the harness next turn)', () => {
+  it('reuses the LAST STARTED turn, never lastTurn + 1', () => {
+    const events = twoTurnLog()
+    // The harness numbers its next real turn `last turn/start + 1` = 3. A
+    // marker numbered 3 would precede the future `turn/start 3` and break the
+    // client conversation-context builder ("received an update before its
+    // start Match"). The marker must reuse an already-consumed turn instead.
+    expect(markerTurnOf(events)).toBe(2)
+    expect(markerTurnOf(events)).not.toBe(3)
+  })
+
+  it('stays collision-free after the harness continues the conversation (the exact crash repro)', () => {
+    const events = [...twoTurnLog()]
+    // The rewind executes: an empty marker is appended with markerTurnOf…
+    const markerTurn = markerTurnOf(events)
+    events.push({ ...assistantEvent(8, ''), data: { turn: markerTurn, step: 0, message: createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } }) } } as SessionEvent<'assistant/message'>)
+    // …and then the harness opens its NEXT real turn: `last turn/start + 1`.
+    const nextRealTurn = markerTurn + 1
+    events.push(turnStartEvent(9, nextRealTurn))
+    // The client builder requires every `turn/start` to be the FIRST match of
+    // its turn-tail context — no `assistant/message` may precede it.
+    const markerEvent = events[events.length - 2] as SessionEvent<'assistant/message'>
+    const turnStart = events[events.length - 1] as SessionEvent<'turn/start'>
+    expect(turnStart.data.turn).toBe(3)
+    expect(markerEvent.data.turn).not.toBe(turnStart.data.turn)
+  })
+
+  it('ignores assistant/message and turn/end turn numbers (legacy markers included)', () => {
+    const events = [
+      ...twoTurnLog(),
+      // A legacy (pre-fix) marker numbered 3 followed by the harness turn/start 3.
+      { ...assistantEvent(8, ''), data: { turn: 3, step: 0, message: createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } }) } } as SessionEvent<'assistant/message'>,
+      turnStartEvent(9, 3),
+      userEvent(10, 'continued'),
+      assistantEvent(11, 'answer'),
+      turnEndEvent(12, 3),
+    ]
+    // The next rewind must NOT pick 4 (the next harness turn) nor 3 (taken by
+    // the legacy marker + real turn): it reuses the last STARTED turn, 3 —
+    // already consumed, so the harness's next turn (4) stays free.
+    expect(markerTurnOf(events)).toBe(3)
+    expect(markerTurnOf(events)).not.toBe(4)
+  })
+
+  it('returns 0 for a log with no turn/start yet', () => {
+    const { events } = sampleLog()
+    expect(events.some(event => event.type === 'turn/start')).toBe(false)
+    expect(markerTurnOf(events)).toBe(0)
   })
 })

@@ -203,8 +203,24 @@ export function apply(ctx: ClientContext): void {
           hidden.delete(seat)
         }
       }
-      // Fill the composer with the withdrawn target's text, once per target.
-      if (session !== undefined) fillComposerForRewind(session, filledTargets)
+      // Snapshot the composer-fill baseline on the first scan that sees any
+      // chat content: everything already present is "pre-existing" and must
+      // not re-fill the composer on this page load.
+      if (session !== undefined) {
+        const snap = session.getSnapshot()
+        if (!fillBaselineTaken && snap.chat.order.length > 0) {
+          fillBaselineTaken = true
+          for (const key of snap.chat.order) {
+            const node = snap.chat.nodes.get(key)
+            if (node?.kind === 'command') {
+              const command = node.data as CommandNode
+              if (command.seq > fillBaselineSeq) fillBaselineSeq = command.seq
+            }
+          }
+        }
+        // Fill the composer with the withdrawn target's text, once per target.
+        fillComposerForRewind(session, filledTargets)
+      }
       // Diagnostics (only when something is hidden): confirm the hiding path
       // actually fires in the browser.
       if (hiddenSeqs.size > 0 || hiddenCount > 0) {
@@ -218,6 +234,13 @@ export function apply(ctx: ClientContext): void {
     }
 
     const filledTargets = new Set<number>()
+    // The highest command-node seq already present when this page's chat first
+    // populated. Rewind commands that settled BEFORE this page loaded must not
+    // re-fill the composer on every reload — the withdrawn text belongs to the
+    // moment of the rewind, not to every future visit. Only commands with a
+    // seq ABOVE this baseline (i.e. executed in this page) fill the composer.
+    let fillBaselineSeq = -1
+    let fillBaselineTaken = false
     /**
      * When a rewind command settles successfully, put the withdrawn target
      * message's text back into the composer so the user can edit and re-send.
@@ -229,6 +252,10 @@ export function apply(ctx: ClientContext): void {
         if (node === undefined || node.kind !== 'command') continue
         const command = node.data as CommandNode
         if (command.name !== 'rewind' || command.outcome?.kind !== 'success') continue
+        // Pre-existing commands (loaded with the initial window) already filled
+        // the composer in the page where they ran; refilling on a later visit
+        // would resurrect withdrawn text the user already re-sent or edited.
+        if (command.seq <= fillBaselineSeq) continue
         // Only commands that ACTUALLY rewound (a marker event exists, carried
         // as `sourceEventSeq`) fill the composer. A `preview` outcome is also
         // 'success' and its text contains "seq N", but it appends no marker —
