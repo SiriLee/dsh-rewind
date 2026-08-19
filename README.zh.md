@@ -80,6 +80,8 @@
 
 已发布 npm——推荐走 registry 路径。**装完重启 dsh web（`--profile web`）。**
 
+> ⚠️ 注意：npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
+
 ### 方式 A：registry（推荐）
 
 ```sh

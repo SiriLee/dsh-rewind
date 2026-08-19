@@ -80,6 +80,8 @@ Backups persist across host restarts, bounded to the newest 100 anchor groups pe
 
 Published to npm — the registry path is the recommended one. **Restart dsh web (`--profile web`) after installing.**
 
+> ⚠️ Note: the npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
+
 ### Option A: registry (recommended)
 
 ```sh
