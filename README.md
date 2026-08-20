@@ -117,7 +117,7 @@ The essential difference: dsh-turn-rewind keeps the log immutable and therefore 
 
 ## Known issues
 
-Rewinds created before `v0.2.5` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). The offline repair tool ships **inside the npm package** (`dsh-rewind-repair`). This only affects sessions you already had before upgrading — a fresh v0.2.7 install never hits it.
+Rewinds created before `v0.2.5` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). The offline repair tool ships **inside the npm package** (`dsh-rewind-repair`). This only affects sessions you already had before upgrading — a fresh install never hits it.
 
 Full instructions: [docs/troubleshooting.md](docs/troubleshooting.md)
 
