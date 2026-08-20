@@ -45,14 +45,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 > ⚠️ npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
 
-本地 checkout 或 pin 一个 GitHub commit：
-
-```sh
-dsh plugin --profile web add /path/to/dsh-rewind              # 本地 checkout
-dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>  # pin commit
-```
-
-git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本。按 CLI 提示在 profile 的 `pnpm-workspace.yaml` 中加 `allowBuilds` 后重试——pnpm 会执行插件的 `prepare`（完整构建）并装入 profile。
+给贡献者：可从本地 checkout 或 pin 的 commit 安装——`dsh plugin --profile web add /path/to/dsh-rewind` 或 `dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>`。git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本，需先在 profile 的 `pnpm-workspace.yaml` 加 `allowBuilds`；之后 pnpm 会执行插件的 `prepare`（完整构建）并装入 profile。
 
 ## 使用
 
@@ -70,7 +63,7 @@ git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本。按
 
 - 标记携带 `sourceEventSeqs` 覆盖所有被遮蔽节点，`Session.append` 的 surface 规则校验切割合法性（仅限当前 surface 上的连续区间）。
 - 因为标记**内容为空**，harness 会将其派生为 `null`——永不进入模型上下文、也永不渲染成对话内容。agent 与用户看到的对话都回到目标消息当时的样子。
-- 标记的 **turn 号复用最后一个已开始的回合**（`markerTurnOf`），而不是「最后回合 + 1」：harness 恰好用 `最后 turn/start + 1` 编号下一条真实回合。若标记也取这个数，日志里就会出现同一 turn 的 `assistant/message` 先于 `turn/start` 的乱序，客户端 conversation 构建器会以 `conversation Context …:turn-tail… received an update before its start Match` 拒绝重放——历史加载失败、整个对话从界面消失（0.2.4 及之前的真实缺陷，已在 0.2.5 修复）。复用已消费的 turn 号则标记只是上一个已完成回合尾部的一次无害追加，永不与新回合冲突。
+- 标记的 **turn 号复用最后一个已开始的回合**（`markerTurnOf`），而不是「最后回合 + 1」：harness 恰好用 `最后 turn/start + 1` 编号下一条真实回合。若标记也取这个数，日志里就会出现同一 turn 的 `assistant/message` 先于 `turn/start` 的乱序，客户端 conversation 构建器会以 `conversation Context …:turn-tail… received an update before its start Match` 拒绝重放——历史加载失败、整个对话从界面消失。复用已消费的 turn 号则标记只是上一个已完成回合尾部的一次无害追加，永不与新回合冲突。
 - append-only 日志**不被改写**——审计轨迹完整保留每条被撤回的事件，只有模型可见的 surface 被剪掉，下一条请求从目标消息起派生上下文。
 
 若 agent 正在运行（LLM 思考/流式输出），会先强制停止（`cancel({ kind: 'user' })`）并等待 quiescence 再回退；停不下来则中止并报错。

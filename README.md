@@ -45,14 +45,7 @@ Restart `dsh web` (`--profile web`) after installing.
 
 > ⚠️ The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
 
-From a local checkout or a pinned GitHub commit:
-
-```sh
-dsh plugin --profile web add /path/to/dsh-rewind              # local checkout
-dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>  # pinned commit
-```
-
-A git install fails on first run: pnpm blocks git dependencies from running build scripts. Follow the CLI hint to add an `allowBuilds` key to the profile's `pnpm-workspace.yaml`, then retry — pnpm runs the plugin's `prepare` (full build) and installs it.
+For contributors: install from a local checkout or a pinned commit — `dsh plugin --profile web add /path/to/dsh-rewind` or `dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>`. A git install fails on first run until you add an `allowBuilds` key to the profile's `pnpm-workspace.yaml` (pnpm blocks git dependencies from running build scripts); after that it runs the plugin's `prepare` and installs it.
 
 ## Usage
 
@@ -70,7 +63,7 @@ The plugin appends an **empty-content marker** `assistant/message` into the sess
 
 - The marker carries `sourceEventSeqs` covering every shadowed node, and `Session.append`'s surface rules validate the cut (a contiguous range on the current surface).
 - Because the marker is **empty**, the harness derives it to `null` — it never enters the model context and never renders as conversation content. Agent and user both see the conversation exactly as it was at the target.
-- The marker's **turn number reuses the last started turn** (`markerTurnOf`), never `lastTurn + 1`: the harness numbers its next real turn exactly `last turn/start + 1`, so a `maxTurn + 1` marker would sit *before* that `turn/start` — the client conversation builder rejects the ordering (`…turn-tail… received an update before its start Match`), history load fails, and the whole conversation disappears from the UI (the real defect in ≤ 0.2.4, fixed in 0.2.5). Reusing an already-consumed turn makes the marker a harmless trailing update on the previous completed turn's tail — it can never collide with a future turn.
+- The marker's **turn number reuses the last started turn** (`markerTurnOf`), never `lastTurn + 1`: the harness numbers its next real turn exactly `last turn/start + 1`, so a `maxTurn + 1` marker would sit *before* that `turn/start` — the client conversation builder rejects the ordering (`…turn-tail… received an update before its start Match`) and history load fails. Reusing an already-consumed turn makes the marker a harmless trailing update on the previous completed turn's tail — it can never collide with a future turn.
 - The append-only log is **untouched** — every withdrawn event stays in the audit trail; only the model-visible surface is cut, so the next request derives its context from the target onward.
 
 A running turn (LLM thinking / streaming) is force-stopped first (`cancel({ kind: 'user' })`) and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
