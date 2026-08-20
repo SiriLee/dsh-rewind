@@ -9,9 +9,11 @@
  *                   wrapped in the web boot handoff
  *                   `window.__ModuleLoader__.load({ id, factory })`, the
  *                   closure-factory format every `dsh.client` package's
- *                   `./client` export must use. The client half is fully
- *                   self-contained (plain DOM, no React), so nothing is
- *                   external and the injected `require` is never called.
+ *                   `./client` export must use. The client half is plain DOM
+ *                   plus a React portal bridge: `react`, `react-dom` and
+ *                   `react/jsx-runtime` stay external so the injected
+ *                   `require` resolves them from the harness web profile's
+ *                   module graph (the profile ships React 18).
  *
  * Type checking is a separate step (`npm run typecheck`, tsc --noEmit); this
  * script only transpiles (esbuild) and runs smoke checks: both outputs must
@@ -47,7 +49,7 @@ await build({
   sourcemap: false,
 })
 
-// ---- client half: bundled TS -> CJS, then wrapped in the loader handoff ----
+// ---- client half: bundled TS/TSX -> CJS, then wrapped in the loader handoff ----
 await build({
   entryPoints: [join(ROOT, 'src', 'client', 'index.ts')],
   outfile: join(ROOT, 'lib', '_client.js'),
@@ -55,7 +57,10 @@ await build({
   platform: 'browser',
   target: 'es2020',
   bundle: true,
-  external: [],
+  // React stays external: the web profile's module loader resolves these
+  // from the harness installation (the profile ships react@18).
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
+  jsx: 'automatic',
   sourcemap: false,
 })
 const clientSource = await readFile(join(ROOT, 'lib', '_client.js'), 'utf8')

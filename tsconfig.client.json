@@ -5,7 +5,8 @@
     "declaration": true,
     "emitDeclarationOnly": true,
     "declarationDir": "lib/types/client",
-    "rootDir": "src/client"
+    "rootDir": "src/client",
+    "jsx": "react-jsx"
   },
-  "include": ["src/client/**/*.ts"]
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx"]
 }

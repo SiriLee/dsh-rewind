@@ -6,9 +6,6 @@
  * @module dsh-rewind/client/styles
  */
 
-/** Marker attribute set on a seat row once its rewind button is attached. */
-export const REWIND_ATTACHED = 'data-dsh-rewind-attached'
-
 /** Class names shared between the injected DOM and the stylesheet. */
 export const CLASS = {
   button: 'dsh-rewind-btn',
