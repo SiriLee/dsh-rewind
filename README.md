@@ -95,21 +95,16 @@ Backups persist across host restarts, bounded to the newest 100 anchor groups pe
 
 ## Comparison with similar projects
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) also has [Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind) — a rewind plugin with the same user-facing idea (a per-message action that rolls the conversation back and restores workspace files). The goals overlap, but the approach and positioning differ sharply:
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) also has [Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind) — a rewind plugin with the same user-facing idea (a per-message action that rolls the conversation back and restores workspace files), but a different approach:
 
 | Dimension | dsh-rewind (this plugin) | Anionex dsh-turn-rewind |
 | --- | --- | --- |
-| Conversation rollback | **In-place, same session/window** — an empty marker `assistant/message` uses `surfaceOp: replace` to cut the model-visible surface back to the target; the append-only log is untouched | **Forks a new Session** — DSH logs are append-only, so "restart" creates a blank/forked session at the previous `turn/end`; the original session is always retained |
-| Claude Code `/rewind` semantics | Faithful: time-travel cut, the withdrawn message is refilled into the composer, the code-restore option hides when no tracked changes exist | Different shape: restore-and-restart vs restore-files-only, plus a native **Branch** button for conversation-only branching |
-| File-restore engine | **Lightweight before-backups** of write-class tools only (`write`/`edit`/`str_replace_editor`), captured at `tools/execute`, persisted to disk, restored via plain `node:fs` | **Change Ledger** — a durable, content-addressed restore-point engine with Git-worktree/HEAD/branch fences, expiring plans, an approval gate, auto rescue points, hash verification, rollback and crash reconciliation; supports Git worktrees only |
-| Tracked-change scope | Only write-class tool edits (like Claude Code) — `bash` and external edits are not tracked | Any Git-managed file (tracked / untracked / links / modes), explicitly refusing sparse checkouts, submodules and ignored files |
-| Subagent edits | Not tracked (Claude Code alignment) | Not tracked |
-| Git control plane | Never touched | Never touched (but requires a Git worktree) |
-| Public service API | No — a focused single-purpose plugin | Yes — exposes `ctx.changeLedger` for other plugins plus a `/turn-rewind` HTTP endpoint |
-| Position | A thin, opinionated Claude-Code-style rewind for the dsh web UI | A reusable, defensive restore engine with a Web dialog on top |
-| License | MIT | BSD-3-Clause |
+| Conversation rollback | **In-place, same session/window** — the model-visible surface is cut back to the target; the append-only log is untouched | **Forks a new Session** at the previous `turn/end`; the original session is always retained |
+| File-restore engine | **Lightweight before-backups** of write-class tools only, restored via plain `node:fs` | **Change Ledger** — a durable restore-point engine with Git fences, an approval gate, rescue points and crash reconciliation |
+| Tracked-change scope | Only write-class tool edits (like Claude Code) | Any Git-managed file (Git worktree required) |
+| Public service API | No — a focused single-purpose plugin | Yes — `ctx.changeLedger` service + `/turn-rewind` HTTP endpoint |
 
-**What makes this plugin distinct:** the *in-place, same-window time travel*. Because dsh-turn-rewind keeps the log immutable it must fork a new session; this plugin instead cuts the model-visible surface with an empty marker, so the original conversation continues in the same window and the audit log stays complete. That surface-cut is the non-trivial part (the marker turn must reuse the last started turn or history replay breaks — see [Known issues](#known-issues)), and it is precisely the piece dsh-turn-rewind sidesteps.
+The essential difference: dsh-turn-rewind keeps the log immutable and therefore forks a new session; this plugin cuts the model-visible surface in place with an empty marker, so the original conversation continues in the same window — the non-trivial part (see [Known issues](#known-issues)) that dsh-turn-rewind sidesteps.
 
 ## Compatibility
 

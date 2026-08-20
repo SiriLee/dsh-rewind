@@ -95,21 +95,16 @@ git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本。按
 
 ## 与同类项目对比
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 还有 [Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind)——同样是回退插件，用户面想法相同（每条消息下挂一个动作，回退对话并还原工作区文件）。目标重叠，但**路线与定位差异明显**：
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 还有 [Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind)——同样是回退插件，用户面想法相同（每条消息下挂一个动作，回退对话并还原工作区文件），但路线不同：
 
 | 维度 | dsh-rewind（本项目） | Anionex dsh-turn-rewind |
 | --- | --- | --- |
-| 对话回退 | **同窗口就地**——追加空标记 `assistant/message`，用 `surfaceOp: replace` 把模型可见 surface 剪回目标；append-only 日志原封不动 | **派生新 Session**——DSH 日志不可变，所以「restart」是在上一个 `turn/end` 处新建/派生会话；原会话永远保留 |
-| Claude Code `/rewind` 语义 | 忠实：时间旅行剪断、被撤回消息回填输入框、无跟踪变更时隐藏代码还原选项 | 形态不同：还原并重启 vs 仅还原文件，另有原生 **Branch** 按钮做纯对话分支 |
-| 文件还原引擎 | **轻量写前备份**，只跟踪写类工具（`write`/`edit`/`str_replace_editor`），`tools/execute` 捕获、落盘、纯 `node:fs` 还原 | **Change Ledger**——持久化、内容寻址的还原点引擎，带 Git worktree/HEAD/branch 围栏、过期计划、审批门、自动救援点、哈希校验、失败回滚与崩溃对账；仅支持 Git worktree |
-| 跟踪范围 | 仅写类工具编辑（同 Claude Code）——`bash` 与外部改动不跟踪 | 任意 Git 管理文件（tracked/untracked/链接/权限位），显式拒绝 sparse checkout、submodule、忽略文件 |
-| 子代理编辑 | 不跟踪（对齐 Claude Code） | 不跟踪 |
-| Git 控制面 | 从不触碰 | 从不触碰（但要求 Git worktree） |
-| 公共服务 API | 无——聚焦单用途插件 | 有——暴露 `ctx.changeLedger` 供其他插件 + `/turn-rewind` HTTP 端点 |
-| 定位 | 面向 dsh web UI 的轻量、有主张的 Claude Code 式回退 | 可复用的防御式还原引擎，外挂一个 Web 对话框 |
-| License | MIT | BSD-3-Clause |
+| 对话回退 | **同窗口就地**——把模型可见 surface 剪回目标；append-only 日志原封不动 | 在上一 `turn/end` 处**派生新 Session**；原会话永远保留 |
+| 文件还原引擎 | **轻量写前备份**，只跟踪写类工具，纯 `node:fs` 还原 | **Change Ledger**——持久化还原点引擎，带 Git 围栏、审批门、救援点与崩溃对账 |
+| 跟踪范围 | 仅写类工具编辑（同 Claude Code） | 任意 Git 管理文件（要求 Git worktree） |
+| 公共服务 API | 无——聚焦单用途插件 | 有——`ctx.changeLedger` 服务 + `/turn-rewind` HTTP 端点 |
 
-**本插件的独特性所在**：*同窗口、就地的时间旅行*。dsh-turn-rewind 因保持日志不可变而必须派生新会话；本插件改用空标记剪掉模型可见 surface，于是原对话在同一个窗口继续、审计日志保持完整。这段 surface 剪切并不平凡（标记 turn 必须复用最后一个已开始的回合，否则历史重放失败——见[已知问题](#已知问题)），而这恰恰是 dsh-turn-rewind 绕开的部分。
+本质区别：dsh-turn-rewind 因保持日志不可变而必须派生新会话；本插件用空标记**就地剪掉**模型可见 surface，于是原对话在同一个窗口继续——这段并不平凡的实现（见[已知问题](#已知问题)）正是 dsh-turn-rewind 绕开的部分。
 
 ## 兼容性
 
