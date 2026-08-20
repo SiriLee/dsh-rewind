@@ -1,0 +1,5 @@
+Hello DSH!
+This is a test file created at 2026-07-02.
+
+Session: dsh-rewind
+Purpose: testing file write capability
