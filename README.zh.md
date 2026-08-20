@@ -1,30 +1,28 @@
 # dsh-rewind
 
-[English](README.md)
-
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：**同一会话窗口的 in-place 对话回退**（Claude Code `/rewind` 语义）——把模型上下文剪回更早的一条用户消息，并可基于**落盘的写前备份**还原工作区文件。
-
-> **状态**：已发布 npm（`dsh-rewind-plugin`，v0.2.7），经 GitHub Actions Trusted Publishing + Sigstore provenance 构建发布。目标为 web 配置档（`dsh --profile web`）。交互以 Claude Code 的 rewind 为参考，并贴合 dsh Web 实际 UI。
->
-> **v0.2.7 要点**：输入框回填改为事件驱动（重开会话不再复活已撤回文本）；子代理编辑不跟踪（对齐 Claude Code）；并发回退有防护；「回退代码」选项仅在存在跟踪变更时显示（兼容新旧 host/client 混合版本）。
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![npm license](https://img.shields.io/npm/l/dsh-rewind-plugin.svg)](https://github.com/SiriLee/dsh-rewind/blob/main/LICENSE)
+
+> **状态**：已发布 npm（`dsh-rewind-plugin`，v0.2.7），经 GitHub Actions Trusted Publishing + Sigstore provenance 构建发布。目标为 web 配置档（`dsh --profile web`）；交互以 Claude Code 的 rewind 为参考，贴合 dsh Web 实际 UI。
+
+[English](README.md)
 
 ## 目录
 
 - [✨ 功能特性](#-功能特性)
 - [📸 截图](#-截图)
+- [安装](#安装)
+- [使用](#使用)
 - [工作原理](#工作原理)
 - [与同类项目对比](#与同类项目对比)
-- [📦 安装](#-安装)
-- [使用](#使用)
-- [行为细节与限制](#行为细节与限制)
-- [明确不包含](#明确不包含)
 - [兼容性](#兼容性)
+- [限制](#限制)
+- [已知问题](#已知问题)
+- [安全](#安全)
 - [开发](#开发)
 - [发布](#发布)
-- [目录结构](#目录结构)
 - [License](#license)
 
 ## ✨ 功能特性
@@ -54,6 +52,54 @@
   </tr>
 </table>
 
+## 安装
+
+已发布 npm——推荐走 registry 路径。**装完重启 dsh web（`--profile web`）。**
+
+> ⚠️ 注意：npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
+
+### 方式 A：registry（推荐）
+
+```sh
+dsh plugin --profile web add dsh-rewind-plugin
+```
+
+### 方式 B：本地 checkout（作者 / 贡献者）
+
+```sh
+cd dsh-rewind
+npm install      # devDeps 来自 npm registry，无需 harness checkout
+npm run build    # 完整构建：lib/（host ESM + client bundle + .d.ts）
+dsh plugin --profile web add /path/to/dsh-rewind   # link 安装
+```
+
+### 方式 C：GitHub（pin commit，可复现）
+
+```sh
+dsh plugin --profile web add github:SiriLee/dsh-rewind#<commit-sha>
+```
+
+首次安装会失败：pnpm 默认禁止 git 依赖执行构建脚本。按 CLI 提示在 profile 的 `pnpm-workspace.yaml`（如 `$DSH_HOME/profiles/web/pnpm-workspace.yaml`）中加 `allowBuilds` 后重试；pnpm 随后会执行插件的 `prepare`（完整构建）并装入 profile。
+
+## 使用
+
+### 通过消息旁的按钮回退
+
+1. **hover** 任意你发送过的用户消息——操作行出现 **↶ 回退** 按钮。
+2. **点击它。** 目标即这条消息（第一步完成）。弹出小浮层（第二步）：
+   - **仅回退对话** —— 把模型上下文剪回这条消息之前；工作区文件不动。
+   - **回退对话和代码** —— 同样的上下文裁剪，并把工作区文件还原到该消息之前的状态。先显示影响清单（待还原/删除的文件），确认后执行。
+   - 目标之后**没有**跟踪的文件变更时，该选项**不显示**（对齐 Claude Code 行为）。
+3. 回退以一条会话内命令执行；结果消息确认（如「已撤回 seq N 及之后内容；还原 M 个文件」），被撤回消息的文本自动填入输入框，可编辑后重发。
+
+### 回退 = 撤回（时间回溯）
+
+回退到某消息会**撤回该消息及它之后的所有内容**——渲染对话与 agent 上下文都回到这条消息之前。命令结果会说明，且该消息文本会填回输入框供重发。
+
+### 手动 `/rewind` 不支持
+
+`/rewind` 命令仅作为按钮的内部调用通道存在。在输入框手动输入 `/rewind`（含裸命令）会被**拦截**——提交时弹出临时提示，指向消息旁的 ↶ 按钮。
+
 ## 工作原理
 
 两部分协同：**对话回退**（同窗口 in-place）与 **checkpoint 文件还原**（Claude Code 式写前备份）。
@@ -82,9 +128,7 @@
 
 ## 与同类项目对比
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 还有
-[Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind)——同样是回退插件，
-用户面想法相同（每条消息下挂一个动作，回退对话并还原工作区文件）。目标重叠，但**路线与定位差异明显**：
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 还有 [Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind)——同样是回退插件，用户面想法相同（每条消息下挂一个动作，回退对话并还原工作区文件）。目标重叠，但**路线与定位差异明显**：
 
 | 维度 | dsh-rewind（本项目） | Anionex dsh-turn-rewind |
 | --- | --- | --- |
@@ -98,69 +142,20 @@
 | 定位 | 面向 dsh web UI 的轻量、有主张的 Claude Code 式回退 | 可复用的防御式还原引擎，外挂一个 Web 对话框 |
 | License | MIT | BSD-3-Clause |
 
-**本插件的独特性所在**：*同窗口、就地的时间旅行*。dsh-turn-rewind 因保持日志不可变而必须
-派生新会话；本插件改用空标记剪掉模型可见 surface，于是原对话在同一个窗口继续、审计日志保持完整。
-这段 surface 剪切并不平凡（标记 turn 必须复用最后一个已开始的回合，否则历史重放失败——见下方已知问题），
-而这恰恰是 dsh-turn-rewind 绕开的部分。
+**本插件的独特性所在**：*同窗口、就地的时间旅行*。dsh-turn-rewind 因保持日志不可变而必须派生新会话；本插件改用空标记剪掉模型可见 surface，于是原对话在同一个窗口继续、审计日志保持完整。这段 surface 剪切并不平凡（标记 turn 必须复用最后一个已开始的回合，否则历史重放失败——见[已知问题](#已知问题)），而这恰恰是 dsh-turn-rewind 绕开的部分。
 
-## 🔧 已知问题：0.2.5 之前的旧会话可能需要离线修复
+## 兼容性
 
-`v0.2.5` 之前创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。
-离线修复工具**已随 npm 包内置**。只影响升级前就已存在的旧会话——全新安装的 v0.2.7 永不触发。
+- Node.js `^22.19.0 || >=24.0.0`。
+- DeepSeek Harness web 配置档（`dsh --profile web`）；peer `@deepseek-ai/*` 包由 harness 运行时解析。
 
-完整步骤见：[docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)
+> [!WARNING]
+> 本项目与 DeepSeek Harness 均处于开发者预览阶段。可复现环境请 pin 精确版本，
+> 并阅读上述行为说明。
 
-## 📦 安装
+## 限制
 
-已发布 npm——推荐走 registry 路径。**装完重启 dsh web（`--profile web`）。**
-
-> ⚠️ 注意：npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
-
-### 方式 A：registry（推荐）
-
-```sh
-dsh plugin --profile web add dsh-rewind-plugin
-```
-
-### 方式 B：本地 checkout（作者 / 贡献者）
-
-```sh
-cd dsh-rewind
-npm install      # devDeps 来自 npm registry，无需 harness checkout
-npm run build    # 完整构建：lib/（host ESM + client bundle + .d.ts）
-dsh plugin --profile web add /path/to/dsh-rewind   # link 安装
-```
-
-### 方式 C：GitHub（pin commit，可复现）
-
-```sh
-dsh plugin --profile web add github:SiriLee/dsh-rewind#<commit-sha>
-```
-
-首次安装会失败：pnpm 默认禁止 git 依赖执行构建脚本。按 CLI 提示在 profile 的
-`pnpm-workspace.yaml`（如 `$DSH_HOME/profiles/web/pnpm-workspace.yaml`）中加
-`allowBuilds` 后重试；pnpm 随后会执行插件的 `prepare`（完整构建）并装入 profile。
-
-## 使用
-
-### 通过消息旁的按钮回退
-
-1. **hover** 任意你发送过的用户消息——操作行出现 **↶ 回退** 按钮。
-2. **点击它。** 目标即这条消息（第一步完成）。弹出小浮层（第二步）：
-   - **仅回退对话** —— 把模型上下文剪回这条消息之前；工作区文件不动。
-   - **回退对话和代码** —— 同样的上下文裁剪，并把工作区文件还原到该消息之前的状态。先显示影响清单（待还原/删除的文件），确认后执行。
-   - 目标之后**没有**跟踪的文件变更时，该选项**不显示**（对齐 Claude Code 行为）。
-3. 回退以一条会话内命令执行；结果消息确认（如「已撤回 seq N 及之后内容；还原 M 个文件」），被撤回消息的文本自动填入输入框，可编辑后重发。
-
-### 回退 = 撤回（时间回溯）
-
-回退到某消息会**撤回该消息及它之后的所有内容**——渲染对话与 agent 上下文都回到这条消息之前。命令结果会说明，且该消息文本会填回输入框供重发。
-
-### 手动 `/rewind` 不支持
-
-`/rewind` 命令仅作为按钮的内部调用通道存在。在输入框手动输入 `/rewind`（含裸命令）会被**拦截**——提交时弹出临时提示，指向消息旁的 ↶ 按钮。
-
-## 行为细节与限制
+### 运行时行为
 
 - 只跟踪**插件运行期间、经写类工具**的变更（`write` / `edit` / `str_replace_editor`）。`bash`、其他工具或外部程序的修改不在备份内、无法还原——与 Claude Code 相同，官方同样不覆盖，此类回退交由用户 git 处理。
 - **子代理（subagent）的编辑不跟踪**——与 Claude Code 相同。子代理运行在自己的会话里，其备份无法被父会话的回退还原；插件直接跳过捕获，而不是记录到永远读不到的位置。
@@ -171,21 +166,22 @@ dsh plugin --profile web add github:SiriLee/dsh-rewind#<commit-sha>
 - ↶ 按钮只出现在**当前会话视图**渲染的用户消息行上；回退其他会话前先切换到该会话。
 - 目标之后没有跟踪的文件变更时，模式浮层只显示「仅回退对话」（Claude Code 同样隐藏 code-restore 选项）。
 
-## 明确不包含
+### 明确不做
 
 - 快捷键（esc+esc 打开回退菜单）——规划中的后续项。
 - `/compact` —— harness 已内置。
 - fork / 分支回退 —— harness 内置的「在新对话中分支」。
 - 整树 / git-first 快照（覆盖 bash 与外部修改）——**明确不做**，与 Claude Code 原生 rewind 保持一致（官方同样不覆盖，把此类回退交给用户 git）。
 
-## 兼容性
+## 已知问题
 
-- Node.js `^22.19.0 || >=24.0.0`。
-- DeepSeek Harness web 配置档（`dsh --profile web`）；peer `@deepseek-ai/*` 包由 harness 运行时解析。
+`v0.2.5` 之前创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。离线修复工具**已随 npm 包内置**（`dsh-rewind-repair`）。只影响升级前就已存在的旧会话——全新安装的 v0.2.7 永不触发。
 
-> [!WARNING]
-> 本项目与 DeepSeek Harness 均处于开发者预览阶段。可复现环境请 pin 精确版本，
-> 并阅读上述行为说明。
+完整步骤见：[docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)
+
+## 安全
+
+本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。文件写入仅在你选择「回退对话和代码」时发生，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。
 
 ## 开发
 
@@ -197,33 +193,11 @@ npm run build          # esbuild：lib/index.js（host ESM）+ lib/client.js（l
 node scripts/verify-host.mjs   # 端到端验证构建产物（18 项检查）
 ```
 
-`prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的
-`lib/` 与 `LICENSE`。
+`prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的 `lib/` 与 `LICENSE`。
 
-维护者参考：[docs/harness-reference.md](docs/harness-reference.md) 收录 DeepSeek
-Harness 接口文档（子系统文档 + 关键源码索引）。
+维护者参考：[docs/harness-reference.md](docs/harness-reference.md) 收录 DeepSeek Harness 接口文档（子系统文档 + 关键源码索引）。
 
-## 发布
-
-通过 GitHub Actions Trusted Publishing（OIDC，无存储 `NPM_TOKEN`）发布：
-
-```sh
-npm version patch && git push origin main --tags   # 触发 .github/workflows/publish.yml
-```
-
-- workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整构建 +
-  产物验证，以 `--provenance`（Sigstore）发布，并创建 GitHub Release。**幂等**——
-  已发布的版本会跳过。CI（`.github/workflows/ci.yml`）在每次 push / PR 跑相同检查，
-  外加 `npm pack --dry-run` 校验 tarball 含 `lib/` 与 `LICENSE`。
-- 一次性 npm 侧配置（仓库内无法代做）：打开
-  [dsh-rewind-plugin](https://www.npmjs.com/package/dsh-rewind-plugin) →
-  **settings → Trusted Publisher → Add**，Provider **GitHub Actions** ·
-  Organization or user **`SiriLee`** · Repository **`dsh-rewind`**（GitHub 仓库名，
-  与 npm 包名可不同）· Workflow filename **`publish.yml`** · Environment
-  **留空** · Allowed actions **`npm publish`**。配置好后 push `v<version>` tag
-  即自动发布。
-
-## 目录结构
+### 项目结构
 
 ```
 src/index.ts            host 插件：/rewind 命令 + checkpoint 流水线（tools/execute|post-execute）
@@ -245,9 +219,16 @@ cordis.patch.yml        bundle patch（挂载双面插件行）
 package.json            dsh.bundle + dsh.client 声明、optional peerDependencies
 ```
 
-## 安全
+## 发布
 
-本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。文件写入仅在你选择「回退对话和代码」时发生，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。
+通过 GitHub Actions Trusted Publishing（OIDC，无存储 `NPM_TOKEN`）发布：
+
+```sh
+npm version patch && git push origin main --tags   # 触发 .github/workflows/publish.yml
+```
+
+- workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整构建 + 产物验证，以 `--provenance`（Sigstore）发布，并创建 GitHub Release。**幂等**——已发布的版本会跳过。CI（`.github/workflows/ci.yml`）在每次 push / PR 跑相同检查，外加 `npm pack --dry-run` 校验 tarball 含 `lib/` 与 `LICENSE`。
+- 一次性 npm 侧配置（仓库内无法代做）：打开 [dsh-rewind-plugin](https://www.npmjs.com/package/dsh-rewind-plugin) → **settings → Trusted Publisher → Add**，Provider **GitHub Actions** · Organization or user **`SiriLee`** · Repository **`dsh-rewind`**（GitHub 仓库名，与 npm 包名可不同）· Workflow filename **`publish.yml`** · Environment **empty** · Allowed actions **`npm publish`**。配置完成后，推送 `v<版本>` tag 即自动发布。
 
 ## License
 
