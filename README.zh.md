@@ -237,6 +237,10 @@ cordis.patch.yml        bundle patch（挂载双面插件行）
 package.json            dsh.bundle + dsh.client 声明、optional peerDependencies
 ```
 
+## 安全
+
+本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。文件写入仅在你选择「回退对话和代码」时发生，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。
+
 ## License
 
 [MIT](LICENSE)

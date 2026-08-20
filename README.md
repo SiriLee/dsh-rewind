@@ -249,6 +249,10 @@ cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
 package.json            dsh.bundle + dsh.client manifests, optional peerDependencies
 ```
 
+## Security
+
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. File writes happen only when you choose "conversation and code" — before-backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials.
+
 ## License
 
 [MIT](LICENSE)
