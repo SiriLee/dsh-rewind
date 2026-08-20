@@ -16,6 +16,7 @@ In-place conversation rewind for [DeepSeek Harness](https://github.com/deepseek-
 - [✨ Features](#-features)
 - [📸 Screenshots](#-screenshots)
 - [How it works](#how-it-works)
+- [Comparison with similar projects](#comparison-with-similar-projects)
 - [📦 Install](#-install)
 - [Usage](#usage)
 - [Behavior details & limitations](#behavior-details--limitations)
@@ -79,37 +80,42 @@ The plugin tracks the write-class tools — `write`, `edit`, `str_replace_editor
 
 Backups persist across host restarts, bounded to the newest 100 anchor groups per session.
 
-## 🔧 Troubleshooting: history load failure (`…turn-tail… received an update before its start Match`)
+## Comparison with similar projects
 
-Versions ≤ 0.2.4 corrupted client replay when a rewind was **followed by further
-conversation**: the marker's turn number collided with the next real turn's
-`turn/start`, so reopening the session showed
-`Failed to load history: conversation Context …:turn-tail… received an update before its start Match (internal)`
-and the history vanished. Rewinds created from 0.2.5 on no longer produce the
-collision, but **already-corrupted sessions need an offline repair** (the log is
-append-only — it cannot be rewritten in memory).
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) also has
+[Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind) — a rewind
+plugin with the same user-facing idea (a per-message action that rolls the
+conversation back and restores workspace files). The goals overlap, but the
+approach and positioning differ sharply:
 
-The repair tool ships **inside the npm package** (`dsh-rewind-repair`) — no
-source checkout needed:
+| Dimension | dsh-rewind (this plugin) | Anionex dsh-turn-rewind |
+| --- | --- | --- |
+| Conversation rollback | **In-place, same session/window** — an empty marker `assistant/message` uses `surfaceOp: replace` to cut the model-visible surface back to the target; the append-only log is untouched | **Forks a new Session** — DSH logs are append-only, so "restart" creates a blank/forked session at the previous `turn/end`; the original session is always retained |
+| Claude Code `/rewind` semantics | Faithful: time-travel cut, the withdrawn message is refilled into the composer, the code-restore option hides when no tracked changes exist | Different shape: restore-and-restart vs restore-files-only, plus a native **Branch** button for conversation-only branching |
+| File-restore engine | **Lightweight before-backups** of write-class tools only (`write`/`edit`/`str_replace_editor`), captured at `tools/execute`, persisted to disk, restored via plain `node:fs` | **Change Ledger** — a durable, content-addressed restore-point engine with Git-worktree/HEAD/branch fences, expiring plans, an approval gate, auto rescue points, hash verification, rollback and crash reconciliation; supports Git worktrees only |
+| Tracked-change scope | Only write-class tool edits (like Claude Code) — `bash` and external edits are not tracked | Any Git-managed file (tracked / untracked / links / modes), explicitly refusing sparse checkouts, submodules and ignored files |
+| Subagent edits | Not tracked (Claude Code alignment) | Not tracked |
+| Git control plane | Never touched | Never touched (but requires a Git worktree) |
+| Public service API | No — a focused single-purpose plugin | Yes — exposes `ctx.changeLedger` for other plugins plus a `/turn-rewind` HTTP endpoint |
+| Position | A thin, opinionated Claude-Code-style rewind for the dsh web UI | A reusable, defensive restore engine with a Web dialog on top |
+| License | MIT | BSD-3-Clause |
 
-```sh
-# 1. Fully quit dsh web / host first (while a session is resident in memory,
-#    a disk repair is overwritten by the next checkpoint)
-# 2. Run the offline repair (scans every session under ~/.dsh/sessions,
-#    rewriting each marker's turn back to the last started turn)
-npm exec --yes --package=dsh-rewind-plugin -- dsh-rewind-repair
-npm exec --yes --package=dsh-rewind-plugin -- dsh-rewind-repair -- --dry-run  # preview only
-# 3. Restart dsh web — the repaired sessions load their history again
-```
+**What makes this plugin distinct:** the *in-place, same-window time travel*.
+Because dsh-turn-rewind keeps the log immutable it must fork a new session; this
+plugin instead cuts the model-visible surface with an empty marker, so the
+original conversation continues in the same window and the audit log stays
+complete. That surface-cut is the non-trivial part (the marker turn must reuse
+the last started turn or history replay breaks — see the known issue below), and
+it is precisely the piece dsh-turn-rewind sidesteps.
 
-Or install it globally once (`npm i -g dsh-rewind-plugin`) and run
-`dsh-rewind-repair` directly; from a source checkout the same tool is
-`node scripts/repair-markers.mjs` (identical flags).
+## 🔧 Known issue: legacy sessions (pre-0.2.5) may need an offline repair
 
-The tool only rewrites the `data.turn` of `dsh-rewind` empty-marker events
-(keeping seqs, order, and the zstd frame structure intact), backs up the original
-file to `session.jsonl.zstd.bak-<timestamp>` before writing, and never touches
-any other event — safe to run repeatedly.
+Rewinds created before `v0.2.5` could corrupt client replay when followed by
+more conversation (a marker turn collides with the next `turn/start`). The
+offline repair tool ships **inside the npm package**. This only affects sessions
+you already had before upgrading — a fresh v0.2.7 install never hits it.
+
+Full instructions: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## 📦 Install
 
@@ -244,6 +250,7 @@ scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader
 scripts/verify-host.mjs end-to-end host verification (18 checks)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration, 46 cases)
 docs/harness-reference.md   maintainer docs: DeepSeek Harness interface reference
+docs/troubleshooting.md     known-issue / offline-repair guide (legacy sessions)
 assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
 package.json            dsh.bundle + dsh.client manifests, optional peerDependencies

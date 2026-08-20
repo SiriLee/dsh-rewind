@@ -16,6 +16,7 @@
 - [✨ 功能特性](#-功能特性)
 - [📸 截图](#-截图)
 - [工作原理](#工作原理)
+- [与同类项目对比](#与同类项目对比)
 - [📦 安装](#-安装)
 - [使用](#使用)
 - [行为细节与限制](#行为细节与限制)
@@ -79,29 +80,35 @@
 
 备份跨 host 重启持久化，每会话有界保留最近 100 组锚点。
 
-## 🔧 故障修复：历史加载失败（`…turn-tail… received an update before its start Match`）
+## 与同类项目对比
 
-0.2.4 及之前版本在回退**之后继续对话**的场景下会损坏会话的客户端重放：标记的 turn 号
-与下一条真实回合的 `turn/start` 编号冲突，重新打开会话时界面报
-`历史加载失败：conversation Context …:turn-tail… received an update before its start Match（internal）`，
-历史整段消失。0.2.5 起新的回退不再产生该冲突；但**已损坏的会话需要离线修复**（日志是
-append-only 的，不能在内存中改写）。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 还有
+[Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind)——同样是回退插件，
+用户面想法相同（每条消息下挂一个动作，回退对话并还原工作区文件）。目标重叠，但**路线与定位差异明显**：
 
-修复工具**已随 npm 包发布**（`dsh-rewind-repair`）——无需下载源码：
+| 维度 | dsh-rewind（本项目） | Anionex dsh-turn-rewind |
+| --- | --- | --- |
+| 对话回退 | **同窗口就地**——追加空标记 `assistant/message`，用 `surfaceOp: replace` 把模型可见 surface 剪回目标；append-only 日志原封不动 | **派生新 Session**——DSH 日志不可变，所以「restart」是在上一个 `turn/end` 处新建/派生会话；原会话永远保留 |
+| Claude Code `/rewind` 语义 | 忠实：时间旅行剪断、被撤回消息回填输入框、无跟踪变更时隐藏代码还原选项 | 形态不同：还原并重启 vs 仅还原文件，另有原生 **Branch** 按钮做纯对话分支 |
+| 文件还原引擎 | **轻量写前备份**，只跟踪写类工具（`write`/`edit`/`str_replace_editor`），`tools/execute` 捕获、落盘、纯 `node:fs` 还原 | **Change Ledger**——持久化、内容寻址的还原点引擎，带 Git worktree/HEAD/branch 围栏、过期计划、审批门、自动救援点、哈希校验、失败回滚与崩溃对账；仅支持 Git worktree |
+| 跟踪范围 | 仅写类工具编辑（同 Claude Code）——`bash` 与外部改动不跟踪 | 任意 Git 管理文件（tracked/untracked/链接/权限位），显式拒绝 sparse checkout、submodule、忽略文件 |
+| 子代理编辑 | 不跟踪（对齐 Claude Code） | 不跟踪 |
+| Git 控制面 | 从不触碰 | 从不触碰（但要求 Git worktree） |
+| 公共服务 API | 无——聚焦单用途插件 | 有——暴露 `ctx.changeLedger` 供其他插件 + `/turn-rewind` HTTP 端点 |
+| 定位 | 面向 dsh web UI 的轻量、有主张的 Claude Code 式回退 | 可复用的防御式还原引擎，外挂一个 Web 对话框 |
+| License | MIT | BSD-3-Clause |
 
-```sh
-# 1. 先完全退出 dsh web / host（会话处于驻留内存时，磁盘修复会被下次 checkpoint 覆盖）
-# 2. 运行离线修复（扫描 ~/.dsh/sessions 下所有会话，把标记 turn 改回最后一个已开始的回合）
-npm exec --yes --package=dsh-rewind-plugin -- dsh-rewind-repair
-npm exec --yes --package=dsh-rewind-plugin -- dsh-rewind-repair -- --dry-run  # 只预览不写盘
-# 3. 重启 dsh web，损坏的会话即可正常加载历史
-```
+**本插件的独特性所在**：*同窗口、就地的时间旅行*。dsh-turn-rewind 因保持日志不可变而必须
+派生新会话；本插件改用空标记剪掉模型可见 surface，于是原对话在同一个窗口继续、审计日志保持完整。
+这段 surface 剪切并不平凡（标记 turn 必须复用最后一个已开始的回合，否则历史重放失败——见下方已知问题），
+而这恰恰是 dsh-turn-rewind 绕开的部分。
 
-也可以全局安装一次（`npm i -g dsh-rewind-plugin`）后直接运行 `dsh-rewind-repair`；
-源码方式为 `node scripts/repair-markers.mjs`（参数相同）。
+## 🔧 已知问题：0.2.5 之前的旧会话可能需要离线修复
 
-工具只改写 `dsh-rewind` 空标记事件的 `data.turn` 字段（保持 seq / 顺序 / zstd 帧结构不变），
-改前自动备份原文件为 `session.jsonl.zstd.bak-<时间戳>`；不改动任何其它事件，可安全重复运行。
+`v0.2.5` 之前创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。
+离线修复工具**已随 npm 包内置**。只影响升级前就已存在的旧会话——全新安装的 v0.2.7 永不触发。
+
+完整步骤见：[docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)
 
 ## 📦 安装
 
@@ -232,6 +239,7 @@ scripts/build.mjs       esbuild：lib/index.js（host ESM）+ lib/client.js（lo
 scripts/verify-host.mjs 端到端验证构建产物（18 项检查）
 tests/                  vitest 套件（rewind / snapshot / hidden / session-cwd / 集成，46 例）
 docs/harness-reference.md   维护者文档：DeepSeek Harness 接口参考
+docs/troubleshooting.zh.md  已知问题 / 离线修复指南（旧会话）
 assets/screenshots/     界面截图
 cordis.patch.yml        bundle patch（挂载双面插件行）
 package.json            dsh.bundle + dsh.client 声明、optional peerDependencies
