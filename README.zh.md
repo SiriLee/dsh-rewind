@@ -117,7 +117,7 @@ git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本。按
 
 ## 已知问题
 
-`v0.2.5` 之前创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。离线修复工具**已随 npm 包内置**（`dsh-rewind-repair`）。只影响升级前就已存在的旧会话——全新安装永不触发。
+`v0.2.4` 及之前版本创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。离线修复工具**已随 npm 包内置**（`dsh-rewind-repair`）。只影响升级前就已存在的旧会话——全新安装永不触发。
 
 完整步骤见：[docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)
 
