@@ -3,3 +3,5 @@ This is a test file created at 2026-07-02.
 
 Session: dsh-rewind
 Purpose: testing file write capability
+Updated: 2026-07-02 (appended a line via edit tool)
+This line was added to demonstrate the edit tool.
