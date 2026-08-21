@@ -1,23 +1,34 @@
 /**
- * Unit tests for the client-side rewind menu candidate listing
- * (src/client/menu.ts): which user messages the manual `/rewind` menu offers,
- * their order (most recent first), withdrawn-row exclusion and preview
- * truncation — the client mirror of the host's `listRewindCandidates`.
+ * Unit tests for the client-side rewind candidate computation
+ * (src/client/candidates.ts): which user messages the `/rewind` command
+ * decoration's popupSelect shell offers, their order (most recent first),
+ * withdrawn-row exclusion, preview truncation, and the popupSelect row
+ * mapping — the client mirror of the host's `listRewindCandidates`.
  */
 import { describe, expect, it } from 'vitest'
-import { messagePreviewOf, rewindCandidatesOf, type MenuChat } from '../src/client/menu.ts'
+import type { RewindKey } from '../src/client/locales.ts'
+import {
+  formatCandidateTime,
+  messagePreviewOf,
+  rewindCandidatesOf,
+  rewindOptionsOf,
+  type CandidateChat,
+} from '../src/client/candidates.ts'
 
-/** A user/steering chat node fixture; only fields the menu reads are real. */
+/** A user/steering chat node fixture; only fields the listing reads are real. */
 function userNode(key: string, seq: number, time: number, text: string, kind = 'user') {
   return { key, kind, anchorSeq: seq, data: { seq, time, content: [{ type: 'text', text }] } }
 }
 
-function snap(nodes: readonly ReturnType<typeof userNode>[]): MenuChat {
+function snap(nodes: readonly ReturnType<typeof userNode>[]): CandidateChat {
   return {
     order: nodes.map(node => node.key),
     nodes: new Map(nodes.map(node => [node.key, node])),
   }
 }
+
+/** A translate that returns the key, for option-label assertions. */
+const t = (key: RewindKey): string => key
 
 describe('rewindCandidatesOf', () => {
   it('lists surface user messages most recent first, numbered from 1', () => {
@@ -73,7 +84,7 @@ describe('rewindCandidatesOf', () => {
   })
 
   it('falls back to the message seq when anchorSeq is absent', () => {
-    const chat: MenuChat = {
+    const chat: CandidateChat = {
       order: ['u0'],
       nodes: new Map([['u0', { kind: 'user', data: { seq: 7, time: 1, content: [] } }]]),
     }
@@ -97,5 +108,33 @@ describe('messagePreviewOf', () => {
     expect(preview).toHaveLength(80)
     expect(preview.endsWith('…')).toBe(true)
     expect(preview.slice(0, 79)).toBe('x'.repeat(79))
+  })
+})
+
+describe('formatCandidateTime', () => {
+  it('renders HH:MM with zero padding', () => {
+    const d = new Date(2026, 7, 21, 9, 5)
+    expect(formatCandidateTime(d.getTime())).toBe('09:05')
+    expect(formatCandidateTime(new Date(2026, 7, 21, 23, 59).getTime())).toBe('23:59')
+  })
+})
+
+describe('rewindOptionsOf', () => {
+  it('maps candidates to popupSelect rows (id = seq, label = index · time)', () => {
+    const chat = snap([
+      userNode('u0', 0, new Date(2026, 7, 21, 9, 5).getTime(), 'first'),
+      userNode('u1', 1, new Date(2026, 7, 21, 10, 30).getTime(), 'second'),
+    ])
+    expect(rewindOptionsOf(chat, t)).toEqual([
+      { id: '1', label: '1. 10:30', detail: 'second' },
+      { id: '0', label: '2. 09:05', detail: 'first' },
+    ])
+  })
+
+  it('uses the no-text fallback for empty previews', () => {
+    const chat = snap([userNode('u0', 0, new Date(2026, 7, 21, 8, 0).getTime(), '   ')])
+    expect(rewindOptionsOf(chat, t)).toEqual([
+      { id: '0', label: '1. 08:00', detail: 'popover.noText' },
+    ])
   })
 })

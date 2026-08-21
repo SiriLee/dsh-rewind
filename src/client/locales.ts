@@ -18,11 +18,6 @@ export const zh = {
   'popover.impact.none': '目标之后没有跟踪到的写类变更，无需还原文件。',
   'popover.confirm': '确认回退',
   'popover.back': '返回',
-  'menu.title': '回退到哪条消息？',
-  'menu.hint': '↑↓ 选择 · Enter 确认 · 数字键直选 · Esc 关闭',
-  'menu.empty': '当前会话还没有可回退的用户消息',
-  'menu.more': '仅显示最近 {count} 条',
-  'menu.cancel': '取消',
   'guard.hint': '/rewind 手动输入不接受参数，请直接输入 /rewind 打开回退菜单',
 } satisfies Record<string, string>
 
@@ -54,10 +49,5 @@ export const en = {
   'popover.impact.none': 'No tracked file changes after the target; nothing to restore.',
   'popover.confirm': 'Confirm rewind',
   'popover.back': 'Back',
-  'menu.title': 'Rewind to which message?',
-  'menu.hint': '↑↓ to move · Enter to confirm · number to pick · Esc to close',
-  'menu.empty': 'No user messages to rewind in this session',
-  'menu.more': 'Showing the {count} most recent only',
-  'menu.cancel': 'Cancel',
-  'guard.hint': '/rewind takes no typed arguments — enter /rewind to open the rewind menu.',
+  'guard.hint': '/rewind takes no typed arguments — enter /rewind to open the rewind picker.',
 } satisfies Record<RewindKey, string>

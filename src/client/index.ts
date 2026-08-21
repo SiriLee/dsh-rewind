@@ -1,7 +1,8 @@
 /**
- * dsh-rewind client half: the manual `/rewind` composer guard, the locale
- * registration, and the session-scoped portal bridge that renders the
- * per-message ↶ rewind button (see `portals.tsx` for the button itself).
+ * dsh-rewind client half: the `/rewind` command decoration, the
+ * parameterized-input guard, the locale registration, and the session-scoped
+ * portal bridge that renders the per-message ↶ rewind button (see
+ * `portals.tsx` for the button itself).
  *
  * The button is NOT injected by hand into the DOM anymore: the plugin
  * registers a bridge into the harness's `conversation.session.header.actions`
@@ -12,29 +13,39 @@
  * plugin never imports conversation UI types and survives harness version
  * drift.
  *
- * Manual composer input of `/rewind` opens the rewind menu (the guard below):
- * a bare `/rewind` line is intercepted — NOT submitted as a command — and the
- * candidate menu appears above the composer, so the text-driven flow is the
- * same interactive picker as Claude Code's. The parameterized forms
- * (`/rewind @<seq> chat|both`, `/rewind preview …`) stay internal channels the
- * ↶ button and the menu drive through `session.command`; a hand-typed
- * parameterized line is stopped with a hint.
+ * The text-driven flow is the harness's STANDARD command decoration
+ * (`ctx.commandUi.decorate`): a bare `/rewind` — picked from the slash-menu
+ * completion, or typed in full and Entered — opens the harness's own
+ * popupSelect shell (search, ↑↓/Enter, Esc) listing the rewind candidates
+ * instead of executing the command. Picking one continues the SAME flow as
+ * the ↶ button: the mode popover, both-impact confirmation, execution, row
+ * hiding and the composer refill (`runRewindAndFill`). The parameterized
+ * forms (`/rewind @<seq> chat|both`, `/rewind preview …`) stay internal
+ * channels the ↶ button and the popover drive through `session.command`; a
+ * hand-typed parameterized line is stopped with a hint.
  *
  * @module dsh-rewind/client
  */
 
 import type { ClientContext, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
+import type { CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
+import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { closeRewindMenu, openRewindMenu, type MenuCandidate } from './menu.ts'
+import {
+  candidateBySeq,
+  rewindCandidatesOfChat,
+  rewindOptionsOf,
+  type CandidateChat,
+} from './candidates.ts'
 import { openPopover } from './popover.ts'
-import { createRewindBridge, fillComposer, runRewindAndFill, type SlotsLike } from './portals.tsx'
+import { createRewindBridge, runRewindAndFill, type SlotsLike } from './portals.tsx'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 
 export const name = 'dsh-rewind'
-export const inject = ['slots', 'sessions', 'locale']
+export const inject = ['slots', 'sessions', 'locale', 'commandUi']
 
 const NS = 'rewind'
 
@@ -45,8 +56,9 @@ const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 const COMPOSER_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
 
 /**
- * Client plugin body: composer guard + locale + the portal bridge.
- * @param ctx - client root context carrying `slots`, `sessions` and `locale`.
+ * Client plugin body: command decoration + parameterized guard + locale + the
+ * portal bridge.
+ * @param ctx - client root context carrying `slots`, `sessions`, `locale` and `commandUi`.
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(function* () {
@@ -80,45 +92,81 @@ export function apply(ctx: ClientContext): void {
       createRewindBridge({ sessionOf, currentSessionId, t, subscribeLocale }),
     ))
 
-    // ---- manual /rewind guard ----
-    // Manual composer input of `/rewind` opens the rewind menu instead of
-    // submitting: a bare `/rewind` line is consumed (input cleared) and the
-    // candidate menu appears above the composer — Claude Code's rewind menu,
-    // entered from the command line. The parameterized forms are internal
-    // channels (the ↶ button and the menu drive them through
-    // `session.command`), so a hand-typed `/rewind <args>` line is stopped
-    // with a hint.
-    const BARE_REWIND = /^\s*\/rewind\s*$/i
+    // ---- /rewind command decoration (the standard text-driven flow) ----
+    // A bare `/rewind` — picked from the slash-menu completion, or typed in
+    // full and Entered — opens the harness's own popupSelect shell instead of
+    // executing the command: the harness-native "bare invocation opens a
+    // picker" mechanism (CommandDecoration, see the ui-commands contract).
+    // The plugin never re-implements a menu; picking a candidate continues
+    // the SAME flow as the ↶ button (the mode popover below).
+    const commandUi = ctx.get('commandUi') as CommandUiContract
+
+    /** The live chat snapshot of a session, or undefined when unbound. */
+    const chatOf = (sessionId: string | undefined): CandidateChat | undefined => {
+      if (sessionId === undefined) return undefined
+      const face = sessionOf(sessionId)
+      return face === undefined ? undefined : face.getSnapshot().chat as unknown as CandidateChat
+    }
+
+    /** True when the surface has at least one reachable rewind target. */
+    const hasCandidates = (sessionId: string | undefined): boolean => {
+      const chat = chatOf(sessionId)
+      return chat !== undefined && rewindCandidatesOfChat(chat).length > 0
+    }
+
+    /** The composer card the mode popover anchors to (the text flow has no button). */
+    const composerAnchor = (): HTMLElement => {
+      const textarea = composerTextarea()
+      const card = textarea?.closest<HTMLElement>('[data-composer-card]')
+      return card ?? textarea ?? document.body
+    }
+
+    yield commandUi.decorate({
+      name: 'rewind',
+      // The picker exists exactly while the surface has a reachable user
+      // message: a fresh session (no candidates) falls through to the host
+      // command, which fails with "no user messages" — matching the harness's
+      // own decoration convention (see ui-permission-presets).
+      available: session => hasCandidates(session.sessionId),
+      ui: {
+        kind: 'popupSelect',
+        options: session => {
+          const chat = chatOf(session.sessionId)
+          return Promise.resolve(chat === undefined ? [] : rewindOptionsOf(chat, t))
+        },
+        onSelect: (option, session) => {
+          const face = sessionOf(session.sessionId)
+          const chat = chatOf(session.sessionId)
+          const candidate = chat !== undefined ? candidateBySeq(chat, Number(option.id)) : undefined
+          if (face === undefined || candidate === undefined) return
+          openPopover({
+            session: face,
+            seq: candidate.seq,
+            time: candidate.time,
+            preview: candidate.preview,
+            anchor: composerAnchor(),
+            t,
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId) },
+          })
+        },
+      },
+    })
+
+    // ---- manual parameterized /rewind guard ----
+    // The parameterized forms (`/rewind @<seq> chat|both`, `/rewind preview …`)
+    // are internal channels the ↶ button, the popover and the decoration drive
+    // through `session.command`; a hand-typed parameterized line is stopped
+    // with a hint. The BARE form needs no guard: the command decoration above
+    // turns it into the candidate popup before it can reach the host.
     const PARAM_REWIND = /^\s*\/rewind\s+\S+/i
 
     const composerTextarea = (): HTMLTextAreaElement | null =>
       document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
 
-    /** True when the composer draft is a manually typed /rewind line. */
-    const hasManualRewindDraft = (): boolean => {
+    /** True when the composer draft is a manually typed parameterized line. */
+    const hasParamRewindDraft = (): boolean => {
       const textarea = composerTextarea()
-      if (textarea === null) return false
-      return BARE_REWIND.test(textarea.value) || PARAM_REWIND.test(textarea.value)
-    }
-
-    /**
-     * One rewind entry point: pick a target in the menu, then continue the
-     * SAME flow as the per-message ↶ button — mode popover, both-impact
-     * confirmation, execution and the composer refill (`runRewindAndFill`).
-     */
-    const onPickCandidate = (candidate: MenuCandidate, anchor: HTMLElement): void => {
-      const sessionId = currentSessionId()
-      const session = sessionId !== undefined ? sessionOf(sessionId) : undefined
-      if (session === undefined) return
-      openPopover({
-        session,
-        seq: candidate.seq,
-        time: candidate.time,
-        preview: candidate.preview,
-        anchor,
-        t,
-        onRewind: mode => { void runRewindAndFill(session, candidate.seq, mode, currentSessionId) },
-      })
+      return textarea !== null && PARAM_REWIND.test(textarea.value)
     }
 
     let guardHintEl: HTMLElement | null = null
@@ -149,35 +197,22 @@ export function apply(ctx: ClientContext): void {
       }, 3200)
     }
 
-    /**
-     * Route a manual /rewind submit: bare → open the menu (the typed command
-     * is consumed, mirroring Claude Code clearing the input); parameterized →
-     * hint.
-     */
-    const onManualRewindSubmit = (event: KeyboardEvent | MouseEvent): void => {
-      const draft = composerTextarea()?.value ?? ''
-      if (!BARE_REWIND.test(draft) && !PARAM_REWIND.test(draft)) return
+    const onParamRewindSubmit = (event: KeyboardEvent | MouseEvent): void => {
+      if (!hasParamRewindDraft()) return
       event.preventDefault()
       event.stopPropagation()
-      if (PARAM_REWIND.test(draft)) {
-        showGuardHint()
-        return
-      }
-      // Consume the typed command, then open the candidate menu.
-      fillComposer('')
-      openRewindMenu({ sessionOf, currentSessionId, t, onPick: onPickCandidate })
+      showGuardHint()
     }
 
     // Capture phase on document: fires before React's root handlers, so
     // preventDefault + stopPropagation here stops the submit path entirely.
     const onKeyDownGuard = (event: KeyboardEvent): void => {
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-      if (!hasManualRewindDraft()) return
-      onManualRewindSubmit(event)
+      onParamRewindSubmit(event)
     }
 
     const onClickGuard = (event: MouseEvent): void => {
-      if (event.button !== 0 || !hasManualRewindDraft()) return
+      if (event.button !== 0 || !hasParamRewindDraft()) return
       const target = event.target
       if (!(target instanceof Element)) return
       const button = target.closest('button')
@@ -189,7 +224,7 @@ export function apply(ctx: ClientContext): void {
       const all = card.querySelectorAll<HTMLButtonElement>('button')
       if (all[all.length - 1] !== button) return
       if (button.querySelector('rect') !== null) return
-      onManualRewindSubmit(event)
+      onParamRewindSubmit(event)
     }
 
     document.addEventListener('keydown', onKeyDownGuard, true)
@@ -200,7 +235,6 @@ export function apply(ctx: ClientContext): void {
       document.removeEventListener('click', onClickGuard, true)
       if (guardHintEl !== null) guardHintEl.remove()
       if (guardHintTimer !== undefined) window.clearTimeout(guardHintTimer)
-      closeRewindMenu()
       style.remove()
     }
   }, 'dsh-rewind client lifecycle')
