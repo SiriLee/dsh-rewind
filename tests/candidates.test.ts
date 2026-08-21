@@ -31,16 +31,16 @@ function snap(nodes: readonly ReturnType<typeof userNode>[]): CandidateChat {
 const t = (key: RewindKey): string => key
 
 describe('rewindCandidatesOf', () => {
-  it('lists surface user messages in conversation order (oldest first, newest at the bottom)', () => {
+  it('lists surface user messages newest first (top row = default highlight)', () => {
     const chat = snap([
       userNode('u0', 0, 1000, 'first'),
       userNode('u1', 1, 2000, 'second'),
       userNode('u2', 2, 3000, 'third'),
     ])
     expect(rewindCandidatesOf(chat, new Set())).toEqual([
-      { seq: 0, time: 1000, preview: 'first' },
-      { seq: 1, time: 2000, preview: 'second' },
       { seq: 2, time: 3000, preview: 'third' },
+      { seq: 1, time: 2000, preview: 'second' },
+      { seq: 0, time: 1000, preview: 'first' },
     ])
   })
 
@@ -60,21 +60,21 @@ describe('rewindCandidatesOf', () => {
       userNode('s1', 1, 2000, 'steered', 'steering'),
       userNode('a2', 2, 3000, 'assistant', 'assistant'),
     ])
-    expect(rewindCandidatesOf(chat, new Set()).map(candidate => candidate.seq)).toEqual([0, 1])
+    expect(rewindCandidatesOf(chat, new Set()).map(candidate => candidate.seq)).toEqual([1, 0])
   })
 
-  it('keeps the newest 10, oldest first among them', () => {
+  it('keeps the newest 10', () => {
     const nodes = Array.from({ length: 12 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
     const candidates = rewindCandidatesOf(snap(nodes), new Set())
     expect(candidates).toHaveLength(10)
-    expect(candidates[0]!.seq).toBe(2)
-    expect(candidates[9]!.seq).toBe(11)
+    expect(candidates[0]!.seq).toBe(11)
+    expect(candidates[9]!.seq).toBe(2)
   })
 
   it('respects an explicit limit', () => {
     const nodes = Array.from({ length: 12 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
     const candidates = rewindCandidatesOf(snap(nodes), new Set(), 5)
-    expect(candidates.map(candidate => candidate.seq)).toEqual([7, 8, 9, 10, 11])
+    expect(candidates.map(candidate => candidate.seq)).toEqual([11, 10, 9, 8, 7])
   })
 
   it('produces no candidates for an empty or all-hidden chat', () => {
@@ -126,8 +126,8 @@ describe('rewindOptionsOf', () => {
       userNode('u1', 1, new Date(2026, 7, 21, 10, 30).getTime(), 'second'),
     ])
     expect(rewindOptionsOf(chat, t)).toEqual([
-      { id: '0', label: 'first', detail: '09:05' },
       { id: '1', label: 'second', detail: '10:30' },
+      { id: '0', label: 'first', detail: '09:05' },
     ])
   })
 

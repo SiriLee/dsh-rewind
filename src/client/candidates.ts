@@ -4,9 +4,9 @@
  * preview truncation, and the mapping to popupSelect rows. The listing is a
  * pure function of the session chat snapshot (`rewindCandidatesOf`) so it
  * stays unit-testable in a node environment. Surface user/steering messages
- * only, withdrawn (hidden) rows excluded, and — matching Claude Code's rewind
- * menu — presented in conversation order (oldest at the top, newest at the
- * bottom), without recency numbers.
+ * only, withdrawn (hidden) rows excluded, newest first — the top row is the
+ * default highlight, i.e. the most recent message and the most common rewind
+ * target.
  *
  * @module dsh-rewind/client/candidates
  */
@@ -70,30 +70,29 @@ export function formatCandidateTime(time: number): string {
 /**
  * List the selectable rewind candidates of a session chat snapshot: user and
  * steering rows still on the surface (not hidden by a previous rewind), the
- * newest `limit` kept and presented in conversation order (oldest at the top,
- * newest at the bottom) — the orientation Claude Code's rewind menu uses, so
- * the picker reads like the conversation itself.
+ * newest `limit` kept, newest first — the top row is the default highlight,
+ * i.e. the most recent message and the most common rewind target.
  * @param snap - the session chat snapshot.
  * @param hidden - anchor seqs withdrawn by rewinds (from `hiddenSeqsOf`).
  * @param limit - maximum number of candidates to return.
  */
 export function rewindCandidatesOf(snap: CandidateChat, hidden: ReadonlySet<number>, limit = 10): RewindCandidate[] {
-  // Collect the newest `limit` surface rows first (walking the log
-  // backwards), then reverse into chronological order for display.
-  const newest: RewindCandidate[] = []
-  for (let i = snap.order.length - 1; i >= 0 && newest.length < limit; i--) {
+  // Walk the log backwards so the newest rows come first; `limit` bounds the
+  // kept window.
+  const candidates: RewindCandidate[] = []
+  for (let i = snap.order.length - 1; i >= 0 && candidates.length < limit; i--) {
     const key = snap.order[i]
     if (key === undefined) continue
     const node = snap.nodes.get(key)
     if (node === undefined || (node.kind !== 'user' && node.kind !== 'steering')) continue
     if (hidden.has(node.anchorSeq ?? node.data.seq)) continue
-    newest.push({
+    candidates.push({
       seq: node.data.seq,
       time: node.data.time,
       preview: messagePreviewOf(node.data),
     })
   }
-  return newest.reverse()
+  return candidates
 }
 
 /** The candidates of a live chat snapshot, withdrawn rows already excluded. */
