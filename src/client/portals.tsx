@@ -254,15 +254,23 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
       // message inside the executed rewinds' [earliest target, latest marker]
       // span) so the rendered transcript matches the agent's context. React
       // re-renders recreate rows, so this runs on every refresh.
+      //
+      // Each hidden row also carries a semantic marker (`data-dsh-rewind-hidden`)
+      // so DevTools, other DOM plugins and tests can tell a rewind-hide apart
+      // from any collapse/filter hide. Purely observational: the marker is
+      // kept in sync with the hide/show state on both branches (a recreated
+      // row has no marker and is re-marked when it re-enters a hidden span).
       for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
         const key = seat.dataset.chatAnchorKey
         const anchor = key !== undefined ? chat.nodes.get(key)?.anchorSeq : undefined
         if (anchor !== undefined && hiddenSeqs.has(anchor)) {
           seat.style.display = 'none'
+          seat.dataset.dshRewindHidden = 'true'
           hidden.current.add(seat)
           hiddenCount += 1
         } else if (hidden.current.has(seat)) {
           seat.style.display = ''
+          delete seat.dataset.dshRewindHidden
           hidden.current.delete(seat)
         }
       }
