@@ -4,10 +4,12 @@
  * offers the two modes. Choosing "both" first fetches the impact list through
  * the `/rewind preview @seq both` command and shows it before confirming.
  *
- * Keyboard: ↑/↓ move focus across the step's buttons (mode options + cancel,
- * or back + confirm on the impact step), Enter activates the focused button
- * (native), Esc closes. The listener runs in the document capture phase so
- * the keys are stolen from the composer while the popover is open.
+ * Keyboard: ↑/↓ move focus across the step's ACTION buttons only (the two
+ * modes, or the confirm button on the impact step), Enter activates the
+ * focused button (native), Esc is the keyboard twin of the ghost back/cancel
+ * buttons — cancel on the modes step, back on the impact step; the ghosts are
+ * never in the arrow cycle. The listener runs in the document capture phase
+ * so the keys are stolen from the composer while the popover is open.
  *
  * @module dsh-rewind/client/popover
  */
@@ -176,9 +178,14 @@ function modeOption(label: string, hint: string, onClick: () => void): HTMLButto
   return button
 }
 
-/** The enabled, focusable buttons of the current popover step, in DOM order. */
+/**
+ * The enabled, focusable buttons of the current popover step, in DOM order.
+ * The ghost back/cancel buttons are deliberately excluded: they are Esc-only
+ * (never in the ↑/↓ cycle).
+ */
 function focusableButtons(root: HTMLElement): HTMLButtonElement[] {
-  return Array.from(root.querySelectorAll<HTMLButtonElement>('button')).filter(button => !button.disabled)
+  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
+    .filter(button => !button.disabled && !button.classList.contains(CLASS.popoverGhost))
 }
 
 /** Focus the first enabled button of the current step (no-op when none). */
@@ -260,7 +267,11 @@ export function openPopover(opts: PopoverOptions): void {
   /** Impact outcome fetched at open; reused by the both-step (no second command row). */
   let impactOutcome: PreviewOutcome = null
 
+  /** Current step: Esc acts as cancel on the modes step, as back on impact. */
+  let step: 'modes' | 'impact' = 'modes'
+
   const renderModes = (): void => {
+    step = 'modes'
     const children: HTMLElement[] = [
       el('div', CLASS.popoverTitle, t('popover.title')),
       el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
@@ -277,9 +288,7 @@ export function openPopover(opts: PopoverOptions): void {
       const option = modeOption(
         t('popover.both'),
         bothState.state === 'loading' ? t('popover.checking') : t('popover.both.hint'),
-        () => {
-          renderImpactStep(root, opts, renderModes, impactOutcome)
-        },
+        renderImpact,
       )
       if (bothState.state === 'loading') option.disabled = true
       children.push(option)
@@ -294,6 +303,12 @@ export function openPopover(opts: PopoverOptions): void {
     children.push(actions)
     root.replaceChildren(...children)
     focusFirst(root)
+  }
+
+  /** Move to the impact step (its back/Esc returns to the modes step). */
+  const renderImpact = (): void => {
+    step = 'impact'
+    renderImpactStep(root, opts, renderModes, impactOutcome)
   }
 
   /** Position below the anchor (right-aligned), flipping above near the edge. */
@@ -360,7 +375,10 @@ export function openPopover(opts: PopoverOptions): void {
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()
-      closePopover()
+      // Esc is the keyboard twin of the step's ghost button: cancel on the
+      // modes step, back on the impact step.
+      if (step === 'impact') renderModes()
+      else closePopover()
     }
   }
   // Defer the first outside-click check so the opening click is not swallowed.
