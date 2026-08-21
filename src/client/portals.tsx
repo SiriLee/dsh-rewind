@@ -37,6 +37,7 @@ import { createPortal } from 'react-dom'
 import type { ChatConversationViewNode, SessionFace, UserMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
 import { hiddenSeqsOf, isExecutedRewindCommand } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
+import { messagePreviewOf } from './menu.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
@@ -76,14 +77,7 @@ export interface SlotsLike {
 }
 
 /** Join the text blocks of a user message into one plain preview. */
-function messagePreviewOf(node: UserMessageNode): string {
-  const text = node.content
-    .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-    .join('')
-    .replace(/\s+/g, ' ')
-    .trim()
-  return text.length <= 80 ? text : `${text.slice(0, 79)}…`
-}
+// (shared with the manual /rewind menu — see `messagePreviewOf` in menu.ts)
 
 /**
  * The plain text of the user message at `seq` in the session snapshot, for
@@ -107,9 +101,11 @@ function userTextAt(session: SessionFace, seq: number): string | undefined {
 /**
  * Fill the dsh composer with `text` (React-controlled textarea: use the
  * native setter so the value change is seen, then dispatch an input event).
- * Best-effort — no composer match means the fill is skipped.
+ * Best-effort — no composer match means the fill is skipped. The manual
+ * `/rewind` menu reuses this to consume the typed command (clear the input)
+ * when it opens.
  */
-function fillComposer(text: string): boolean {
+export function fillComposer(text: string): boolean {
   const textarea = document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
   if (textarea === null) return false
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
@@ -140,7 +136,7 @@ function userNodeOf(session: SessionFace, key: string): UserMessageNode | undefi
  * the old baseline heuristic refilled withdrawn text into the composer
  * after switching sessions or restarting dsh.
  */
-async function runRewindAndFill(
+export async function runRewindAndFill(
   session: SessionFace,
   seq: number,
   mode: 'chat' | 'both',

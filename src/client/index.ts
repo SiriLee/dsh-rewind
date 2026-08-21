@@ -12,10 +12,13 @@
  * plugin never imports conversation UI types and survives harness version
  * drift.
  *
- * Manual composer input of `/rewind` is deliberately blocked (the guard
- * below): the command exists only as the per-message ↶ button's internal
- * channel, so any `/rewind` line typed by hand — bare or with arguments — is
- * stopped with a hint pointing at the button.
+ * Manual composer input of `/rewind` opens the rewind menu (the guard below):
+ * a bare `/rewind` line is intercepted — NOT submitted as a command — and the
+ * candidate menu appears above the composer, so the text-driven flow is the
+ * same interactive picker as Claude Code's. The parameterized forms
+ * (`/rewind @<seq> chat|both`, `/rewind preview …`) stay internal channels the
+ * ↶ button and the menu drive through `session.command`; a hand-typed
+ * parameterized line is stopped with a hint.
  *
  * @module dsh-rewind/client
  */
@@ -24,7 +27,9 @@ import type { ClientContext, SessionFace } from '@deepseek-ai/dsh-client-runtime
 import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
-import { createRewindBridge, type SlotsLike } from './portals.tsx'
+import { closeRewindMenu, openRewindMenu, type MenuCandidate } from './menu.ts'
+import { openPopover } from './popover.ts'
+import { createRewindBridge, fillComposer, runRewindAndFill, type SlotsLike } from './portals.tsx'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 
@@ -76,20 +81,44 @@ export function apply(ctx: ClientContext): void {
     ))
 
     // ---- manual /rewind guard ----
-    // Manual composer input of `/rewind` is fully blocked: the command exists
-    // only as the per-message ↶ button's internal channel (it drives the same
-    // host command with an explicit `@seq` target). Any `/rewind` line typed
-    // by hand — bare or with arguments — is stopped here with a hint pointing
-    // at the button.
-    const MANUAL_REWIND = /^\s*\/rewind(?:\s|$)/i
+    // Manual composer input of `/rewind` opens the rewind menu instead of
+    // submitting: a bare `/rewind` line is consumed (input cleared) and the
+    // candidate menu appears above the composer — Claude Code's rewind menu,
+    // entered from the command line. The parameterized forms are internal
+    // channels (the ↶ button and the menu drive them through
+    // `session.command`), so a hand-typed `/rewind <args>` line is stopped
+    // with a hint.
+    const BARE_REWIND = /^\s*\/rewind\s*$/i
+    const PARAM_REWIND = /^\s*\/rewind\s+\S+/i
 
     const composerTextarea = (): HTMLTextAreaElement | null =>
       document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
 
     /** True when the composer draft is a manually typed /rewind line. */
-    const hasBlockedRewindDraft = (): boolean => {
+    const hasManualRewindDraft = (): boolean => {
       const textarea = composerTextarea()
-      return textarea !== null && MANUAL_REWIND.test(textarea.value)
+      if (textarea === null) return false
+      return BARE_REWIND.test(textarea.value) || PARAM_REWIND.test(textarea.value)
+    }
+
+    /**
+     * One rewind entry point: pick a target in the menu, then continue the
+     * SAME flow as the per-message ↶ button — mode popover, both-impact
+     * confirmation, execution and the composer refill (`runRewindAndFill`).
+     */
+    const onPickCandidate = (candidate: MenuCandidate, anchor: HTMLElement): void => {
+      const sessionId = currentSessionId()
+      const session = sessionId !== undefined ? sessionOf(sessionId) : undefined
+      if (session === undefined) return
+      openPopover({
+        session,
+        seq: candidate.seq,
+        time: candidate.time,
+        preview: candidate.preview,
+        anchor,
+        t,
+        onRewind: mode => { void runRewindAndFill(session, candidate.seq, mode, currentSessionId) },
+      })
     }
 
     let guardHintEl: HTMLElement | null = null
@@ -120,18 +149,35 @@ export function apply(ctx: ClientContext): void {
       }, 3200)
     }
 
+    /**
+     * Route a manual /rewind submit: bare → open the menu (the typed command
+     * is consumed, mirroring Claude Code clearing the input); parameterized →
+     * hint.
+     */
+    const onManualRewindSubmit = (event: KeyboardEvent | MouseEvent): void => {
+      const draft = composerTextarea()?.value ?? ''
+      if (!BARE_REWIND.test(draft) && !PARAM_REWIND.test(draft)) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (PARAM_REWIND.test(draft)) {
+        showGuardHint()
+        return
+      }
+      // Consume the typed command, then open the candidate menu.
+      fillComposer('')
+      openRewindMenu({ sessionOf, currentSessionId, t, onPick: onPickCandidate })
+    }
+
     // Capture phase on document: fires before React's root handlers, so
     // preventDefault + stopPropagation here stops the submit path entirely.
     const onKeyDownGuard = (event: KeyboardEvent): void => {
       if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-      if (!hasBlockedRewindDraft()) return
-      event.preventDefault()
-      event.stopPropagation()
-      showGuardHint()
+      if (!hasManualRewindDraft()) return
+      onManualRewindSubmit(event)
     }
 
     const onClickGuard = (event: MouseEvent): void => {
-      if (event.button !== 0 || !hasBlockedRewindDraft()) return
+      if (event.button !== 0 || !hasManualRewindDraft()) return
       const target = event.target
       if (!(target instanceof Element)) return
       const button = target.closest('button')
@@ -143,9 +189,7 @@ export function apply(ctx: ClientContext): void {
       const all = card.querySelectorAll<HTMLButtonElement>('button')
       if (all[all.length - 1] !== button) return
       if (button.querySelector('rect') !== null) return
-      event.preventDefault()
-      event.stopPropagation()
-      showGuardHint()
+      onManualRewindSubmit(event)
     }
 
     document.addEventListener('keydown', onKeyDownGuard, true)
@@ -156,6 +200,7 @@ export function apply(ctx: ClientContext): void {
       document.removeEventListener('click', onClickGuard, true)
       if (guardHintEl !== null) guardHintEl.remove()
       if (guardHintTimer !== undefined) window.clearTimeout(guardHintTimer)
+      closeRewindMenu()
       style.remove()
     }
   }, 'dsh-rewind client lifecycle')
