@@ -1,12 +1,12 @@
 /**
  * Pure candidate computation for the `/rewind` command decoration: which user
- * messages the harness's popupSelect shell offers (most recent first,
- * numbered 1..N), withdrawn-row exclusion, preview truncation, and the
- * mapping to popupSelect rows. The listing is a pure function of the session
- * chat snapshot (`rewindCandidatesOf`) so it stays unit-testable in a node
- * environment, mirroring the host's `listRewindCandidates` semantics: surface
- * user/steering messages only, withdrawn (hidden) rows excluded, most recent
- * first.
+ * messages the harness's popupSelect shell offers, withdrawn-row exclusion,
+ * preview truncation, and the mapping to popupSelect rows. The listing is a
+ * pure function of the session chat snapshot (`rewindCandidatesOf`) so it
+ * stays unit-testable in a node environment. Surface user/steering messages
+ * only, withdrawn (hidden) rows excluded, and — matching Claude Code's rewind
+ * menu — presented in conversation order (oldest at the top, newest at the
+ * bottom), without recency numbers.
  *
  * @module dsh-rewind/client/candidates
  */
@@ -28,8 +28,6 @@ export interface RewindCandidate {
   readonly time: number
   /** Truncated plain-text preview of the message content. */
   readonly preview: string
-  /** 1-based recency index (1 = most recent). */
-  readonly index: number
 }
 
 /** A chat snapshot subset the candidate listing reads (structural). */
@@ -71,29 +69,31 @@ export function formatCandidateTime(time: number): string {
 
 /**
  * List the selectable rewind candidates of a session chat snapshot: user and
- * steering rows still on the surface (not hidden by a previous rewind), most
- * recent first, numbered 1..N — the same candidate set and ordering the host's
- * `listRewindCandidates` produces for the same surface.
+ * steering rows still on the surface (not hidden by a previous rewind), the
+ * newest `limit` kept and presented in conversation order (oldest at the top,
+ * newest at the bottom) — the orientation Claude Code's rewind menu uses, so
+ * the picker reads like the conversation itself.
  * @param snap - the session chat snapshot.
  * @param hidden - anchor seqs withdrawn by rewinds (from `hiddenSeqsOf`).
  * @param limit - maximum number of candidates to return.
  */
 export function rewindCandidatesOf(snap: CandidateChat, hidden: ReadonlySet<number>, limit = 10): RewindCandidate[] {
-  const candidates: RewindCandidate[] = []
-  for (let i = snap.order.length - 1; i >= 0 && candidates.length < limit; i--) {
+  // Collect the newest `limit` surface rows first (walking the log
+  // backwards), then reverse into chronological order for display.
+  const newest: RewindCandidate[] = []
+  for (let i = snap.order.length - 1; i >= 0 && newest.length < limit; i--) {
     const key = snap.order[i]
     if (key === undefined) continue
     const node = snap.nodes.get(key)
     if (node === undefined || (node.kind !== 'user' && node.kind !== 'steering')) continue
     if (hidden.has(node.anchorSeq ?? node.data.seq)) continue
-    candidates.push({
+    newest.push({
       seq: node.data.seq,
       time: node.data.time,
       preview: messagePreviewOf(node.data),
-      index: candidates.length + 1,
     })
   }
-  return candidates
+  return newest.reverse()
 }
 
 /** The candidates of a live chat snapshot, withdrawn rows already excluded. */
@@ -101,12 +101,16 @@ export function rewindCandidatesOfChat(snap: CandidateChat): RewindCandidate[] {
   return rewindCandidatesOf(snap, hiddenSeqsOf(snap as unknown as HiddenChat))
 }
 
-/** Map the candidates to popupSelect rows for the `/rewind` decoration. */
+/**
+ * Map the candidates to popupSelect rows: the message preview as the row
+ * label (left) and the clock time as the detail (right) — the shell's native
+ * label/detail flex layout, with no recency numbers.
+ */
 export function rewindOptionsOf(snap: CandidateChat, t: Translate): SelectOption[] {
   return rewindCandidatesOfChat(snap).map(candidate => ({
     id: String(candidate.seq),
-    label: `${candidate.index}. ${formatCandidateTime(candidate.time)}`,
-    detail: candidate.preview || t('popover.noText'),
+    label: candidate.preview || t('popover.noText'),
+    detail: formatCandidateTime(candidate.time),
   }))
 }
 
