@@ -53,7 +53,7 @@ For contributors: install from a local checkout or a pinned commit — `dsh plug
 2. **Click it.** The target is that message; a small popover offers the two modes ("conversation and code" is hidden when no tracked file changes exist after the target).
 3. The rewind executes as an in-session command; a result message confirms, and the withdrawn message's text is filled back into the composer for editing and re-sending.
 
-The ↶ button appears on user messages rendered in the **current session view** — switch to another session before rewinding it. A rewind can itself be rewound (its marker enters the log), but the file-restore action is not re-backed up.
+Rewinds can be repeated (each appends a marker to the log). A rewind cannot be undone through the plugin, but the withdrawn messages can be recovered by manually editing the session log. The file-restore action is not re-backed up.
 
 ## How it works
 
