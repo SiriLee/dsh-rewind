@@ -29,11 +29,9 @@ Each user message gains a compact **↶ rewind** action in its action row. Click
   </tr>
   <tr>
     <td align="center"><img src="assets/screenshots/impact-list.png" width="440" alt="Impact list"><br><sub>"Conversation and code" impact list</sub></td>
-    <td align="center"><img src="assets/screenshots/guard-hint.png" width="440" alt="Manual /rewind guard hint"><br><sub>Manual /rewind guard hint</sub></td>
+    <td align="center"><img src="assets/screenshots/rewind-candidates.png" width="440" alt="/rewind candidate picker"><br><sub>/rewind candidate picker</sub></td>
   </tr>
 </table>
-
-Manual `/rewind` input in the composer is intercepted — submitting shows a transient hint pointing at the ↶ button.
 
 ## Install
 
@@ -52,6 +50,8 @@ For contributors: install from a local checkout or a pinned commit — `dsh plug
 1. **Hover** any user message you sent — a **↶ rewind** button appears in its action row.
 2. **Click it.** The target is that message; a small popover offers the two modes ("conversation and code" is hidden when no tracked file changes exist after the target).
 3. The rewind executes as an in-session command; a result message confirms, and the withdrawn message's text is filled back into the composer for editing and re-sending.
+
+**Command-line entry**: type a bare `/rewind` and press Enter to open the candidate picker; selecting a target continues the same flow as the button.
 
 Rewinds can be repeated (each appends a marker to the log). A rewind cannot be undone through the plugin, but the withdrawn messages can be recovered by manually editing the session log. The file-restore action is not re-backed up.
 

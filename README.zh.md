@@ -29,11 +29,9 @@
   </tr>
   <tr>
     <td align="center"><img src="assets/screenshots/impact-list.png" width="440" alt="影响清单"><br><sub>「回退对话和代码」影响清单</sub></td>
-    <td align="center"><img src="assets/screenshots/guard-hint.png" width="440" alt="手动 /rewind 拦截提示"><br><sub>手动 /rewind 拦截提示</sub></td>
+    <td align="center"><img src="assets/screenshots/rewind-candidates.png" width="440" alt="/rewind 候选面板"><br><sub>/rewind 候选面板</sub></td>
   </tr>
 </table>
-
-在输入框手动输入 `/rewind`（含裸命令）会被**拦截**——提交时弹出临时提示，指向消息旁的 ↶ 按钮。
 
 ## 安装
 
@@ -52,6 +50,8 @@ dsh plugin --profile web add dsh-rewind-plugin
 1. **hover** 任意你发送过的用户消息——操作行出现 **↶ 回退** 按钮。
 2. **点击它。** 目标即这条消息；小浮层提供两种模式（目标之后没有跟踪的变更时，「回退对话和代码」不显示）。
 3. 回退以一条会话内命令执行；结果消息确认，被撤回消息的文本自动填入输入框，可编辑后重发。
+
+**命令行入口**：输入裸 `/rewind` 回车打开候选面板，选择目标后流程与按钮一致。
 
 回退可重复进行（每次追加一条标记到日志）。回退无法通过插件撤销，但可以手动编辑会话日志恢复。文件还原动作不再记录新备份。
 
