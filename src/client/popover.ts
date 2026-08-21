@@ -4,6 +4,11 @@
  * offers the two modes. Choosing "both" first fetches the impact list through
  * the `/rewind preview @seq both` command and shows it before confirming.
  *
+ * Keyboard: ↑/↓ move focus across the step's buttons (mode options + cancel,
+ * or back + confirm on the impact step), Enter activates the focused button
+ * (native), Esc closes. The listener runs in the document capture phase so
+ * the keys are stolen from the composer while the popover is open.
+ *
  * @module dsh-rewind/client/popover
  */
 
@@ -171,6 +176,26 @@ function modeOption(label: string, hint: string, onClick: () => void): HTMLButto
   return button
 }
 
+/** The enabled, focusable buttons of the current popover step, in DOM order. */
+function focusableButtons(root: HTMLElement): HTMLButtonElement[] {
+  return Array.from(root.querySelectorAll<HTMLButtonElement>('button')).filter(button => !button.disabled)
+}
+
+/** Focus the first enabled button of the current step (no-op when none). */
+function focusFirst(root: HTMLElement): void {
+  focusableButtons(root)[0]?.focus()
+}
+
+/** Move focus across the step's buttons, wrapping around at the ends. */
+function moveFocus(root: HTMLElement, dir: 1 | -1): void {
+  const buttons = focusableButtons(root)
+  if (buttons.length === 0) return
+  const active = document.activeElement
+  const index = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1
+  const next = index === -1 ? (dir === 1 ? 0 : buttons.length - 1) : (index + dir + buttons.length) % buttons.length
+  buttons[next]?.focus()
+}
+
 /**
  * Render the impact step: show the impact outcome, then confirm/back.
  * Reuses the outcome already fetched when the popover opened (the "both"
@@ -197,6 +222,7 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
   confirm.disabled = true
   actions.append(confirm)
   root.replaceChildren(impact, actions)
+  focusFirst(root)
 
   void (async () => {
     const outcome = cached ?? await previewImpact(session, seq)
@@ -267,6 +293,7 @@ export function openPopover(opts: PopoverOptions): void {
     actions.append(cancel)
     children.push(actions)
     root.replaceChildren(...children)
+    focusFirst(root)
   }
 
   /** Position below the anchor (right-aligned), flipping above near the edge. */
@@ -284,6 +311,7 @@ export function openPopover(opts: PopoverOptions): void {
   renderModes()
   document.body.append(root)
   position()
+  focusFirst(root)
 
   // Resolve the "both" mode's availability up front (Claude Code hides the
   // code-restore options when the checkpoint has no tracked file changes).
@@ -312,17 +340,37 @@ export function openPopover(opts: PopoverOptions): void {
     if (root.contains(target) || anchor.contains(target)) return
     closePopover()
   }
+  // Capture phase on document: fires before the harness's React handlers, so
+  // ↑/↓/Esc are stolen from the composer while the popover is open (ArrowUp
+  // is input-history recall). Enter needs no handling: a focused button
+  // activates natively.
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'Escape') closePopover()
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, -1)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closePopover()
+    }
   }
   // Defer the first outside-click check so the opening click is not swallowed.
   const deferred = setTimeout(() => {
     document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
+    document.addEventListener('keydown', onKeyDown, true)
   }, 0)
   disposeOutside = () => {
     clearTimeout(deferred)
     document.removeEventListener('pointerdown', onPointerDown)
-    document.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('keydown', onKeyDown, true)
   }
 }
