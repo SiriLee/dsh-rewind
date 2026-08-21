@@ -118,6 +118,8 @@ Full instructions: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. File writes happen only when you choose "conversation and code" — before-backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials.
 
+> **Note:** a rewind only hides messages from view — the exported session log (`/export`) still contains them, and this plugin cannot alter exports. To remove a conversation completely, delete its session file.
+
 ## Development
 
 ```sh
