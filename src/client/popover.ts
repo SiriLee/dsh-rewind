@@ -243,6 +243,9 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
     }
     impact.textContent = outcome.text === undefined ? t('popover.impact.none') : stripImpactToken(outcome.text)
     confirm.disabled = false
+    // The confirm is the step's only action; focus it as it becomes enabled
+    // so a direct Enter confirms (native button activation).
+    confirm.focus()
     confirm.addEventListener('click', () => {
       closePopover()
       opts.onRewind('both')
