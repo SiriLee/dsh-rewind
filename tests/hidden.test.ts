@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode, CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, targetOfOutcome, type HiddenChat } from '../src/client/hidden.ts'
+import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, targetSeqOfArgs, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A chat view node for one row; only fields the hiding logic reads are real. */
 function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = null): ChatConversationViewNode {
@@ -27,7 +27,7 @@ function rewindCommand(key: string, anchorSeq: number, seq: number, outcome: Com
 function executed(key: string, anchorSeq: number, seq: number, target: number): ChatConversationViewNode {
   return rewindCommand(key, anchorSeq, seq, {
     kind: 'success',
-    text: `已撤回 seq ${target} 及之后内容（对话已回到此前）。`,
+    text: `Withdrawn seq ${target} and everything after it (conversation returned to earlier).`,
     sourceEventSeq: seq,
   }, `@${target} both`)
 }
@@ -36,7 +36,7 @@ function executed(key: string, anchorSeq: number, seq: number, target: number): 
 function preview(key: string, anchorSeq: number, seq: number, target: number): ChatConversationViewNode {
   return rewindCommand(key, anchorSeq, seq, {
     kind: 'success',
-    text: `将回退到 seq ${target}，从模型上下文移除 1 个节点（对话日志保留）。`,
+    text: `Rewind to seq ${target}, removing 1 node(s) from the model context (conversation log kept).`,
     sourceEventSeq: undefined,
   }, `preview @${target} both`)
 }
@@ -165,7 +165,7 @@ describe('hiddenSeqsOf', () => {
   it('keeps a failed EXECUTED rewind row visible (not a preview)', () => {
     const nodes = [
       viewNode('u0', 'user', 0),
-      rewindCommand('cmd', 6, 6, { kind: 'error', text: '回退失败：无法停止运行中的 agent。', sourceEventSeq: undefined }),
+      rewindCommand('cmd', 6, 6, { kind: 'error', text: 'Rewind failed: could not stop the running agent.', sourceEventSeq: undefined }),
     ]
     expect(sorted(hiddenSeqsOf(snap(nodes)))).toEqual([])
   })
@@ -177,12 +177,20 @@ describe('hiddenSeqsOf', () => {
   })
 })
 
-describe('targetOfOutcome', () => {
-  it('parses the target seq out of executed and preview texts', () => {
-    expect(targetOfOutcome('已撤回 seq 2 及之后内容（对话已回到此前）。')).toBe(2)
-    expect(targetOfOutcome('将回退到 seq 5，从模型上下文移除 1 个节点。')).toBe(5)
-    expect(targetOfOutcome(undefined)).toBeUndefined()
-    expect(targetOfOutcome('回退失败，会话未改变。')).toBeUndefined()
+describe('targetSeqOfArgs (locale-independent target extraction from command args)', () => {
+  it('extracts the target seq from executed and preview args', () => {
+    expect(targetSeqOfArgs('@2 both')).toBe(2)
+    expect(targetSeqOfArgs('@5 chat')).toBe(5)
+    expect(targetSeqOfArgs('preview @5 both')).toBe(5)
+    expect(targetSeqOfArgs('@5')).toBe(5)
+  })
+
+  it('returns undefined for args without a target', () => {
+    expect(targetSeqOfArgs(undefined)).toBeUndefined()
+    expect(targetSeqOfArgs(null)).toBeUndefined()
+    expect(targetSeqOfArgs('preview')).toBeUndefined()
+    expect(targetSeqOfArgs('')).toBeUndefined()
+    expect(targetSeqOfArgs('@x both')).toBeUndefined()
   })
 })
 
@@ -191,25 +199,25 @@ describe('isExecutedRewindCommand (composer refill waits only for THIS page\'s r
     rewindCommand('cmd', 6, 6, outcome, args).data as CommandNode
 
   it('matches an executed rewind for the exact target seq', () => {
-    expect(isExecutedRewindCommand(node({ kind: 'success', text: '已撤回 seq 5 及之后内容。', sourceEventSeq: 12 }, '@5 both'), 5)).toBe(true)
-    expect(isExecutedRewindCommand(node({ kind: 'success', text: '已撤回 seq 5 及之后内容。', sourceEventSeq: 12 }, '@5 chat'), 5)).toBe(true)
+    expect(isExecutedRewindCommand(node({ kind: 'success', text: 'Withdrawn seq 5 and everything after it.', sourceEventSeq: 12 }, '@5 both'), 5)).toBe(true)
+    expect(isExecutedRewindCommand(node({ kind: 'success', text: 'Withdrawn seq 5 and everything after it.', sourceEventSeq: 12 }, '@5 chat'), 5)).toBe(true)
   })
 
   it('does not match a different target seq', () => {
-    const executed = node({ kind: 'success', text: '已撤回 seq 5 及之后内容。', sourceEventSeq: 12 }, '@5 both')
+    const executed = node({ kind: 'success', text: 'Withdrawn seq 5 and everything after it.', sourceEventSeq: 12 }, '@5 both')
     expect(isExecutedRewindCommand(executed, 4)).toBe(false)
   })
 
   it('does not match previews or other successes without a marker', () => {
-    const preview = node({ kind: 'success', text: '将回退到 seq 5。', sourceEventSeq: undefined }, 'preview @5 both')
+    const preview = node({ kind: 'success', text: 'Rewind to seq 5.', sourceEventSeq: undefined }, 'preview @5 both')
     expect(isExecutedRewindCommand(preview, 5)).toBe(false)
     // The step-2 "choose a mode" hint is a success without a marker too.
-    const hint = node({ kind: 'success', text: '将回退到 seq 5。选择模式：…', sourceEventSeq: undefined }, '@5')
+    const hint = node({ kind: 'success', text: 'Rewind to seq 5. Choose a mode: …', sourceEventSeq: undefined }, '@5')
     expect(isExecutedRewindCommand(hint, 5)).toBe(false)
   })
 
   it('does not match failed or pending rewinds', () => {
-    expect(isExecutedRewindCommand(node({ kind: 'error', text: '回退失败。' }, '@5 both'), 5)).toBe(false)
+    expect(isExecutedRewindCommand(node({ kind: 'error', text: 'Rewind failed.' }, '@5 both'), 5)).toBe(false)
     expect(isExecutedRewindCommand(node(null, '@5 both'), 5)).toBe(false)
   })
 
@@ -223,13 +231,13 @@ describe('isExecutedRewindCommand (composer refill waits only for THIS page\'s r
 
 describe('hasFileImpact (code-restore option availability)', () => {
   it('uses the machine impact token when present', () => {
-    expect(hasFileImpact('将回退到 seq 5。\n将影响 2 个文件：\n 还原 /a\nimpact=2')).toBe(true)
-    expect(hasFileImpact('将回退到 seq 5。\n目标之后没有快照记录的写类变更。\nimpact=0')).toBe(false)
+    expect(hasFileImpact('Rewind to seq 5.\nAffects 2 file(s):\n  restore /a\nimpact=2')).toBe(true)
+    expect(hasFileImpact('Rewind to seq 5.\nNo restorable changes after the target.\nimpact=0')).toBe(false)
   })
 
-  it('falls back to the human copy for older host output without a token', () => {
-    expect(hasFileImpact('将回退到 seq 5。\n将影响 1 个文件：\n  还原 /a')).toBe(true)
-    expect(hasFileImpact('将回退到 seq 5。\n目标之后没有快照记录的写类变更，无需还原文件。')).toBe(false)
+  it('treats text without a machine token as no changes (never guesses from human copy)', () => {
+    expect(hasFileImpact('Rewind to seq 5.\nAffects 1 file(s):\n  restore /a')).toBe(false)
+    expect(hasFileImpact('Rewind to seq 5.\nNo restorable changes after the target.')).toBe(false)
   })
 
   it('degrades to always-show for unknown outcomes', () => {

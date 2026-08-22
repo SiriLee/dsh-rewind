@@ -234,5 +234,5 @@ export function formatCandidate(candidate: RewindCandidate): string {
   const time = new Date(candidate.time)
   const hh = String(time.getHours()).padStart(2, '0')
   const mm = String(time.getMinutes()).padStart(2, '0')
-  return `${candidate.index}. ${hh}:${mm} ${candidate.preview || '(无文本)'}`
+  return `${candidate.index}. ${hh}:${mm} ${candidate.preview || '(no text)'}`
 }

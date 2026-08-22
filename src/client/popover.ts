@@ -65,11 +65,20 @@ function formatTarget(t: Translate, seq: number, time: number, preview: string):
 }
 
 /**
- * Strip the host's machine-readable `impact=<n>` trailer (the last line of a
- * preview outcome, see formatPlan in src/index.ts) before showing the text.
+ * Parse the host's machine-readable impact trailer from a preview outcome text
+ * (the trailing lines of formatPlan in src/index.ts): `impact=<n>` plus one
+ * `restore:<path>` / `delete:<path>` line per file. Locale-independent — the
+ * human copy above the trailer is ignored; the popover renders its own
+ * localized list from these tokens.
  */
-function stripImpactToken(text: string): string {
-  return text.replace(/\n?impact=\d+\s*$/, '')
+function parseImpactList(text: string): { restores: string[]; deletes: string[] } {
+  const restores: string[] = []
+  const deletes: string[] = []
+  for (const line of text.split('\n')) {
+    if (line.startsWith('restore:')) restores.push(line.slice('restore:'.length))
+    else if (line.startsWith('delete:')) deletes.push(line.slice('delete:'.length))
+  }
+  return { restores, deletes }
 }
 
 /** Find the newest rewind command node matching a predicate. */
@@ -241,7 +250,22 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
       impact.textContent = t('popover.impact.failed', { message: outcome.text ?? 'unknown error' })
       return
     }
-    impact.textContent = outcome.text === undefined ? t('popover.impact.none') : stripImpactToken(outcome.text)
+    if (outcome.text === undefined) {
+      impact.textContent = t('popover.impact.none')
+    } else {
+      // Render the localized file list from the host's machine trailer
+      // (restore:/delete: lines), never from the host's human copy.
+      const { restores, deletes } = parseImpactList(outcome.text)
+      if (restores.length === 0 && deletes.length === 0) {
+        impact.textContent = t('popover.impact.none')
+      } else {
+        const lines = [
+          ...restores.map(path => t('popover.impact.restore', { path })),
+          ...deletes.map(path => t('popover.impact.delete', { path })),
+        ]
+        impact.textContent = lines.join('\n')
+      }
+    }
     confirm.disabled = false
     // The confirm is the step's only action; focus it as it becomes enabled
     // so a direct Enter confirms (native button activation).
@@ -333,10 +357,10 @@ export function openPopover(opts: PopoverOptions): void {
 
   // Resolve the "both" mode's availability up front (Claude Code hides the
   // code-restore options when the checkpoint has no tracked file changes).
-  // `hasFileImpact` prefers the host's machine-readable `impact=<n>` trailer
-  // and falls back to the human copy for older host output. An unknown
-  // outcome (preview failed/timeout) keeps "both" enabled — degrade to
-  // always-shown rather than hiding a working option.
+  // `hasFileImpact` reads only the host's machine-readable `impact=<n>`
+  // trailer (locale-independent). An unknown outcome (preview failed/timeout)
+  // keeps "both" enabled — degrade to always-shown rather than hiding a
+  // working option.
   void (async () => {
     const outcome = await previewImpact(session, seq)
     impactOutcome = outcome

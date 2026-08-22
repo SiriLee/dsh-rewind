@@ -14,10 +14,14 @@ export interface HiddenChat {
   readonly nodes: { get(key: string): ChatConversationViewNode | undefined }
 }
 
-/** Extract the rewind target from a command outcome text ("已撤回 seq N..."). */
-export function targetOfOutcome(text: string | undefined): number | undefined {
-  if (text === undefined) return undefined
-  const match = text.match(/seq (\d+)/)
+/**
+ * Extract the rewind target seq from a `/rewind` command's structured `args`
+ * (e.g. `@5 chat`, `preview @5 both`). Locale-independent — never parses the
+ * host's human outcome copy.
+ */
+export function targetSeqOfArgs(args: string | null | undefined): number | undefined {
+  if (args === undefined || args === null) return undefined
+  const match = args.match(/@(\d+)/)
   return match !== null ? Number(match[1]) : undefined
 }
 
@@ -42,16 +46,16 @@ export function isExecutedRewindCommand(node: CommandNode, seq: number): boolean
  * of the "rewind conversation and code" option (Claude Code hides the
  * code-restore options when the checkpoint has no tracked changes).
  *
- * Prefers the machine-readable `impact=<n>` trailer the current host appends
- * to preview text. Older host output (or a history-loaded preview row from
- * before the trailer existed) has none, so it falls back to the human copy
- * ("将影响 …") to keep mixed-version deployments correct.
+ * Reads ONLY the machine-readable `impact=<n>` trailer the host appends to
+ * preview text. Older host output without the trailer is treated as having no
+ * changes (never guesses from human copy). Unknown/absent text degrades to
+ * always-show so a working option is never hidden on a failed probe.
  */
 export function hasFileImpact(text: string | undefined): boolean {
   if (text === undefined) return true
   const match = text.match(/impact=(\d+)/)
   if (match !== null) return Number(match[1]) > 0
-  return text.includes('将影响')
+  return false
 }
 
 /** True when a `/rewind` command node is an impact preview — the internal probe
@@ -105,7 +109,7 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
     const marker = command.outcome.sourceEventSeq
     if (marker === undefined) continue
     hidden.add(command.seq)
-    const target = targetOfOutcome(command.outcome.text)
+    const target = targetSeqOfArgs(command.args)
     if (target !== undefined) {
       spans.push({ start: target, end: marker })
     }

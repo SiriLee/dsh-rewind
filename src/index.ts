@@ -33,6 +33,8 @@ import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type RestoreOutcome } from './snapshot.ts'
@@ -55,12 +57,23 @@ const TRACKED_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
 /** str_replace_editor commands that mutate the filesystem. */
 const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
 
-const USAGE = [
-  'Usage:',
-  '  /rewind                       （无参数）撤回最近一条用户消息',
-  '  /rewind @<seq> chat|both      回退到指定消息（chat 仅对话 / both 对话+文件）',
-  '  手动输入 /rewind 会被拦截，请使用消息旁的「回退」按钮',
-].join('\n')
+/** Host-side locale the command output renders in; updated from settings at apply time. */
+let activeLocale: HostLocaleId = 'en'
+
+/** Render one host dictionary key in the active locale. */
+function t(key: HostKey, params?: Record<string, string | number>): string {
+  return translate(activeLocale, key, params)
+}
+
+/** Render the `/rewind` usage block in the active locale. */
+function usage(): string {
+  return [
+    t('usage.title'),
+    t('usage.noArgs'),
+    t('usage.seq'),
+    t('usage.blocked'),
+  ].join('\n')
+}
 
 /** Before-state captured for one in-flight tool call, keyed by agent+callId. */
 interface PendingCapture {
@@ -239,27 +252,39 @@ function buildMarker(): AssistantMessage {
 /** Render a parsed target for the step-2 hint. */
 function describeTarget(target: RewindTarget): string {
   return target.kind === 'seq'
-    ? `seq ${target.seq}`
-    : `第 ${target.index} 条消息`
+    ? t('describeTarget.seq', { seq: target.seq })
+    : t('describeTarget.index', { index: target.index })
 }
 
-/** Render an impact list for `preview` and the `both` confirmation. */
+/**
+ * Render an impact list for `preview` and the `both` confirmation. The human
+ * copy follows the active host locale; the trailing block is a
+ * locale-independent machine channel the client parses to render its own
+ * localized popover and to decide both-mode availability:
+ *   `impact=<n>`        → number of files affected
+ *   `restore:<path>`    → one file to restore
+ *   `delete:<path>`     → one file to delete
+ * The client MUST render from these tokens, never from the human copy.
+ */
 function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'restore' | 'delete' }[]): string {
   const lines = [
-    `将回退到 seq ${plan.targetSeq}，从模型上下文移除 ${plan.shadowedSeqs.length} 个节点（对话日志保留）。`,
+    t('plan.rewinding', { targetSeq: plan.targetSeq, count: plan.shadowedSeqs.length }),
   ]
   if (files.length > 0) {
-    lines.push(`将影响 ${files.length} 个文件：`)
+    lines.push(t('plan.affects', { count: files.length }))
     for (const file of files) {
-      lines.push(`  ${file.action === 'restore' ? '还原' : '删除'} ${file.path}`)
+      lines.push(`  ${file.action === 'restore' ? t('plan.restore', { path: file.path }) : t('plan.delete', { path: file.path })}`)
     }
   } else {
-    lines.push('目标之后没有需要还原的变更。')
+    lines.push(t('plan.noChanges'))
   }
   // Machine-readable trailer (stable literal, locale-independent): the client
-  // parses `impact=<n>` to decide whether the code-restore mode is available
-  // and strips the line before showing the text — never the human copy above.
+  // parses `impact=<n>` and the restore:/delete: lines to render its own
+  // localized copy — never the human lines above.
   lines.push(`impact=${files.length}`)
+  for (const file of files) {
+    lines.push(`${file.action}:${file.path}`)
+  }
   return lines.join('\n')
 }
 
@@ -267,7 +292,7 @@ function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'r
 function resolveOrError(events: Session['events'], surface: Session['surface']['nodes'], raw: string): RewindPlan {
   const target = parseRewindTarget(raw)
   if (target === undefined) {
-    throw new RewindError('invalid-index', `无法解析目标 "${raw}"（应为 <序号> 或 @<seq>）`)
+    throw new RewindError('invalid-index', t('error.invalidTarget', { raw }))
   }
   return planRewind(events, surface, target)
 }
@@ -275,7 +300,10 @@ function resolveOrError(events: Session['events'], surface: Session['surface']['
 /** One failed file restore, rendered for the result text. */
 function renderFailures(failed: readonly { path: string; message: string }[]): string {
   if (failed.length === 0) return ''
-  return `；${failed.length} 个文件还原失败：${failed.map(f => `${f.path}（${f.message}）`).join('、')}`
+  return t('failures.suffix', {
+    count: failed.length,
+    list: failed.map(f => t('failures.item', { path: f.path, message: f.message })).join('、'),
+  })
 }
 
 /**
@@ -395,7 +423,7 @@ async function executeRewind(
   // replace range would then target nodes the first marker already shadowed,
   // and `Session.append` rejects with "start seq not found in surface".
   if (inflight.has(sessionId)) {
-    return { kind: 'error', text: '该会话已有一个回退正在执行，请稍候。' }
+    return { kind: 'error', text: t('inflight') }
   }
   inflight.add(sessionId)
   try {
@@ -406,13 +434,13 @@ async function executeRewind(
       agent.cancel({ kind: 'user' })
       const stopped = await waitForAgentIdle(agent, invocation.signal)
       if (!stopped) {
-        return { kind: 'error', text: '无法停止运行中的 agent，回退已取消。请稍后再试。' }
+        return { kind: 'error', text: t('stopFailed') }
       }
     }
     // The command was cancelled (or its caller aborted) while we waited for
     // quiescence: stop here instead of executing a rewind nobody asked for.
     if (invocation.signal.aborted) {
-      return { kind: 'error', text: '回退已取消。' }
+      return { kind: 'error', text: t('cancelled') }
     }
     let plan: RewindPlan
     try {
@@ -435,7 +463,7 @@ async function executeRewind(
     } catch (error) {
       return {
         kind: 'error',
-        text: `回退失败：${error instanceof Error ? error.message : String(error)}。会话未改变。`,
+        text: t('failed', { error: error instanceof Error ? error.message : String(error) }),
       }
     }
 
@@ -448,10 +476,10 @@ async function executeRewind(
       // observation (see syncRestoreObservations).
       await syncRestoreObservations(ctx, fs, agent, outcome)
       const parts: string[] = []
-      if (outcome.restored.length > 0) parts.push(`还原 ${outcome.restored.length} 个文件`)
-      if (outcome.deleted.length > 0) parts.push(`删除 ${outcome.deleted.length} 个文件`)
-      if (outcome.skipped.length > 0) parts.push(`跳过 ${outcome.skipped.length} 个链接`)
-      restore = parts.length > 0 ? `；${parts.join('、')}` : '；目标之后没有可还原的写类变更'
+      if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
+      if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
+      if (outcome.skipped.length > 0) parts.push(t('skip.count', { count: outcome.skipped.length }))
+      restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
       restore += renderFailures(outcome.failed)
     }
 
@@ -459,7 +487,7 @@ async function executeRewind(
     // content is offered back in the composer for re-sending.
     return {
       kind: 'success',
-      text: `已撤回 seq ${plan.targetSeq} 及之后内容（对话已回到此前）${restore}。`,
+      text: t('success', { targetSeq: plan.targetSeq, restore }),
       sourceEventSeq: event.seq,
     }
   } finally {
@@ -471,7 +499,7 @@ async function executeRewind(
 function rewindErrorResult(error: unknown): CommandResult {
   if (error instanceof RewindError) {
     const text = {
-      'no-user-messages': '当前会话还没有可回退的用户消息。',
+      'no-user-messages': t('noUserMessages'),
       'invalid-index': error.message,
       'not-a-user-message': error.message,
       'not-on-surface': error.message,
@@ -501,7 +529,7 @@ async function handleRewind(
     // (time-travel back one turn; the text is offered back in the composer).
     const candidates = listRewindCandidates(session.events, session.surface.nodes, 1)
     if (candidates.length === 0) {
-      return { kind: 'error', text: '当前会话还没有可回退的用户消息。' }
+      return { kind: 'error', text: t('noUserMessages') }
     }
     return executeRewind(ctx, store, fs, invocation, `@${candidates[0]!.seq}`, 'chat', inflight)
   }
@@ -509,7 +537,7 @@ async function handleRewind(
   const parts = input.split(/\s+/)
   if (parts[0] === 'preview') {
     const target = parts[1]
-    if (target === undefined) return { kind: 'error', text: USAGE }
+    if (target === undefined) return { kind: 'error', text: usage() }
     let plan: RewindPlan
     try {
       plan = resolveOrError(session.events, session.surface.nodes, target)
@@ -523,14 +551,14 @@ async function handleRewind(
   const target = parts[0]!
   const mode = parts[1]
   if (mode !== undefined && mode !== 'chat' && mode !== 'both') {
-    return { kind: 'error', text: USAGE }
+    return { kind: 'error', text: usage() }
   }
   if (mode === undefined) {
     const parsed = parseRewindTarget(target)
-    if (parsed === undefined) return { kind: 'error', text: USAGE }
+    if (parsed === undefined) return { kind: 'error', text: usage() }
     return {
       kind: 'success',
-      text: `将回退到 ${describeTarget(parsed)}。选择模式：\n  /rewind ${target} chat  仅回退对话\n  /rewind ${target} both  回退对话并还原文件`,
+      text: t('chooseMode', { target: describeTarget(parsed) }),
     }
   }
   return executeRewind(ctx, store, fs, invocation, target, mode, inflight)
@@ -581,10 +609,24 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // then degrades to a no-op and the pre-existing stale-error fallback stays.
   let fsService: FileSystem | undefined
 
+  // Resolve the durable locale preference (registered by dsh-client-locale's
+  // host half) and keep the command output following it. Settings is optional
+  // and injected dynamically like fs: an absent service (or a preference that
+  // was never set) leaves the default English — the ecosystem's neutral
+  // fallback — without failing the plugin load.
+  ctx.inject(['settings'], (settingsCtx) => {
+    const section = settingsCtx.settings.get(settingsNamespace('locale')) as
+      | { preference?: HostLocaleId }
+      | undefined
+    if (section?.preference === 'zh' || section?.preference === 'en') {
+      activeLocale = section.preference
+    }
+  })
+
   ctx.effect(function* () {
     yield ctx.commands.register({
       name: 'rewind',
-      description: '在同窗口内将对话回退到更早的用户消息（可同时还原文件）',
+      description: t('command.description'),
       handler: invocation => handleRewind(ctx, store, fsService, invocation, inflight),
     })
   }, 'dsh-rewind command')

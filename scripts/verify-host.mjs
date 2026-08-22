@@ -148,8 +148,8 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   await writeFile(aPath, 'v3', 'utf8') // later edit lands after the backups
 
   const preview = await call(agent, `preview @${anchorSeq} both`)
-  check('preview reports the file impact', preview.kind === 'success' && preview.text.includes(aPath) && preview.text.includes('还原'), preview.text)
-  check('preview carries the machine impact token', preview.kind === 'success' && /impact=2/.test(preview.text), preview.text)
+  check('preview reports the file impact', preview.kind === 'success' && preview.text.includes(aPath) && /impact=2/.test(preview.text), preview.text)
+  check('preview carries the machine restore/delete lines', preview.kind === 'success' && preview.text.includes(`restore:${aPath}`), preview.text)
 
   // The both-mode restore must re-sync the harness fs-observation policy:
   // record every fs/observed emission around the restore, then assert the
@@ -168,7 +168,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   const both = await call(agent, `@${anchorSeq} both`)
   disposeObs()
 
-  check('rewind both succeeds', both.kind === 'success' && both.text.includes('还原 1 个文件') && both.text.includes('删除 1 个文件'), both.text)
+  check('rewind both succeeds', both.kind === 'success' && both.text.includes('restored 1 file(s)') && both.text.includes('deleted 1 file(s)'), both.text)
   check('modified file restored to pre-edit content', await readFile(aPath, 'utf8') === 'original content', await readFile(aPath, 'utf8'))
   let createdGone = false
   try { await readFile(createdPath, 'utf8') } catch { createdGone = true }
@@ -208,7 +208,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   const cleanSession = buildSession('verify-norec')
   const cleanAgent = { id: cleanSession.id, session: cleanSession, status: 'idle' }
   const previewResult = await call(cleanAgent, 'preview @2 both')
-  check('preview with no entries reports no changes', previewResult.kind === 'success' && previewResult.text.includes('没有需要还原的变更'), previewResult.text)
+  check('preview with no entries reports no changes', previewResult.kind === 'success' && previewResult.text.includes('No restorable changes after the target.') && /impact=0/.test(previewResult.text), previewResult.text)
 }
 
 // 8. a running agent is force-stopped before the rewind (not refused)
