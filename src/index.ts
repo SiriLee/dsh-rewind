@@ -30,12 +30,12 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import type { AssistantMessage, Session } from '@deepseek-ai/dsh-session'
+import type { AssistantMessage, Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
 import { listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { SnapshotStore } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore } from './snapshot.ts'
 
 export { SnapshotStore } from './snapshot.ts'
 export type { CheckpointEntry, FileImpact, RestoreOutcome } from './snapshot.ts'
@@ -187,6 +187,7 @@ async function commitEntry(
   store: SnapshotStore,
   pending: Map<string, PendingCapture>,
   anchorCache: WeakMap<Session, AnchorCacheEntry>,
+  trackedBySession: Map<string, Set<string>>,
   exec: ToolExecution,
   result: ToolExecutionResult,
 ): Promise<void> {
@@ -205,6 +206,14 @@ async function commitEntry(
     path: capture.path,
     before: capture.before ?? null,
   })
+  // The path is now a tracked file: remember it for the boundary re-check
+  // (the per-session set may not have been loaded yet — seed it lazily).
+  let tracked = trackedBySession.get(agent.session.id)
+  if (tracked === undefined) {
+    tracked = new Set()
+    trackedBySession.set(agent.session.id, tracked)
+  }
+  tracked.add(capture.path)
 }
 
 /**
@@ -245,7 +254,7 @@ function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'r
       lines.push(`  ${file.action === 'restore' ? '还原' : '删除'} ${file.path}`)
     }
   } else {
-    lines.push('目标之后没有快照记录的写类变更，无需还原文件。')
+    lines.push('目标之后没有需要还原的变更。')
   }
   // Machine-readable trailer (stable literal, locale-independent): the client
   // parses `impact=<n>` to decide whether the code-restore mode is available
@@ -485,6 +494,14 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   const anchorCache = new WeakMap<Session, AnchorCacheEntry>()
   // Sessions with a rewind currently executing (per-session in-flight guard).
   const inflight: InflightRewinds = new Set()
+  // Per-session tracked path sets (seeded lazily from the snapshot store; a
+  // path joins as soon as a write-class tool commits an entry for it). Used
+  // by the user-message boundary re-check below.
+  const trackedBySession = new Map<string, Set<string>>()
+  // Per-session last-seen file states (path → content, null = absent) for
+  // the boundary re-check. Empty after a restart: the first boundary then
+  // unconditionally records the current state (redundant but correct).
+  const statesBySession = new Map<string, Map<string, string | null>>()
 
   ctx.effect(function* () {
     yield ctx.commands.register({
@@ -493,6 +510,41 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       handler: invocation => handleRewind(ctx, store, invocation, inflight),
     })
   }, 'dsh-rewind command')
+
+  // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
+  // analog): every time a user/message lands in a session log, re-read every
+  // tracked file of that session and record a before-backup for any whose
+  // on-disk state changed since it was last seen (including EXTERNAL edits
+  // and deletions the write-class capture never saw). The entry is anchored
+  // at the boundary message, so a later rewind to this message restores the
+  // file to this exact state — and a rewind to an earlier message restores
+  // an earlier entry. Subagent sessions are skipped (their edits are not
+  // tracked, matching captureBefore). Runs async off the append hot path;
+  // failures are logged, never blocking the message.
+  ctx.on('session/event', (session: Session, event: SessionEvent) => {
+    if (event.type !== 'user/message') return
+    const header = session.header
+    if (header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0) return
+    void (async () => {
+      try {
+        const sessionId = session.id
+        let tracked = trackedBySession.get(sessionId)
+        if (tracked === undefined) {
+          tracked = await store.trackedPaths(sessionId)
+          trackedBySession.set(sessionId, tracked)
+        }
+        if (tracked.size === 0) return
+        let states = statesBySession.get(sessionId)
+        if (states === undefined) {
+          states = new Map()
+          statesBySession.set(sessionId, states)
+        }
+        await reconcileTracked(store, sessionId, event.seq, tracked, states)
+      } catch (error) {
+        ctx.logger.warn(`[dsh-rewind] boundary re-check failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
+  }, { global: true })
 
   ctx.inject(['fs'], (scope) => {
     const fs = scope.fs
@@ -507,7 +559,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
 
     scope.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
       try {
-        await commitEntry(store, pending, anchorCache, exec, result)
+        await commitEntry(store, pending, anchorCache, trackedBySession, exec, result)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }

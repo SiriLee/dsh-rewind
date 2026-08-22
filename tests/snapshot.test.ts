@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SnapshotStore } from '../src/snapshot.ts'
+import { reconcileTracked, SnapshotStore, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -100,13 +100,16 @@ describe('SnapshotStore', () => {
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'a' })
     const created = await touch('q.txt', 'b')
     await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: created, before: null })
+    // The file is edited after the backup so the preview sees a real diff
+    // (identical content would reconcile to NO impact).
+    await writeFile(file, 'changed', 'utf8')
 
     const impacts = await store.impactsAfter(session, 5)
     expect(impacts).toEqual([
       { path: file, action: 'restore' },
       { path: created, action: 'delete' },
     ])
-    expect(await readFile(file, 'utf8')).toBe('a')
+    expect(await readFile(file, 'utf8')).toBe('changed') // preview never mutates
     expect(await readFile(created, 'utf8')).toBe('b')
   })
 
@@ -182,5 +185,162 @@ describe('SnapshotStore', () => {
     const outcome = await store.restoreAfter(session, 42, unlink)
     expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
     expect(await store.impactsAfter(session, 42)).toEqual([])
+  })
+})
+
+describe('restore planning reconciles with the current disk (Claude Code behavior)', () => {
+  it('reports no ghost impact for a creation entry whose file is already gone', async () => {
+    // Regression for the repeated-rewind bug: a rewind to message 2 deletes
+    // the created file, but its entry stays in the store. A later rewind to
+    // message 1 must NOT re-report the delete — the disk already matches the
+    // target state, so the option disappears and the restore is a no-op.
+    const created = await touch('gone.txt', 'n')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 6, path: created, before: null })
+    await rm(created, { force: true }) // e.g. applied by an earlier rewind
+
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+  })
+
+  it('treats identical content as no impact (idempotent restore)', async () => {
+    const file = await touch('same.txt', 'x')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    // Disk already equals the recorded before state.
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+    expect(await readFile(file, 'utf8')).toBe('x')
+  })
+
+  it('tolerates a delete whose file is already absent (no ENOENT failure)', async () => {
+    const created = await touch('missing.txt', 'n')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 6, path: created, before: null })
+    // The injected deleteFile itself fails with ENOENT (production unlink on
+    // an absent file): the pass must swallow it, not report a failure.
+    const outcome = await store.restoreAfter(session, 5, async () => {
+      throw Object.assign(new Error('ENOENT: no such file'), { code: 'ENOENT' })
+    })
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+  })
+
+  it('restores a missing file whose before content exists (recreates it)', async () => {
+    const file = await touch('recreate.txt', 'content')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'content' })
+    await writeFile(file, 'edited', 'utf8')
+    await rm(file, { force: true })
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('content')
+  })
+
+  it('plans exactly the real differences (injected probe)', async () => {
+    const a = await touch('a.txt', '')
+    const b = await touch('b.txt', '')
+    const c = await touch('c.txt', '')
+    await store.recordEntry(session, { callId: 'a', anchorSeq: 5, path: a, before: 'A0' })
+    await store.recordEntry(session, { callId: 'b', anchorSeq: 5, path: b, before: 'B0' })
+    await store.recordEntry(session, { callId: 'c', anchorSeq: 5, path: c, before: null })
+    const probe: DiskProbe = {
+      isLink: async () => false,
+      readText: async (path: string) => {
+        if (path === a) return 'A0' // identical → no impact
+        if (path === b) return 'B1' // differs → restore
+        if (path === c) return undefined // creation already absent → no impact
+        return undefined
+      },
+    }
+    expect(await store.impactsAfter(session, 5, probe)).toEqual([
+      { path: b, action: 'restore' },
+    ])
+  })
+
+  it('conservatively plans a restore when the disk probe fails', async () => {
+    const file = await touch('unreadable.txt', 'original')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    const failingProbe: DiskProbe = {
+      isLink: async () => false,
+      readText: async () => {
+        throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+      },
+    }
+    // An unreadable file is never silently dropped: the plan treats it as
+    // differing, so the restore still attempts the write.
+    expect(await store.impactsAfter(session, 5, failingProbe)).toEqual([
+      { path: file, action: 'restore' },
+    ])
+    const outcome = await store.restoreAfter(session, 5, unlink, failingProbe)
+    expect(outcome.restored).toEqual([file])
+  })
+})
+
+describe('reconcileTracked (user-message boundary re-check)', () => {
+  it('records an external edit at the next boundary and restores it on rewind', async () => {
+    const file = await touch('tracked.txt', 'original')
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
+    await writeFile(file, 'externally edited', 'utf8') // external change
+    const tracked = await store.trackedPaths(session)
+    const states = new Map<string, string | null>()
+
+    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    // The recheck entry anchors the external state at the boundary message.
+    // Rewinding to it restores the external edit…
+    await writeFile(file, 'something else', 'utf8')
+    const outcome = await store.restoreAfter(session, 7, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('externally edited')
+    // …while rewinding before it still restores the tool-captured before.
+    await writeFile(file, 'again', 'utf8')
+    const earlier = await store.restoreAfter(session, 5, unlink)
+    expect(earlier.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('original')
+  })
+
+  it('records a deletion and restores the file when rewinding before it', async () => {
+    const file = await touch('tracked.txt', 'original')
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
+    await rm(file, { force: true }) // external delete
+    const tracked = await store.trackedPaths(session)
+    const states = new Map<string, string | null>()
+
+    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    // At the boundary the deletion is already applied: rewinding to 7 is a
+    // no-op; rewinding before it recreates the file from the earlier entry.
+    expect(await store.impactsAfter(session, 7)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('original')
+  })
+
+  it('records only on state change (first sighting always records)', async () => {
+    const file = await touch('tracked.txt', 'original')
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
+    await writeFile(file, 'edited by turn', 'utf8')
+    const tracked = await store.trackedPaths(session)
+    const states = new Map<string, string | null>()
+
+    // First sighting of the path: unconditionally record the current state.
+    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    // Next boundary: state unchanged → nothing new recorded.
+    expect(await reconcileTracked(store, session, 8, tracked, states)).toBe(0)
+    // External change → recorded again.
+    await writeFile(file, 'externally edited', 'utf8')
+    expect(await reconcileTracked(store, session, 9, tracked, states)).toBe(1)
+  })
+
+  it('skips symlinked paths', async () => {
+    const real = await touch('real.txt', 'x')
+    const link = join(root, 'ws', 'link.txt')
+    const { symlink } = await import('node:fs/promises')
+    try {
+      await symlink(real, link)
+    } catch {
+      return // filesystem without symlink support: nothing to assert
+    }
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: link, before: 'x' })
+    const tracked = await store.trackedPaths(session)
+    const states = new Map<string, string | null>()
+    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(0)
   })
 })

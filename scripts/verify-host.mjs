@@ -190,7 +190,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   const cleanSession = buildSession('verify-norec')
   const cleanAgent = { id: cleanSession.id, session: cleanSession, status: 'idle' }
   const previewResult = await call(cleanAgent, 'preview @2 both')
-  check('preview with no entries reports no changes', previewResult.kind === 'success' && previewResult.text.includes('无需还原文件'), previewResult.text)
+  check('preview with no entries reports no changes', previewResult.kind === 'success' && previewResult.text.includes('没有需要还原的变更'), previewResult.text)
 }
 
 // 8. a running agent is force-stopped before the rewind (not refused)

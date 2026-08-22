@@ -29,6 +29,7 @@
  * @module dsh-rewind/snapshot
  */
 
+import { createHash } from 'node:crypto'
 import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -73,6 +74,42 @@ export interface RestoreOutcome {
 
 /** Deletes one file by its real path (node:fs, bypassing the fs service). */
 export type DeleteFile = (path: string) => Promise<void>
+
+/**
+ * Current-on-disk state probe used by restore planning. Injected so the plan
+ * logic runs against a fake FS in tests; the production default reads the
+ * real file system with plain `node:fs` (see {@link defaultProbe}).
+ */
+export interface DiskProbe {
+  /**
+   * Full text of the file, or undefined when the file does not exist.
+   * Any thrown error is treated as a probe failure: restore planning then
+   * conservatively treats the file as DIFFERING from its record (a restore
+   * still attempts the write / a delete still attempts the unlink), so an
+   * unreadable file is never silently skipped.
+   */
+  readText(path: string): Promise<string | undefined>
+  /** True when the path is a symlink or a hard link (never planned/restored). */
+  isLink(path: string): Promise<boolean>
+}
+
+/** One restore action the planner derived from record + disk reconciliation. */
+export type PlannedAction =
+  | { readonly path: string; readonly action: 'restore'; readonly before: string }
+  | { readonly path: string; readonly action: 'delete' }
+
+/** Production probe: real reads via node:fs, links detected by lstat + nlink. */
+export const defaultProbe: DiskProbe = {
+  async readText(path: string): Promise<string | undefined> {
+    try {
+      return await readFile(path, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+  },
+  isLink: isLinkPath,
+}
 
 /** Sanitize a call id into a safe file name. */
 function safeFileId(callId: string): string {
@@ -209,46 +246,125 @@ export class SnapshotStore {
     return earliest
   }
 
-  /** Per-file restore impact for the earliest entry at/after the target. */
-  async impactsAfter(sessionId: string, targetSeq: number): Promise<FileImpact[]> {
-    return [...(await this.earliestEntries(sessionId, targetSeq)).values()]
+  /**
+   * The single source of truth for BOTH the impact preview and the restore
+   * pass: reconcile the earliest recorded entry per path (at/after the
+   * target) against the CURRENT on-disk state, and plan only the actions
+   * that would actually change the disk. This is the Claude Code model —
+   * `fileHistoryGetDiffStats` / `applySnapshot` both compare against the
+   * live filesystem (`checkOriginFileChanged`) and count only real
+   * differences, so a rewind whose target state already matches the disk is
+   * a no-op with zero impact.
+   *
+   * - `before === null` (the file did not exist at the target) plans a
+   *   `delete` ONLY when the file currently exists; an already-absent file
+   *   is a no-op — this kills the "ghost impact" of replaying an entry a
+   *   previous rewind already consumed.
+   * - `before === 'X'` plans a `restore` ONLY when the current content
+   *   differs from X (or the file is missing); identical content is a no-op
+   *   — this keeps repeated rewinds idempotent.
+   * - Symlinked / hard-linked paths are never planned (they are reported as
+   *   skipped by the restore pass, never written through).
+   * - A probe failure (e.g. a permission error reading the file) plans the
+   *   action conservatively as if the file differed, so an unreadable file
+   *   is never silently dropped from the restore.
+   *
+   * @param sessionId - session whose snapshot store to plan against.
+   * @param targetSeq - rewind target; entries anchored at/after it apply.
+   * @param probe - current-disk state probe (defaults to the real FS).
+   * @returns the planned actions plus the link paths that were skipped.
+   */
+  private async planRestore(
+    sessionId: string,
+    targetSeq: number,
+    probe: DiskProbe,
+  ): Promise<{ actions: PlannedAction[]; skipped: string[] }> {
+    const actions: PlannedAction[] = []
+    const skipped: string[] = []
+    for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
+      try {
+        if (await probe.isLink(entry.path)) {
+          skipped.push(entry.path)
+          continue
+        }
+        const current = await probe.readText(entry.path)
+        if (entry.before === null) {
+          // The file was created at/after the target: delete it when it is
+          // still present. An absent file already matches the target state.
+          if (current !== undefined) actions.push({ path: entry.path, action: 'delete' })
+        } else if (current !== entry.before) {
+          // The file differs from its pre-edit content (or is missing):
+          // write the before content back. Identical content is a no-op.
+          actions.push({ path: entry.path, action: 'restore', before: entry.before })
+        }
+      } catch (error) {
+        // Probe failure: conservative — treat as differing. A restore still
+        // attempts the write, a delete still attempts the unlink (failures
+        // surface per-file in the restore outcome, never silently skipped).
+        if (entry.before === null) {
+          actions.push({ path: entry.path, action: 'delete' })
+        } else {
+          actions.push({ path: entry.path, action: 'restore', before: entry.before })
+        }
+      }
+    }
+    return { actions, skipped }
+  }
+
+  /** Per-file restore impact: only actions that would actually change the disk. */
+  async impactsAfter(
+    sessionId: string,
+    targetSeq: number,
+    probe: DiskProbe = defaultProbe,
+  ): Promise<FileImpact[]> {
+    const { actions } = await this.planRestore(sessionId, targetSeq, probe)
+    return actions
       .sort((a, b) => a.path.localeCompare(b.path))
-      .map(entry => ({
-        path: entry.path,
-        action: entry.before === null ? 'delete' : 'restore',
-      }))
+      .map(action => ({ path: action.path, action: action.action }))
   }
 
   /**
-   * Restore the workspace to the target message's checkpoint: for every path
-   * with entries anchored at or after it, apply the EARLIEST entry — write the
-   * before content back, or delete the file when it was created after the
-   * target. Symlinked and hard-linked paths are skipped (reported, never
-   * written through); a restored file's parent directory is created when it
-   * was deleted after the backup. Failures are per-file and never abort the
-   * pass.
+   * Restore the workspace to the target message's checkpoint: execute exactly
+   * the actions {@link planRestore} derived from the record + current disk
+   * reconciliation — write the before content back, or delete the file when
+   * it was created after the target and still exists. Symlinked and
+   * hard-linked paths are skipped (reported, never written through); a
+   * restored file's parent directory is created when it was deleted after
+   * the backup; a delete whose file is ALREADY absent is a silent no-op (not
+   * a failure — the target state is already reached). Failures are per-file
+   * and never abort the pass.
    */
-  async restoreAfter(sessionId: string, targetSeq: number, deleteFile: DeleteFile): Promise<RestoreOutcome> {
+  async restoreAfter(
+    sessionId: string,
+    targetSeq: number,
+    deleteFile: DeleteFile,
+    probe: DiskProbe = defaultProbe,
+  ): Promise<RestoreOutcome> {
     const restored: string[] = []
     const deleted: string[] = []
     const skipped: string[] = []
     const failed: { path: string; message: string }[] = []
-    for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
+    const { actions, skipped: skippedPaths } = await this.planRestore(sessionId, targetSeq, probe)
+    skipped.push(...skippedPaths)
+    for (const action of actions) {
       try {
-        if (await isLinkPath(entry.path)) {
-          skipped.push(entry.path)
-          continue
-        }
-        if (entry.before === null) {
-          await deleteFile(entry.path)
-          deleted.push(entry.path)
+        if (action.action === 'delete') {
+          try {
+            await deleteFile(action.path)
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+            // Already absent: the delete is already done — the target state
+            // is reached, count nothing (Claude Code tolerates the same).
+            continue
+          }
+          deleted.push(action.path)
         } else {
-          await mkdir(dirname(entry.path), { recursive: true })
-          await writeFile(entry.path, entry.before, 'utf8')
-          restored.push(entry.path)
+          await mkdir(dirname(action.path), { recursive: true })
+          await writeFile(action.path, action.before, 'utf8')
+          restored.push(action.path)
         }
       } catch (error) {
-        failed.push({ path: entry.path, message: error instanceof Error ? error.message : String(error) })
+        failed.push({ path: action.path, message: error instanceof Error ? error.message : String(error) })
       }
     }
     return { restored, deleted, skipped, failed }
@@ -285,4 +401,85 @@ export class SnapshotStore {
       throw error
     }
   }
+
+  /**
+   * All distinct paths ever recorded for a session — the "tracked files"
+   * set. Mirrors Claude Code's global `trackedFiles` collection (files stay
+   * tracked once a write-class tool touched them), derived from the disk
+   * entries so no extra persistence is needed.
+   */
+  async trackedPaths(sessionId: string): Promise<Set<string>> {
+    const paths = new Set<string>()
+    for (const entry of await this.entriesAfter(sessionId, 0)) {
+      paths.add(entry.path)
+    }
+    return paths
+  }
+}
+
+/** Short content hash used to key synthetic recheck entries. */
+function hashPath(path: string): string {
+  return createHash('sha256').update(path).digest('hex').slice(0, 8)
+}
+
+/**
+ * Re-check every tracked file at a user-message boundary and record the
+ * current on-disk state for any file whose state changed since it was last
+ * seen — Claude Code's `fileHistoryMakeSnapshot` re-stats every tracked file
+ * at each user message and snapshots the new state (changed files get a new
+ * backup version, deleted files a null marker). Here the "new version" is a
+ * plain before-backup entry anchored at the boundary message, so an EXTERNAL
+ * edit or deletion (never seen by the write-class tool capture) enters the
+ * record and can be restored by a later rewind.
+ *
+ * Semantics: the recorded `before` is the file's state at the boundary —
+ * the state the boundary message's turn starts from, exactly like the
+ * tool-captured entries. An entry is written only when the state differs
+ * from the last-seen state (`states`); the FIRST sighting of a path always
+ * records (a restart leaves `states` empty, so the first boundary after a
+ * restart unconditionally records the current state — redundant but correct,
+ * mirroring Claude's resume-then-re-stat behavior).
+ *
+ * Symlinked / hard-linked paths are never re-checked (restores skip them).
+ * A probe failure skips the file with a warning-level no-op; it never
+ * aborts the boundary pass.
+ *
+ * @param store - the session's snapshot store.
+ * @param sessionId - session whose tracked files to re-check.
+ * @param anchorSeq - the boundary user-message seq (entry anchor).
+ * @param tracked - the session's tracked path set (read-only here).
+ * @param states - per-path last-seen state (path → content, null = absent).
+ * @param probe - current-disk state probe (defaults to the real FS).
+ * @returns the number of entries recorded.
+ */
+export async function reconcileTracked(
+  store: SnapshotStore,
+  sessionId: string,
+  anchorSeq: number,
+  tracked: ReadonlySet<string>,
+  states: Map<string, string | null>,
+  probe: DiskProbe = defaultProbe,
+): Promise<number> {
+  let recorded = 0
+  for (const path of tracked) {
+    try {
+      if (await probe.isLink(path)) continue
+      const current = await probe.readText(path)
+      const state: string | null = current ?? null
+      const prev = states.get(path)
+      if (prev === undefined || prev !== state) {
+        await store.recordEntry(sessionId, {
+          callId: `recheck-${anchorSeq}-${hashPath(path)}`,
+          anchorSeq,
+          path,
+          before: state,
+        })
+        states.set(path, state)
+        recorded++
+      }
+    } catch {
+      // Probe failure: skip this file; the boundary pass never aborts.
+    }
+  }
+  return recorded
 }
