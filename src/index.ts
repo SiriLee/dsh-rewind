@@ -35,7 +35,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { unlink } from 'node:fs/promises'
 import { listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, type RestoreOutcome } from './snapshot.ts'
 
 export { SnapshotStore } from './snapshot.ts'
 export type { CheckpointEntry, FileImpact, RestoreOutcome } from './snapshot.ts'
@@ -279,6 +279,72 @@ function renderFailures(failed: readonly { path: string; message: string }[]): s
 }
 
 /**
+ * Resolve a restored/deleted display path back into an fs target, or
+ * undefined on resolution failure (the sync then skips the file silently).
+ */
+async function resolveObservationTarget(
+  fs: FileSystem,
+  path: string,
+): Promise<Awaited<ReturnType<FileSystem['resolve']>> | undefined> {
+  try {
+    return await fs.resolve(path)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Re-sync the harness fs-observation-policy's per-session observation cache
+ * after a both-mode restore. The restore writes/deletes through plain
+ * `node:fs`, which the policy layer cannot see; without this sync, the same
+ * session's next write of a restored or rewind-deleted file is judged against
+ * the STALE pre-restore observation (the file still "present" at its old
+ * version), so the write tool's intent becomes `replaceIfVersion` and
+ * `fs-local` refuses the now-missing file with `FS_STALE_VERSION` ("file no
+ * longer exists — re-read the file, then retry") — even though the agent is
+ * legitimately creating a fresh file after the rewind.
+ *
+ * Emitting authoritative observations on the same public `fs/observed` event
+ * the read/write tools emit tells the policy layer the truth it cannot learn
+ * otherwise: deleted files become `{ kind: 'absent' }` (next write uses
+ * `createIfAbsent`); restored files become `{ kind: 'present', version }`
+ * from a fresh stat (next write CASes against the current version and
+ * succeeds). The safety model is unchanged: a LATER external modification
+ * after this sync still trips the stale guard exactly as before — only the
+ * inconsistency CREATED BY THE RESTORE ITSELF is healed.
+ *
+ * Per-file failures are silent no-ops: without fs, or when resolve/stat
+ * fails, the pre-existing behavior (the write tool's remediated stale error
+ * with its re-read hint) remains the fallback.
+ *
+ * @param ctx - context carrying the `fs/observed` event bus.
+ * @param fs - the fs service, or undefined when the deployment has none.
+ * @param agent - the rewound agent; its session is the observation owner.
+ * @param outcome - the restore outcome (deleted/restored paths to sync).
+ */
+async function syncRestoreObservations(
+  ctx: Context,
+  fs: FileSystem | undefined,
+  agent: Agent,
+  outcome: RestoreOutcome,
+): Promise<void> {
+  if (fs === undefined) return
+  const actor = { agent }
+  for (const path of outcome.deleted) {
+    const target = await resolveObservationTarget(fs, path)
+    if (target === undefined) continue
+    ctx.emit('fs/observed', target, { kind: 'absent' }, actor)
+  }
+  for (const path of outcome.restored) {
+    const target = await resolveObservationTarget(fs, path)
+    if (target === undefined) continue
+    const info = await fs.stat(target)
+    if (info === undefined) continue
+    ctx.emit('fs/observed', target, { kind: 'present', version: info.version }, actor)
+  }
+}
+
+/**
  * Wait until an agent reaches `idle` (a running turn stops), or the
  * deadline/abort hits. Uses the agent's own `whenIdle()` — the loop's
  * activity promise — instead of polling `status` every 50ms. The agent's
@@ -316,6 +382,7 @@ type InflightRewinds = Set<string>
 async function executeRewind(
   ctx: Context,
   store: SnapshotStore,
+  fs: FileSystem | undefined,
   invocation: CommandInvocation,
   rawTarget: string,
   mode: RewindMode,
@@ -375,6 +442,11 @@ async function executeRewind(
     let restore = ''
     if (mode === 'both') {
       const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
+      // The restore wrote through plain node:fs, invisible to the harness
+      // observation policy: re-sync it so the session's next write of a
+      // restored/deleted file is not judged against the stale pre-restore
+      // observation (see syncRestoreObservations).
+      await syncRestoreObservations(ctx, fs, agent, outcome)
       const parts: string[] = []
       if (outcome.restored.length > 0) parts.push(`还原 ${outcome.restored.length} 个文件`)
       if (outcome.deleted.length > 0) parts.push(`删除 ${outcome.deleted.length} 个文件`)
@@ -413,6 +485,7 @@ function rewindErrorResult(error: unknown): CommandResult {
 async function handleRewind(
   ctx: Context,
   store: SnapshotStore,
+  fs: FileSystem | undefined,
   invocation: CommandInvocation,
   inflight: InflightRewinds,
 ): Promise<CommandResult> {
@@ -430,7 +503,7 @@ async function handleRewind(
     if (candidates.length === 0) {
       return { kind: 'error', text: '当前会话还没有可回退的用户消息。' }
     }
-    return executeRewind(ctx, store, invocation, `@${candidates[0]!.seq}`, 'chat', inflight)
+    return executeRewind(ctx, store, fs, invocation, `@${candidates[0]!.seq}`, 'chat', inflight)
   }
 
   const parts = input.split(/\s+/)
@@ -460,7 +533,7 @@ async function handleRewind(
       text: `将回退到 ${describeTarget(parsed)}。选择模式：\n  /rewind ${target} chat  仅回退对话\n  /rewind ${target} both  回退对话并还原文件`,
     }
   }
-  return executeRewind(ctx, store, invocation, target, mode, inflight)
+  return executeRewind(ctx, store, fs, invocation, target, mode, inflight)
 }
 
 /**
@@ -502,12 +575,17 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // the boundary re-check. Empty after a restart: the first boundary then
   // unconditionally records the current state (redundant but correct).
   const statesBySession = new Map<string, Map<string, string | null>>()
+  // The fs service, captured from the dynamic `ctx.inject(['fs'])` scope and
+  // handed to the command path for the post-restore observation sync.
+  // Undefined until the service mounts (or in fs-less deployments): the sync
+  // then degrades to a no-op and the pre-existing stale-error fallback stays.
+  let fsService: FileSystem | undefined
 
   ctx.effect(function* () {
     yield ctx.commands.register({
       name: 'rewind',
       description: '在同窗口内将对话回退到更早的用户消息（可同时还原文件）',
-      handler: invocation => handleRewind(ctx, store, invocation, inflight),
+      handler: invocation => handleRewind(ctx, store, fsService, invocation, inflight),
     })
   }, 'dsh-rewind command')
 
@@ -548,6 +626,9 @@ export function apply(ctx: Context, config?: RewindConfig): void {
 
   ctx.inject(['fs'], (scope) => {
     const fs = scope.fs
+    // Expose the fs service to the command path (restore observation sync).
+    // Undefined before the service mounts: the sync then degrades to a no-op.
+    fsService = fs
     scope.on('tools/execute', async (exec: ToolExecution, next): Promise<ToolExecutionResult> => {
       try {
         await captureBefore(fs, exec, pending)

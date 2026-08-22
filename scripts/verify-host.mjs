@@ -151,12 +151,30 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   check('preview reports the file impact', preview.kind === 'success' && preview.text.includes(aPath) && preview.text.includes('还原'), preview.text)
   check('preview carries the machine impact token', preview.kind === 'success' && /impact=2/.test(preview.text), preview.text)
 
+  // The both-mode restore must re-sync the harness fs-observation policy:
+  // record every fs/observed emission around the restore, then assert the
+  // deleted file was marked absent and the restored file present-at-version
+  // (owner = this session), so the session's next write of either file is
+  // not judged against the stale pre-restore observation.
+  const observed = []
+  const disposeObs = ctx.on('fs/observed', (target, observation, actor) => {
+    observed.push({
+      path: target.displayPath,
+      kind: observation.kind,
+      version: observation.version,
+      ownerIsSession: actor?.agent?.session === session,
+    })
+  }, { global: true })
   const both = await call(agent, `@${anchorSeq} both`)
+  disposeObs()
+
   check('rewind both succeeds', both.kind === 'success' && both.text.includes('还原 1 个文件') && both.text.includes('删除 1 个文件'), both.text)
   check('modified file restored to pre-edit content', await readFile(aPath, 'utf8') === 'original content', await readFile(aPath, 'utf8'))
   let createdGone = false
   try { await readFile(createdPath, 'utf8') } catch { createdGone = true }
   check('created file deleted', createdGone, `exists=${!createdGone}`)
+  check('restore emits absent observation for the deleted file', observed.some(o => o.path === createdPath && o.kind === 'absent' && o.ownerIsSession), JSON.stringify(observed))
+  check('restore emits present observation for the restored file', observed.some(o => o.path === aPath && o.kind === 'present' && o.version !== undefined && o.ownerIsSession), JSON.stringify(observed))
 }
 
 // 5. a denied call never commits (no phantom entry)
