@@ -53,6 +53,8 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 **命令行入口**：输入裸 `/rewind` 回车打开候选面板，选择目标后流程与按钮一致。
 
+候选面板与模式弹层均支持键盘操作：↑↓ 移动、Enter 确认、Esc 取消/返回。
+
 回退可重复进行（每次追加一条标记到日志）。回退无法通过插件撤销，但可以手动编辑会话日志恢复。文件还原动作不再记录新备份。
 
 ## 原理
@@ -84,7 +86,6 @@ dsh plugin --profile web add dsh-rewind-plugin
 - **整树 / git-first 快照**——只备份写类工具编辑。`bash`、其他工具与外部程序的修改不在备份内、无法还原：与 Claude Code 相同，官方同样不覆盖，此类回退交由用户 git 处理。
 - **子代理（subagent）的编辑**——不跟踪（同 Claude Code）：子代理运行在自己的会话里，其备份无法被父会话的回退还原。
 - **fork / 分支回退与 `/compact`**——harness 已内置（「在新对话中分支」、compact）。
-- **快捷键**（esc+esc 打开回退菜单）——规划中的后续项。
 
 ## 与同类项目对比
 

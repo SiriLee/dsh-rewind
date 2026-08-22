@@ -53,6 +53,8 @@ For contributors: install from a local checkout or a pinned commit — `dsh plug
 
 **Command-line entry**: type a bare `/rewind` and press Enter to open the candidate picker; selecting a target continues the same flow as the button.
 
+Both the candidate picker and the mode popover support the keyboard: ↑↓ to move, Enter to confirm, Esc to cancel/back.
+
 Rewinds can be repeated (each appends a marker to the log). A rewind cannot be undone through the plugin, but the withdrawn messages can be recovered by manually editing the session log. The file-restore action is not re-backed up.
 
 ## How it works
@@ -84,7 +86,6 @@ Backups persist across host restarts, bounded to the newest 100 anchor groups pe
 - **Whole-tree / git-first snapshots** — only write-class tool edits are backed up. `bash`, other tools, and external edits are not tracked and cannot be restored: the same limitation as Claude Code, which defers such rollbacks to the user's git.
 - **Subagent edits** — not tracked (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session.
 - **Fork / branch rewind and `/compact`** — the harness already provides these ("branch in new chat", compact).
-- **Keyboard shortcuts** (esc+esc rewind menu) — planned as a follow-up.
 
 ## Comparison with similar projects
 
