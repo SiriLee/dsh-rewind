@@ -76,14 +76,14 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 1. **写前备份**（`tools/execute`，around-dispatch 阶段）：读取目标文件，把解析后的路径与内容放入 pending 表。此阶段只在任何 pre-execute 审批门放行之后运行——审批 `ask` 短路（dsh-edit-approval）**无法跳过**备份，被拒绝的调用也不会记录。若读取失败（如权限错误），该次变更直接不入备份——插件只在日志中警告，**不会阻塞写操作**。
 2. **落盘提交**（`tools/post-execute`）：备份按当前轮**锚点消息 seq** 写入 `~/.dsh/rewind-snapshots/<会话>/<锚点 seq>/<callId>.json`。
-3. **还原**（`/rewind @<seq> both`）：锚点 ≥ 目标的每条备份生效——被修改的文件写回其**最早一次**捕获的 before 内容，目标之后新建的文件被删除，符号/硬链接跳过（它们与另一名字共享 inode，透过一个还原会误伤两个）。写入走纯 `node:fs`，不经 fs 服务——sandbox / 远程 backend 下路径解析可能受限。
+3. **还原**（`/rewind @<seq> both`）：锚点 ≥ 目标的备份与磁盘**对账后生效**（改过的写回最早 before、新建的删除、一致的跳过——幂等）。符号/硬链接跳过（它们与另一名字共享 inode，透过一个还原会误伤两个）。写入走纯 `node:fs`，不经 fs 服务——sandbox / 远程 backend 下路径解析可能受限。
 4. 工具体**抛异常**会跳过 `tools/post-execute`；`tools/result` 兜底清掉 pending，避免内存泄漏。
 
 备份跨 host 重启持久化，每会话有界保留最近 100 组锚点。
 
 ## 明确不做的事
 
-- **整树 / git-first 快照**——只备份写类工具编辑。`bash`、其他工具与外部程序的修改不在备份内、无法还原：与 Claude Code 相同，官方同样不覆盖，此类回退交由用户 git 处理。
+- **整树 / git-first 快照**——只备份写类工具编辑及已追踪文件的外部改动；从未被工具碰过的文件不还原：与 Claude Code 相同，此类回退交由用户 git 处理。
 - **子代理（subagent）的编辑**——不跟踪（同 Claude Code）：子代理运行在自己的会话里，其备份无法被父会话的回退还原。
 - **fork / 分支回退与 `/compact`**——harness 已内置（「在新对话中分支」、compact）。
 
@@ -117,7 +117,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## 安全
 
-本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。文件写入仅在你选择「回退对话和代码」时发生，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。
+本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。工作区文件仅在「回退对话和代码」时被改写，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。
 
 > **注意：** 回退只是把消息从视图中隐藏——导出的会话日志（`/export`）仍包含撤回前的内容，本插件无法改动导出。要彻底删除对话，请删除对应的会话文件。
 
@@ -128,7 +128,7 @@ npm install            # devDeps 来自 npm registry
 npm run typecheck      # tsc 双面编译（host + client）
 npm test               # vitest：rewind / snapshot / hidden / session-cwd / 集成
 npm run build          # esbuild：lib/index.js（host ESM）+ lib/client.js（loader 闭包）+ .d.ts
-node scripts/verify-host.mjs   # 端到端验证构建产物（18 项检查）
+node scripts/verify-host.mjs   # 端到端验证构建产物
 ```
 
 `prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的 `lib/` 与 `LICENSE`。

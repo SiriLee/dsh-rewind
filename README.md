@@ -76,14 +76,14 @@ The plugin tracks the write-class tools — `write`, `edit`, `str_replace_editor
 
 1. **Before-capture** at `tools/execute` (the around-dispatch stage): the target file is read; the resolved path + content are held in a pending map. This stage runs only after any pre-execute approval gate let the call through — an `ask` short-circuit (dsh-edit-approval) **cannot skip** the backup, and a denied call never records. If the read fails (e.g. a permission error), the change is simply not backed up — the plugin warns in the log but **does not block the write**.
 2. **Disk commit** at `tools/post-execute`: the before-backup is written under the turn's anchor message seq (`~/.dsh/rewind-snapshots/<session>/<anchor seq>/<callId>.json`).
-3. **Restore** (`/rewind @<seq> both`): every backup anchored at or after the target applies — modified files are written back to their **earliest** captured before-state, files created after the target are deleted, symbolic / hard links are skipped (they share an inode with another name; restoring through one would clobber both). Writes go through plain `node:fs`, independent of the fs service — under sandbox / remote backends, path resolution may be restricted.
+3. **Restore** (`/rewind @<seq> both`): every backup anchored at or after the target applies once reconciled with the current disk — modified files are written back to their **earliest** captured before-state, files created after the target are deleted, files already matching the target state are left untouched (idempotent). Symbolic / hard links are skipped (they share an inode with another name; restoring through one would clobber both). Writes go through plain `node:fs`, independent of the fs service — under sandbox / remote backends, path resolution may be restricted.
 4. A tool body that **throws** skips `tools/post-execute`; a `tools/result` safety net clears the pending capture so nothing leaks in memory.
 
 Backups persist across host restarts, bounded to the newest 100 anchor groups per session.
 
 ## What it deliberately does NOT do
 
-- **Whole-tree / git-first snapshots** — only write-class tool edits are backed up. `bash`, other tools, and external edits are not tracked and cannot be restored: the same limitation as Claude Code, which defers such rollbacks to the user's git.
+- **Whole-tree / git-first snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored: the same limitation as Claude Code, which defers such rollbacks to the user's git.
 - **Subagent edits** — not tracked (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session.
 - **Fork / branch rewind and `/compact`** — the harness already provides these ("branch in new chat", compact).
 
@@ -117,7 +117,7 @@ Full instructions: [docs/troubleshooting.md](docs/troubleshooting.md)
 
 ## Security
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. File writes happen only when you choose "conversation and code" — before-backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials.
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials.
 
 > **Note:** a rewind only hides messages from view — the exported session log (`/export`) still contains them, and this plugin cannot alter exports. To remove a conversation completely, delete its session file.
 
@@ -128,7 +128,7 @@ npm install            # devDeps from the npm registry
 npm run typecheck      # tsc on both compilation surfaces (host + client)
 npm test               # vitest: rewind / snapshot / hidden / session-cwd / integration
 npm run build          # esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end (18 checks)
+node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end
 ```
 
 `prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
