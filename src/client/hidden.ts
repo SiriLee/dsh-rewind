@@ -67,6 +67,16 @@ function isPreviewCommand(command: CommandNode): boolean {
 }
 
 /**
+ * True when a `/rewind` command node is the internal candidate-list probe
+ * (`/rewind __candidates`) the popupSelect runs to fetch the FULL candidate
+ * list from the host. Like previews, its flow node never surfaces in the
+ * transcript — it only feeds the popup — so it is hidden in every state.
+ */
+export function isCandidateCommand(command: CommandNode): boolean {
+  return (command.args ?? '').includes('__candidates')
+}
+
+/**
  * Anchor seqs that must be hidden from the rendered transcript so the user
  * sees the conversation as the agent sees it: every impact-preview flow node
  * (pending, succeeded, or errored — it only exists to feed the popover) and
@@ -91,11 +101,11 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
     if (node === undefined || node.kind !== 'command') continue
     const command = node.data as CommandNode
     if (command.name !== 'rewind') continue
-    // A preview probe is internal: hide its flow node immediately — while
-    // still pending, once succeeded, and even on error — so no row flashes in
-    // the transcript while the popover shows the impact. Previews never
+    // An internal probe (preview or candidate-list fetch) is hidden in every
+    // state — pending, succeeded, or errored — so no row flashes in the
+    // transcript while the popover/popup shows its result. Probes never
     // contribute to the cut range (nothing was actually rewound).
-    if (isPreviewCommand(command)) {
+    if (isPreviewCommand(command) || isCandidateCommand(command)) {
       hidden.add(command.seq)
       continue
     }

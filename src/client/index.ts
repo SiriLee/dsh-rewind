@@ -34,13 +34,15 @@ import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trig
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import {
-  candidateBySeq,
+  rewindCandidatesFromHostText,
   rewindCandidatesOfChat,
-  rewindOptionsOf,
+  rewindOptionsFromCandidates,
   type CandidateChat,
+  type RewindCandidate,
 } from './candidates.ts'
-import { openPopover } from './popover.ts'
+import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, runRewindAndFill, type SlotsLike } from './portals.tsx'
+import { isCandidateCommand } from './hidden.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 
@@ -114,6 +116,27 @@ export function apply(ctx: ClientContext): void {
       return chat !== undefined && rewindCandidatesOfChat(chat).length > 0
     }
 
+    /**
+     * Fetch the FULL candidate list from the host through the internal
+     * `__candidates` command. The host derives it from its complete surface +
+     * event log, so it lists every reachable rewind target — not just the
+     * already-loaded history window. Returns undefined when the command was
+     * not matched or never settled.
+     */
+    const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[] | undefined> => {
+      const known = knownCommandSeqs(face, node => isCandidateCommand(node))
+      const result = await face.command('/rewind __candidates')
+      if (!result.ok || result.value?.matched !== true) return undefined
+      const outcome = await waitForCommand(face, node => isCandidateCommand(node) && !known.has(node.seq))
+      if (outcome === null || outcome.kind !== 'success' || outcome.text === undefined) return undefined
+      return rewindCandidatesFromHostText(outcome.text)
+    }
+
+    // Cache the last-fetched candidate list per session: `options` fills it,
+    // `onSelect` reads it to resolve the picked seq's time/preview without a
+    // second host round-trip.
+    const hostCandidatesCache = new Map<string, readonly RewindCandidate[]>()
+
     /** The composer card the mode popover anchors to (the text flow has no button). */
     const composerAnchor = (): HTMLElement => {
       const textarea = composerTextarea()
@@ -130,15 +153,20 @@ export function apply(ctx: ClientContext): void {
       available: session => hasCandidates(session.sessionId),
       ui: {
         kind: 'popupSelect',
-        options: session => {
-          const chat = chatOf(session.sessionId)
-          return Promise.resolve(chat === undefined ? [] : rewindOptionsOf(chat, t))
+        options: async session => {
+          const face = sessionOf(session.sessionId)
+          if (face === undefined) return []
+          const candidates = await fetchHostCandidates(face)
+          if (candidates !== undefined) hostCandidatesCache.set(session.sessionId, candidates)
+          return candidates === undefined ? [] : rewindOptionsFromCandidates(candidates, t)
         },
         onSelect: (option, session) => {
           const face = sessionOf(session.sessionId)
-          const chat = chatOf(session.sessionId)
-          const candidate = chat !== undefined ? candidateBySeq(chat, Number(option.id)) : undefined
-          if (face === undefined || candidate === undefined) return
+          if (face === undefined) return
+          const candidate = hostCandidatesCache.get(session.sessionId)?.find(
+            candidate => candidate.seq === Number(option.id),
+          )
+          if (candidate === undefined) return
           openPopover({
             session: face,
             seq: candidate.seq,

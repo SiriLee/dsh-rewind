@@ -41,6 +41,11 @@ function preview(key: string, anchorSeq: number, seq: number, target: number): C
   }, `preview @${target} both`)
 }
 
+/** The internal candidate-list probe (`/rewind __candidates`). */
+function candidateCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome']): ChatConversationViewNode {
+  return rewindCommand(key, anchorSeq, seq, outcome, '__candidates')
+}
+
 function snap(nodes: readonly ChatConversationViewNode[]): HiddenChat {
   return {
     order: nodes.map(node => node.key),
@@ -160,6 +165,22 @@ describe('hiddenSeqsOf', () => {
     expect(sorted(hidden)).toEqual([6, 7])
     expect(hidden.has(0)).toBe(false)
     expect(hidden.has(8)).toBe(false)
+  })
+
+  it('hides the internal candidate-list probe row in every state without cutting messages', () => {
+    const nodes = [
+      viewNode('u0', 'user', 0),
+      candidateCommand('pending', 6, 6, null),
+      candidateCommand('done', 7, 7, { kind: 'success', text: 'candidates=1\n4\t0\tx' }),
+      candidateCommand('errored', 8, 8, { kind: 'error', text: 'candidate fetch failed' }),
+      viewNode('u9', 'user', 9),
+    ]
+    const hidden = hiddenSeqsOf(snap(nodes))
+    // All three probe rows (in-flight, succeeded, errored) are hidden; none cut
+    // message rows and none count as an executed rewind.
+    expect(sorted(hidden)).toEqual([6, 7, 8])
+    expect(hidden.has(0)).toBe(false)
+    expect(hidden.has(9)).toBe(false)
   })
 
   it('keeps a failed EXECUTED rewind row visible (not a preview)', () => {

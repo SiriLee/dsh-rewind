@@ -75,6 +75,13 @@ export interface RewindPlan {
 export const CANDIDATE_PREVIEW_CHARS = 80
 
 /**
+ * Default cap on how many user messages a candidate listing returns (newest
+ * kept). Raised from 10 so long sessions don't look incomplete; callers can
+ * still pass an explicit `limit`.
+ */
+export const DEFAULT_CANDIDATE_LIMIT = 50
+
+/**
  * Turn number for the rewind marker.
  *
  * The marker MUST NOT reuse the harness's next-turn number. The agent loop
@@ -111,6 +118,23 @@ export function isUserMessageEvent(
   event: SessionEvent,
 ): event is SessionEvent<'user/message'> {
   return event.type === 'user/message'
+}
+
+/**
+ * True for a HUMAN user message event — one whose `source.kind` is `'user'`.
+ *
+ * The surface can carry `user/message` events whose source is NOT the user:
+ * plugin/system context injection (including compaction checkpoints) and
+ * tool-result backfill all arrive as `user/message` with a non-`'user'`
+ * source, and the client renders those as `context` nodes, never as a user
+ * bubble. Only genuine user messages (and user steering during a running
+ * turn, which keeps `source.kind: 'user'`) are valid rewind targets — a
+ * rewind boundary must land on a human prompt, not on injected context.
+ */
+export function isHumanUserMessageEvent(
+  event: SessionEvent,
+): event is SessionEvent<'user/message'> {
+  return isUserMessageEvent(event) && event.data.source.kind === 'user'
 }
 
 /** Join the text blocks of a message into one plain string. */
@@ -154,14 +178,17 @@ export function parseRewindTarget(raw: string): RewindTarget | undefined {
 export function listRewindCandidates(
   events: readonly SessionEvent[],
   surface: readonly number[],
-  limit = 10,
+  limit = DEFAULT_CANDIDATE_LIMIT,
 ): RewindCandidate[] {
   const surfaceIndexes = new Map<number, number>()
   for (let i = 0; i < surface.length; i++) surfaceIndexes.set(surface[i]!, i)
   const candidates: RewindCandidate[] = []
   for (let i = events.length - 1; i >= 0 && candidates.length < limit; i--) {
     const event = events[i]!
-    if (!isUserMessageEvent(event)) continue
+    // Only HUMAN user messages are candidates: injected context / compaction
+    // checkpoints ride `user/message` with a non-`'user'` source and must not
+    // appear as rewind targets.
+    if (!isHumanUserMessageEvent(event)) continue
     if (!surfaceIndexes.has(event.seq)) continue
     candidates.push({
       seq: event.seq,
@@ -171,6 +198,31 @@ export function listRewindCandidates(
     })
   }
   return candidates
+}
+
+/** Header line of the machine-readable candidate list (locale-independent). */
+export const CANDIDATE_LIST_HEADER = 'candidates='
+
+/**
+ * Encode a candidate list as the host→client machine channel (the same
+ * trailer pattern `formatPlan` uses for `impact=`). The client popupSelect
+ * parses this instead of reading the windowed chat snapshot, so the candidate
+ * list reflects the FULL host surface — not just the already-loaded history.
+ *
+ * Lines (each preview is already whitespace-collapsed and tab-free by
+ * `messagePreview`):
+ *   candidates=<n>
+ *   <seq>\t<time>\t<preview>
+ *   … (one line per candidate, newest first, matching `listRewindCandidates`)
+ *
+ * A list with no candidates is just `candidates=0`.
+ */
+export function formatCandidateList(candidates: readonly RewindCandidate[]): string {
+  const lines = [`${CANDIDATE_LIST_HEADER}${candidates.length}`]
+  for (const candidate of candidates) {
+    lines.push(`${candidate.seq}\t${candidate.time}\t${candidate.preview}`)
+  }
+  return lines.join('\n')
 }
 
 /**
@@ -201,10 +253,13 @@ export function planRewind(
   if (targetEvent === undefined) {
     throw new RewindError('not-a-user-message', `no session event at seq ${targetSeq}`)
   }
-  if (!isUserMessageEvent(targetEvent)) {
+  // Only a HUMAN user message is a valid rewind boundary: injected
+  // context / compaction checkpoints arrive as `user/message` with a
+  // non-`'user'` source and must not be rewindable.
+  if (!isHumanUserMessageEvent(targetEvent)) {
     throw new RewindError(
       'not-a-user-message',
-      `session event at seq ${targetSeq} is not a user message (${targetEvent.type})`,
+      `session event at seq ${targetSeq} is not a human user message (${targetEvent.type})`,
     )
   }
 

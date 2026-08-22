@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
-  formatCandidate, listRewindCandidates, markerTurnOf, messagePreview, parseRewindTarget,
+  formatCandidate, formatCandidateList, listRewindCandidates, markerTurnOf, messagePreview, parseRewindTarget,
   planRewind, RewindError,
 } from '../src/rewind.ts'
 
@@ -15,6 +15,21 @@ function userEvent(seq: number, text: string, time = seq * 60_000): SessionEvent
     seq,
     time,
     data: createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
+  } as SessionEvent<'user/message'>
+}
+
+/** A plugin-injected `user/message` (renders as a `context` node, not a user bubble). */
+function injectedContextEvent(seq: number, text: string, plugin = 'compact'): SessionEvent<'user/message'> {
+  return {
+    type: 'user/message',
+    seq,
+    time: seq * 60_000,
+    data: {
+      id: `ctx-${seq}`,
+      role: 'user',
+      content: [{ type: 'text', text }],
+      source: { kind: 'plugin', plugin },
+    },
   } as SessionEvent<'user/message'>
 }
 
@@ -137,10 +152,54 @@ describe('listRewindCandidates', () => {
     expect(listRewindCandidates(events, surface, 2).map(c => c.seq)).toEqual([4, 2])
   })
 
+  it('excludes injected context user/messages (non-user source) from candidates', () => {
+    const events = [
+      userEvent(0, 'first question'),
+      injectedContextEvent(1, 'injected system context'),
+      userEvent(2, 'second question'),
+      injectedContextEvent(3, 'another injection', 'some-plugin'),
+    ]
+    const surface = events.map(e => e.seq)
+    // Only the human user messages (seq 0, 2) are rewindable.
+    const candidates = listRewindCandidates(events, surface)
+    expect(candidates.map(c => c.seq)).toEqual([2, 0])
+  })
+
+  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (50) by default', () => {
+    const events: readonly SessionEvent[] = Array.from({ length: 55 }, (_, i) => userEvent(i, `msg ${i}`))
+    const surface = events.map(e => e.seq)
+    const candidates = listRewindCandidates(events, surface)
+    expect(candidates).toHaveLength(50)
+    expect(candidates[0]!.seq).toBe(54)
+    expect(candidates[49]!.seq).toBe(5)
+  })
+
   it('renders candidates with a time + preview line', () => {
     const { events, surface } = sampleLog()
     const line = formatCandidate(listRewindCandidates(events, surface)[0]!)
     expect(line).toMatch(/^1\. \d{2}:\d{2} third question$/)
+  })
+})
+
+describe('formatCandidateList', () => {
+  it('encodes an empty list as candidates=0', () => {
+    expect(formatCandidateList([])).toBe('candidates=0')
+  })
+
+  it('encodes each candidate as a tab-separated seq/time/preview line', () => {
+    const list = formatCandidateList([
+      { seq: 4, time: 240_000, preview: 'third question', index: 1 },
+      { seq: 0, time: 0, preview: 'first question', index: 2 },
+    ])
+    expect(list).toBe('candidates=2\n4\t240000\tthird question\n0\t0\tfirst question')
+  })
+
+  it('preserves newest-first order from the input candidates', () => {
+    const { events, surface } = sampleLog()
+    const text = formatCandidateList(listRewindCandidates(events, surface))
+    expect(text).toBe(
+      'candidates=3\n4\t240000\tthird question\n2\t120000\tsecond question\n0\t0\tfirst question',
+    )
   })
 })
 
@@ -176,7 +235,28 @@ describe('planRewind', () => {
 
   it('rejects a target that is not a user message', () => {
     const { events, surface } = sampleLog()
-    expect(() => planRewind(events, surface, { kind: 'seq', seq: 1 })).toThrowError(/not a user message/)
+    expect(() => planRewind(events, surface, { kind: 'seq', seq: 1 })).toThrowError(/not a human user message/)
+  })
+
+  it('rejects an injected context user/message as a target', () => {
+    // A plugin-injected `user/message` (source.kind !== 'user') on the surface
+    // is a `context` node, never a user prompt — not a valid rewind boundary.
+    const events = [
+      userEvent(0, 'first question'),
+      {
+        type: 'user/message',
+        seq: 1,
+        time: 60_000,
+        data: {
+          id: 'ctx-1',
+          role: 'user' as const,
+          content: [{ type: 'text' as const, text: 'injected system context' }],
+          source: { kind: 'plugin', plugin: 'compact' },
+        },
+      } as SessionEvent<'user/message'>,
+    ]
+    const surface = [0, 1]
+    expect(() => planRewind(events, surface, { kind: 'seq', seq: 1 })).toThrowError(/not a human user message/)
   })
 
   it('rejects a user message shadowed by compaction', () => {

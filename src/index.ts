@@ -35,7 +35,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { unlink } from 'node:fs/promises'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type RestoreOutcome } from './snapshot.ts'
 
@@ -546,6 +546,15 @@ async function handleRewind(
     }
     const impacts = await store.impactsAfter(session.id, plan.targetSeq)
     return { kind: 'success', text: formatPlan(plan, impacts) }
+  }
+
+  // Internal machine channel: `/rewind __candidates` returns the FULL
+  // candidate list (host surface + full event log) so the client popupSelect
+  // can render every reachable rewind target — not just the already-loaded
+  // history window. Side-effect free: no event is appended, nothing rewound.
+  if (parts[0] === '__candidates') {
+    const candidates = listRewindCandidates(session.events, session.surface.nodes)
+    return { kind: 'success', text: formatCandidateList(candidates) }
   }
 
   const target = parts[0]!

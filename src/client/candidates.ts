@@ -20,6 +20,15 @@ type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
 /** Preview length cap for candidate rows (matches the host's candidate list). */
 export const PREVIEW_CHARS = 80
 
+/**
+ * Default cap on how many user messages the rewind picker lists (newest kept).
+ *
+ * A fixed 10 made long sessions look "incomplete" (only the newest 10 shown).
+ * 50 keeps the picker scrollable/searchable via the popupSelect shell while
+ * covering far longer sessions; callers can still pass an explicit `limit`.
+ */
+export const DEFAULT_CANDIDATE_LIMIT = 50
+
 /** One selectable rewind target. */
 export interface RewindCandidate {
   /** Absolute log seq of the `user/message` event. */
@@ -76,7 +85,7 @@ export function formatCandidateTime(time: number): string {
  * @param hidden - anchor seqs withdrawn by rewinds (from `hiddenSeqsOf`).
  * @param limit - maximum number of candidates to return.
  */
-export function rewindCandidatesOf(snap: CandidateChat, hidden: ReadonlySet<number>, limit = 10): RewindCandidate[] {
+export function rewindCandidatesOf(snap: CandidateChat, hidden: ReadonlySet<number>, limit = DEFAULT_CANDIDATE_LIMIT): RewindCandidate[] {
   // Walk the log backwards so the newest rows come first; `limit` bounds the
   // kept window.
   const candidates: RewindCandidate[] = []
@@ -116,4 +125,54 @@ export function rewindOptionsOf(snap: CandidateChat, t: Translate): SelectOption
 /** Resolve one candidate by log seq (the mode popover's re-entry after a pick). */
 export function candidateBySeq(snap: CandidateChat, seq: number): RewindCandidate | undefined {
   return rewindCandidatesOfChat(snap).find(candidate => candidate.seq === seq)
+}
+
+/**
+ * Header prefix of the host's machine-readable candidate list (matches
+ * `CANDIDATE_LIST_HEADER` in src/rewind.ts). Kept as a local literal so the
+ * client bundle never imports the host module (which would drag in dsh-session).
+ */
+const CANDIDATE_LIST_HEADER = 'candidates='
+
+/**
+ * Parse the host's candidate-list encoding (see `formatCandidateList` in
+ * src/rewind.ts) into typed candidates. Malformed lines are skipped; a
+ * missing/zero header yields an empty list.
+ */
+export function rewindCandidatesFromHostText(text: string): RewindCandidate[] {
+  if (!text.startsWith(CANDIDATE_LIST_HEADER)) return []
+  const lines = text.split('\n').slice(1)
+  const candidates: RewindCandidate[] = []
+  for (const line of lines) {
+    if (line === '') continue
+    const parts = line.split('\t')
+    if (parts.length !== 3) continue
+    const seq = Number(parts[0])
+    const time = Number(parts[1])
+    const preview = parts[2] ?? ''
+    if (!Number.isSafeInteger(seq) || !Number.isFinite(time)) continue
+    candidates.push({ seq, time, preview })
+  }
+  return candidates
+}
+
+/**
+ * Map typed candidates to popupSelect rows (the host-derived path). The
+ * popupSelect sources its options from the FULL host surface via the
+ * `__candidates` channel instead of the windowed chat snapshot.
+ */
+export function rewindOptionsFromCandidates(candidates: readonly RewindCandidate[], t: Translate): SelectOption[] {
+  return candidates.map(candidate => ({
+    id: String(candidate.seq),
+    label: candidate.preview || t('popover.noText'),
+    detail: formatCandidateTime(candidate.time),
+  }))
+}
+
+/**
+ * Parse the host's candidate-list encoding (see `formatCandidateList` in
+ * src/rewind.ts) into popupSelect rows.
+ */
+export function rewindOptionsFromHostText(text: string, t: Translate): SelectOption[] {
+  return rewindOptionsFromCandidates(rewindCandidatesFromHostText(text), t)
 }

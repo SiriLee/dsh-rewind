@@ -10,7 +10,10 @@ import type { RewindKey } from '../src/client/locales.ts'
 import {
   formatCandidateTime,
   messagePreviewOf,
+  rewindCandidatesFromHostText,
   rewindCandidatesOf,
+  rewindOptionsFromCandidates,
+  rewindOptionsFromHostText,
   rewindOptionsOf,
   type CandidateChat,
 } from '../src/client/candidates.ts'
@@ -63,12 +66,12 @@ describe('rewindCandidatesOf', () => {
     expect(rewindCandidatesOf(chat, new Set()).map(candidate => candidate.seq)).toEqual([1, 0])
   })
 
-  it('keeps the newest 10', () => {
-    const nodes = Array.from({ length: 12 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
+  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (50) by default', () => {
+    const nodes = Array.from({ length: 55 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
     const candidates = rewindCandidatesOf(snap(nodes), new Set())
-    expect(candidates).toHaveLength(10)
-    expect(candidates[0]!.seq).toBe(11)
-    expect(candidates[9]!.seq).toBe(2)
+    expect(candidates).toHaveLength(50)
+    expect(candidates[0]!.seq).toBe(54)
+    expect(candidates[49]!.seq).toBe(5)
   })
 
   it('respects an explicit limit', () => {
@@ -135,6 +138,56 @@ describe('rewindOptionsOf', () => {
     const chat = snap([userNode('u0', 0, new Date(2026, 7, 21, 8, 0).getTime(), '   ')])
     expect(rewindOptionsOf(chat, t)).toEqual([
       { id: '0', label: 'popover.noText', detail: '08:00' },
+    ])
+  })
+})
+
+describe('rewindCandidatesFromHostText', () => {
+  it('parses a host candidate list into typed candidates', () => {
+    const text = 'candidates=2\n4\t240000\tthird question\n0\t0\tfirst question'
+    expect(rewindCandidatesFromHostText(text)).toEqual([
+      { seq: 4, time: 240000, preview: 'third question' },
+      { seq: 0, time: 0, preview: 'first question' },
+    ])
+  })
+
+  it('returns an empty list for candidates=0', () => {
+    expect(rewindCandidatesFromHostText('candidates=0')).toEqual([])
+  })
+
+  it('returns an empty list when the header is missing or malformed', () => {
+    expect(rewindCandidatesFromHostText('nope')).toEqual([])
+    expect(rewindCandidatesFromHostText('candidates=')).toEqual([])
+  })
+
+  it('skips malformed lines but keeps valid ones', () => {
+    const text = 'candidates=3\n4\t240000\tok\nbad-line\n5\tnot-a-number\tno'
+    expect(rewindCandidatesFromHostText(text).map(c => c.seq)).toEqual([4])
+  })
+})
+
+describe('rewindOptionsFromHostText', () => {
+  it('maps host candidates to popupSelect rows (label/detail/time)', () => {
+    const time = new Date(2026, 7, 21, 4, 0).getTime()
+    const text = `candidates=1\n4\t${time}\tthird question`
+    expect(rewindOptionsFromHostText(text, t)).toEqual([
+      { id: '4', label: 'third question', detail: '04:00' },
+    ])
+  })
+
+  it('falls back to noText for an empty preview', () => {
+    const time = new Date(2026, 7, 21, 8, 0).getTime()
+    expect(rewindOptionsFromHostText(`candidates=1\n4\t${time}\t`, t)).toEqual([
+      { id: '4', label: 'popover.noText', detail: '08:00' },
+    ])
+  })
+})
+
+describe('rewindOptionsFromCandidates', () => {
+  it('maps typed candidates to rows (shared host path)', () => {
+    const time = new Date(2026, 7, 21, 4, 0).getTime()
+    expect(rewindOptionsFromCandidates([{ seq: 4, time, preview: 'x' }], t)).toEqual([
+      { id: '4', label: 'x', detail: '04:00' },
     ])
   })
 })
