@@ -49,7 +49,6 @@ export const en = {
   'noRestorable': '; no restorable write-class changes after the target',
   'success': 'Withdrawn seq {targetSeq} and everything after it (conversation returned to earlier){restore}.',
   'noUserMessages': 'This session has no rewindable user messages yet.',
-  'openStep': 'The session log holds an unclosed step (likely left by a crash or a manual log edit). Rewind is blocked because it would break /compact. Repair the log (close the pending step/end) or start a new session, then rewind again.',
   'chooseMode': 'Rewind to {target}. Choose a mode:\n  /rewind {target} chat  conversation only\n  /rewind {target} both  conversation + file restore',
   'command.description': 'Rewind the conversation back to an earlier user message (optionally restoring files)',
 } satisfies Record<string, string>
@@ -83,7 +82,6 @@ export const zh: Record<HostKey, string> = {
   'noRestorable': '；目标之后没有可还原的写类变更',
   'success': '已撤回 seq {targetSeq} 及之后内容（对话已回到此前）{restore}。',
   'noUserMessages': '当前会话还没有可回退的用户消息。',
-  'openStep': '会话日志中存在未闭合的 step（可能是崩溃或手动编辑遗留）。回退已阻止，因为继续会破坏 /compact。请修复日志（补上缺失的 step/end）或新建会话后再试。',
   'chooseMode': '将回退到 {target}。选择模式：\n  /rewind {target} chat  仅回退对话\n  /rewind {target} both  回退对话并还原文件',
   'command.description': '在同窗口内将对话回退到更早的用户消息（可同时还原文件）',
 }

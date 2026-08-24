@@ -145,10 +145,9 @@ node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end (incl. 
 real harness packages (token-meter, compaction, session-stats/title/goal folds,
 resume preflight) through rewind markers and assert the compatibility
 invariants. A failing probe is a discovered incompatibility, not a mock
-artifact. One defense is shipped: **`open-step`** — a log carrying an unclosed
-`step/start` (crash leftover, root cause in harness crash recovery) refuses
-the rewind up front instead of silently breaking token-meter replay; the
-refusal is live detection, so repairing the log restores rewinds.
+artifact. One finding is recorded open: **R-OPENSTEP** — a log carrying an
+unclosed `step/start` makes a later rewind break token-meter replay; the
+intended fix is an up-front `open-step` rejection in `planRewind`.
 
 `prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
 

@@ -138,15 +138,19 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
     expect(() => Session.create(session.id, session.events)).not.toThrow()
   })
 
-  it('R-OPENSTEP defense: an unclosed step refuses the rewind up front, and rewinds recover once the log is repaired', () => {
+  it('DISCOVERY R-OPENSTEP: a dangling open step in the log breaks token-meter replay after a rewind', () => {
     // A log carrying an UNCLOSED step/start (abnormal log — manual edit,
-    // crash between step/start and the agent loop's finally-closing step/end,
-    // or a buggy third-party plugin) is accepted by Session.append. The
-    // plugin now DETECTS it in planRewind and refuses the rewind with a typed
-    // error (RewindError 'open-step') instead of appending a ghost-step frame
-    // that would permanently break token-meter replay (and /compact) for the
-    // session. The refusal is live detection — it never mutates the log — so
-    // repairing the log restores rewinds with no unlock step.
+    // crash between step/start and the finally-closing step/end, or a buggy
+    // third-party plugin) is accepted by Session.append. The plugin appends
+    // its ghost-step frame unaware, and the harness token-meter then rejects
+    // the rewind's step/start: "step/start at seq N arrived before turn
+    // T/step S ended". Every later measure() throws, so /compact and
+    // automatic compaction stay broken for the session.
+    //
+    // This test PINS the current incompatible behavior as a recorded finding
+    // (docs/compat-audit.md, R-OPENSTEP). The intended fix — reject the
+    // rewind up front when the log holds an open step — will invert this
+    // assertion into "planRewind throws RewindError('open-step')".
     const session = Session.create(SessionId('interop-openstep'))
     appendTurn(session, 1)
     session.append('turn/start', { turn: 2 })
@@ -163,23 +167,12 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
     // no step/end — the log is abnormal from here on
 
     const target = lastSurfaceSeqOf(session, 'user/message')
-    expect(() => applyRewind(session, target)).toThrow(RewindError)
-    try {
-      applyRewind(session, target)
-      expect.unreachable('expected RewindError')
-    } catch (error) {
-      expect(error).toBeInstanceOf(RewindError)
-      expect((error as RewindError).code).toBe('open-step')
-    }
-    // The log is untouched by the refusal.
-    expect(session.events.length).toBe(10) // turn 1 (6) + turn 2 head (4)
-
-    // Repair the log by closing the dangling step (what a fixed harness crash
-    // recovery would do), then the rewind works again and the log replays.
-    session.append('step/end', { turn: 2, step: 1 })
-    session.append('turn/end', { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+    // The plugin executes the rewind successfully…
     expect(() => applyRewind(session, target)).not.toThrow()
-    expect(() => new TokenMeter(new Context()).measure(session)).not.toThrow()
+    // …but the ghost step frame it appended makes the token-meter replay
+    // reject the log (the discovered incompatibility).
+    expect(() => new TokenMeter(new Context()).measure(session))
+      .toThrow(/step\/start at seq \d+ arrived before turn 2\/step 1 ended/)
     expect(() => Session.create(session.id, session.events)).not.toThrow()
   })
 })
