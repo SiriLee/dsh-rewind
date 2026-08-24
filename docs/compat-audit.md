@@ -5,8 +5,14 @@
 > **真实消费路径**（真实 `@deepseek-ai/*` 包），断言兼容性不变量。探针失败即发现，
 > 进入「修复 / 钉住 / 记录」闭环。
 >
-> 针对版本：npm `@deepseek-ai/*@0.1.0-rc.8`（与 `package-lock.json` 一致）；
+> 针对版本：npm `@deepseek-ai/*@0.1.1-rc.2`（与 `package-lock.json` 一致）；
 > 源码参考：`oss/deepseek-harness` 本地 fork。
+>
+> 版本适配说明：peerDependencies 采用 OR 并集（如 `^0.1.0-rc.6 || ^0.1.1-rc.2`），
+> 覆盖 DSH 已发布的 rc 元组系列。npm 的 prerelease 匹配规则要求候选与范围内比较器
+> **同 `[major, minor, patch]` 元组**，因此 DSH 每次发布新元组（如未来的 `0.1.2-rc.x`、
+> `0.2.x`）时需追加并集项；同元组内 rc 滚动（如 `0.1.1-rc.2 → rc.3`）无需动作。
+> 判断信号：`npm view @deepseek-ai/dsh version`；流程见 `scripts/check-dsh-version.mjs`。
 
 ## 「完全适配」的可执行定义（不变量）
 
