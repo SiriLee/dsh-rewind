@@ -24,8 +24,14 @@ type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
 
 export interface PopoverOptions {
   readonly session: SessionFace
-  readonly seq: number
-  readonly time: number
+  /** Durable variant: the target message seq (mode-selection flow). */
+  readonly seq?: number
+  /** Durable variant: the target message time. */
+  readonly time?: number
+  /** Pending variant: retract a pre-sent steering message (single-confirm flow). */
+  readonly retract?: { readonly itemId: string; readonly text: string | null }
+  /** Pending variant: executed after the retract confirm closes the popover. */
+  readonly onRetract?: () => void
   readonly preview: string
   /** The button that opened the popover (outside-click ignore target). */
   readonly anchor: HTMLElement
@@ -35,7 +41,7 @@ export interface PopoverOptions {
    * the callback owns the command + composer-refill lifecycle (see
    * runRewindAndFill in index.ts).
    */
-  readonly onRewind: (mode: 'chat' | 'both') => void
+  readonly onRewind?: (mode: 'chat' | 'both') => void
 }
 
 /** The single live popover element, or null when closed. */
@@ -212,6 +218,17 @@ function moveFocus(root: HTMLElement, dir: 1 | -1): void {
   buttons[next]?.focus()
 }
 
+/** The durable variant's narrowed identity (guarded before the mode flow). */
+interface DurablePopoverOptions {
+  readonly session: SessionFace
+  readonly seq: number
+  readonly time: number
+  readonly preview: string
+  readonly anchor: HTMLElement
+  readonly t: Translate
+  readonly onRewind: (mode: 'chat' | 'both') => void
+}
+
 /**
  * Render the impact step: show the impact outcome, then confirm/back.
  * Reuses the outcome already fetched when the popover opened (the "both"
@@ -220,7 +237,7 @@ function moveFocus(root: HTMLElement, dir: 1 | -1): void {
  * command row; a fresh preview is only fetched when the popover-open probe
  * never resolved.
  */
-function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => void, cached?: PreviewOutcome): void {
+function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: () => void, cached?: PreviewOutcome): void {
   const { session, seq, t } = opts
   const impact = el('div', CLASS.popoverImpact, t('popover.impact.loading'))
   const actions = el('div', CLASS.popoverActions)
@@ -279,10 +296,133 @@ function renderImpactStep(root: HTMLElement, opts: PopoverOptions, back: () => v
   })
 }
 
+/**
+ * One mounted popover shell: append, position, outside-click close, and the
+ * capture-phase ↑/↓/Esc keys (Esc is delegated to the caller's handler so the
+ * durable flow keeps its step-aware back/cancel behavior).
+ */
+interface PopoverShell {
+  /** Re-run positioning after the content re-renders. */
+  readonly position: () => void
+  /** Remove the popover and its listeners (closePopover also does this). */
+  readonly dispose: () => void
+}
+
+/** Mount the shared popover chrome around `root` (durable and pending variants). */
+function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: KeyboardEvent) => void): PopoverShell {
+  /** Position below the anchor (right-aligned), flipping above near the edge. */
+  const position = (): void => {
+    const rect = anchor.getBoundingClientRect()
+    const gap = 4
+    const height = root.offsetHeight
+    const top = rect.bottom + gap + height <= window.innerHeight - 8
+      ? rect.bottom + gap
+      : Math.max(8, rect.top - gap - height)
+    root.style.top = `${Math.round(top)}px`
+    root.style.left = `${Math.round(Math.min(rect.right, window.innerWidth - 8 - root.offsetWidth))}px`
+  }
+
+  const onPointerDown = (event: PointerEvent): void => {
+    const target = event.target as Node | null
+    if (root.contains(target) || anchor.contains(target)) return
+    closePopover()
+  }
+  // Capture phase on document: fires before the harness's React handlers, so
+  // ↑/↓/Esc are stolen from the composer while the popover is open (ArrowUp
+  // is input-history recall). Enter needs no handling: a focused button
+  // activates natively.
+  const deferred = setTimeout(() => {
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown, true)
+  }, 0)
+  const dispose = (): void => {
+    clearTimeout(deferred)
+    document.removeEventListener('pointerdown', onPointerDown)
+    document.removeEventListener('keydown', onKeyDown, true)
+  }
+
+  document.body.append(root)
+  position()
+  return { position, dispose }
+}
+
+/**
+ * Open the pending-retract popover: a single-confirm dialog for one pre-sent
+ * steering message. No mode selection and no impact preview — the message has
+ * never been processed, so there are no files to restore and nothing to
+ * choose. Confirm closes the popover and hands off to `onRetract` (the
+ * `updateQueue remove` + composer-refill lifecycle in portals.tsx).
+ */
+function openRetractPopover(opts: PopoverOptions): void {
+  closePopover()
+  const { preview, anchor, t, retract, onRetract } = opts
+  if (retract === undefined || onRetract === undefined) return
+
+  const root = el('div', CLASS.popover)
+  root.setAttribute('role', 'dialog')
+  root.setAttribute('aria-label', t('popover.retract.title'))
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, -1)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closePopover()
+    }
+  }
+
+  const previewText = preview.length > 0 ? preview : t('popover.noText')
+  const actions = el('div', CLASS.popoverActions)
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = CLASS.popoverPrimary
+  confirm.textContent = t('popover.retract.confirm')
+  confirm.addEventListener('click', () => {
+    closePopover()
+    onRetract()
+  })
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = CLASS.popoverGhost
+  cancel.textContent = t('popover.cancel')
+  cancel.addEventListener('click', closePopover)
+  actions.append(confirm, cancel)
+  root.replaceChildren(
+    el('div', CLASS.popoverTitle, t('popover.retract.title')),
+    el('div', CLASS.popoverTarget, t('popover.retract.target', { preview: previewText })),
+    actions,
+  )
+
+  const shell = mountShell(root, anchor, onKeyDown)
+  popoverEl = root
+  disposeOutside = shell.dispose
+  focusFirst(root)
+}
+
 /** Open the mode-selection popover anchored near the given button. */
 export function openPopover(opts: PopoverOptions): void {
   closePopover()
+  // Pending retract variant: a single-confirm dialog, no rewind modes.
+  if (opts.retract !== undefined) {
+    openRetractPopover(opts)
+    return
+  }
   const { session, seq, time, preview, anchor, t } = opts
+  const onRewind = opts.onRewind
+  if (seq === undefined || time === undefined || onRewind === undefined) return
+  // Narrowed durable identity: the pending variant never reaches this flow.
+  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, onRewind }
 
   const root = el('div', CLASS.popover)
   root.setAttribute('role', 'dialog')
@@ -304,7 +444,7 @@ export function openPopover(opts: PopoverOptions): void {
       el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
       modeOption(t('popover.chat'), t('popover.chat.hint'), () => {
         closePopover()
-        opts.onRewind('chat')
+        durableOpts.onRewind('chat')
       }),
     ]
     if (bothState.state === 'noChanges') {
@@ -335,57 +475,9 @@ export function openPopover(opts: PopoverOptions): void {
   /** Move to the impact step (its back/Esc returns to the modes step). */
   const renderImpact = (): void => {
     step = 'impact'
-    renderImpactStep(root, opts, renderModes, impactOutcome)
+    renderImpactStep(root, durableOpts, renderModes, impactOutcome)
   }
 
-  /** Position below the anchor (right-aligned), flipping above near the edge. */
-  const position = (): void => {
-    const rect = anchor.getBoundingClientRect()
-    const gap = 4
-    const height = root.offsetHeight
-    const top = rect.bottom + gap + height <= window.innerHeight - 8
-      ? rect.bottom + gap
-      : Math.max(8, rect.top - gap - height)
-    root.style.top = `${Math.round(top)}px`
-    root.style.left = `${Math.round(Math.min(rect.right, window.innerWidth - 8 - root.offsetWidth))}px`
-  }
-
-  renderModes()
-  document.body.append(root)
-  position()
-  focusFirst(root)
-
-  // Resolve the "both" mode's availability up front (Claude Code hides the
-  // code-restore options when the checkpoint has no tracked file changes).
-  // `hasFileImpact` reads only the host's machine-readable `impact=<n>`
-  // trailer (locale-independent). An unknown outcome (preview failed/timeout)
-  // keeps "both" enabled — degrade to always-shown rather than hiding a
-  // working option.
-  void (async () => {
-    const outcome = await previewImpact(session, seq)
-    impactOutcome = outcome
-    if (outcome !== null && outcome.kind === 'success') {
-      bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
-    }
-    renderModes()
-    position()
-  })().catch(() => {
-    bothState = { state: 'hasChanges' }
-    renderModes()
-    position()
-  })
-
-  popoverEl = root
-
-  const onPointerDown = (event: PointerEvent): void => {
-    const target = event.target as Node | null
-    if (root.contains(target) || anchor.contains(target)) return
-    closePopover()
-  }
-  // Capture phase on document: fires before the harness's React handlers, so
-  // ↑/↓/Esc are stolen from the composer while the popover is open (ArrowUp
-  // is input-history recall). Enter needs no handling: a focused button
-  // activates natively.
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
@@ -408,14 +500,29 @@ export function openPopover(opts: PopoverOptions): void {
       else closePopover()
     }
   }
-  // Defer the first outside-click check so the opening click is not swallowed.
-  const deferred = setTimeout(() => {
-    document.addEventListener('pointerdown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown, true)
-  }, 0)
-  disposeOutside = () => {
-    clearTimeout(deferred)
-    document.removeEventListener('pointerdown', onPointerDown)
-    document.removeEventListener('keydown', onKeyDown, true)
-  }
+
+  renderModes()
+  const shell = mountShell(root, anchor, onKeyDown)
+  popoverEl = root
+  disposeOutside = shell.dispose
+
+  // Resolve the "both" mode's availability up front (Claude Code hides the
+  // code-restore options when the checkpoint has no tracked file changes).
+  // `hasFileImpact` reads only the host's machine-readable `impact=<n>`
+  // trailer (locale-independent). An unknown outcome (preview failed/timeout)
+  // keeps "both" enabled — degrade to always-shown rather than hiding a
+  // working option.
+  void (async () => {
+    const outcome = await previewImpact(session, seq)
+    impactOutcome = outcome
+    if (outcome !== null && outcome.kind === 'success') {
+      bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
+    }
+    renderModes()
+    shell.position()
+  })().catch(() => {
+    bothState = { state: 'hasChanges' }
+    renderModes()
+    shell.position()
+  })
 }
