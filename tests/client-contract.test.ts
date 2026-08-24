@@ -2,11 +2,13 @@
  * Entry-surface test for the public contract (docs/client-contract.md): the
  * `./client` entry must re-export the canonical implementation — a re-derived
  * copy is how regressions escape (cf. dsh-chat-timeline#6). Behavior is
- * covered by hidden.test.ts; this file locks the entry. Vitest runs it
- * outside the host typecheck surface on purpose: importing src/client/index.ts
- * pulls the client runtime into tsconfig.json's host graph, where a Cordis
- * Context declaration-merge clash (ISessions vs dsh-session's SessionStore)
- * misfires; scripts/build.mjs asserts the export surface on every build.
+ * covered by hidden.test.ts; this file locks the entry.
+ *
+ * Compilation: typechecked by tsconfig.client-test.json (client surface +
+ * this test), not by tsconfig.json — the host surface must not compile
+ * src/client, where a Cordis Context declaration-merge clash (ISessions vs
+ * dsh-session's SessionStore) misfires. The export surface is also asserted
+ * by scripts/build.mjs on every build.
  */
 import { describe, expect, it } from 'vitest'
 import { hiddenSeqsOf, targetSeqOfArgs } from '../src/client/index.ts'
