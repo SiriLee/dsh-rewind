@@ -369,23 +369,6 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
         )
       }
       const next = [...collectTargets(chat, hiddenSeqs), ...collectPendingTargets(snapshot)]
-      // DIAGNOSTICS (flicker investigation — remove once confirmed fixed):
-      // report every refresh's pending-matching inputs so a flickering session
-      // can be correlated with the exact DOM/mirror state (bubble text vs
-      // mirror text, row/steering counts, subagent, resulting targets).
-      {
-        const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
-        const steering = (snapshot as { queue?: readonly { id: string; placement: string; text: string | null }[] }).queue
-          ?.filter((item) => item.placement === 'steering') ?? []
-        if (rows.length > 0 || steering.length > 0) {
-          console.debug(
-            `[dsh-rewind][diag] rows=${rows.length} bubbleText=[${rows.map((r) => JSON.stringify(bubbleTextOf(r))).join(',')}] ` +
-            `steering=${steering.length} ids=[${steering.map((s) => s.id).join(',')}] text=[${steering.map((s) => JSON.stringify(s.text)).join(',')}] ` +
-            `subagent=${JSON.stringify((snapshot as { subagent?: unknown }).subagent)} ` +
-            `pendingTargets=${next.filter((t) => t.kind === 'pending').length} durableTargets=${next.filter((t) => t.kind === 'durable').length}`,
-          )
-        }
-      }
       // Diff: no change → no re-render (the observer fires on every mutation;
       // only an actual target-set change should touch React).
       setTargets(current => (sameTargets(current, next) ? current : next))
