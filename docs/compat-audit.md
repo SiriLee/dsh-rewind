@@ -37,6 +37,15 @@
 - **修复建议**：`planRewind` 开头扫描 `step/start`/`step/end` 配对，未闭合即抛
   `RewindError('open-step')`；`rewindErrorResult` 增加文案映射（zh/en）。
 
+### G3（新确认，行为差异非崩溃）：rewind 让 token-meter 的 usage 锚点短暂失效
+
+- **场景**：rewind 的 marker 是日志最后一条 `assistant/message` 且无 `usage`，token-meter
+  的 `_sync` 重放以它收尾，把 `MeasurementAnchor.baseline` 从 provider 实测 `usage` 覆盖为
+  启发式 `estimated`——直到下一条带 usage 的真实消息才恢复（探针验证了完整链条：
+  `usage → rewind → estimated → 真实 turn → usage`）。
+- **影响**：token 压力估算短暂退回启发式；对自动压缩阈值判断有微小偏差，不破坏功能。
+- **探针**：`tests/compat-gaps.test.ts` → `G3`（钉住该行为）。
+
 ## 已验证兼容的面（探针通过）
 
 - **token-meter 重放**（含 marker + 幽灵 step 帧 + 多次 rewind + 交错真实 turn + compact 叠加）。
@@ -57,6 +66,8 @@
 - **session-stats / session-telemetry 折叠完整日志**：rewind 后统计**不回退**——`turns` /
   `steps` / `llmMs` 仍含被撤内容；telemetry 逐条上报 marker 与幽灵 step 帧（归入被复用
   的旧 turn）。这是「折叠完整日志」的预期语义，探针钉住该行为。
+- **token-meter usage 锚点短暂失效**（G3）：rewind 后 baseline 退回启发式 `estimated`，
+  下一条真实 usage 调用恢复（探针钉住）。
 - **被撤内容仍可搜索、可导出**：session-query 全文搜索与 `/export` 基于原始日志，
   rewind 只切 surface，被撤消息仍在其中（README 已声明）。
 - **session-title 自动重生成**：标题由 surface 派生，rewind 后自动标题可能变化。
@@ -86,4 +97,6 @@
 | 客户端顺序 | — | — | ✓ | — | — | — | ✓ | — |
 | plan-mode | — | — | — | — | — | — | — | ✓（静态） |
 
-✓ = 探针通过；— = 不适用。R-OPENSTEP 未列入（待修复项）。
+✓ = 探针通过；— = 不适用。R-OPENSTEP 未列入（待修复项）。G3 见「已知边界」。
+缺口探针 `tests/compat-gaps.test.ts`：G1 surface 分类（`foldSurface` current/shadowed/log-only）
+与 G2 projection checkpoint 均验证通过；G3 钉住 token-meter baseline 行为差异。
