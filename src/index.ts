@@ -406,6 +406,19 @@ async function waitForAgentIdle(agent: Agent, signal: AbortSignal, timeoutMs = 1
 /** Sessions with a rewind currently executing (per-session in-flight guard). */
 type InflightRewinds = Set<string>
 
+/**
+ * Drop every pending steering (next-step) inbox message. Used when a rewind
+ * rolls the conversation back to a point before them: they belong to the
+ * future being cut, and keeping them would deliver them first on the next
+ * send. Queued (next-turn) messages are deliberately NOT touched — the
+ * harness QueueDock already offers the user per-item edit/remove.
+ */
+function dropPendingSteering(agent: Agent): void {
+  for (const message of [...agent.inbox.nextStep]) {
+    agent.inbox.remove(message.id)
+  }
+}
+
 /** Execute a validated rewind: append the marker, then optionally restore files. */
 async function executeRewind(
   ctx: Context,
@@ -429,14 +442,21 @@ async function executeRewind(
   try {
     // A running turn (the LLM is thinking or streaming) must be stopped before
     // the surface can be cut: force-cancel it (user cause), wait for quiescence,
-    // then rewind. Queued/steering inbox items are discarded with the turn.
+    // then rewind. The inbox is KEPT by the cancel (keepInbox) — only the
+    // pending steering (next-step) messages are dropped below: they belong to
+    // the future being rolled back. Queued (next-turn) messages are left
+    // untouched: the harness QueueDock already offers per-item edit/remove, so
+    // a rewind must not silently drop messages the user may still want to send.
     if (agent.status !== 'idle') {
-      agent.cancel({ kind: 'user' })
+      agent.cancel({ kind: 'user' }, { keepInbox: true })
       const stopped = await waitForAgentIdle(agent, invocation.signal)
       if (!stopped) {
         return { kind: 'error', text: t('stopFailed') }
       }
     }
+    // Idle or not, rewinding to a point before them must not keep pending
+    // steering messages alive to be delivered first on the next send.
+    dropPendingSteering(agent)
     // The command was cancelled (or its caller aborted) while we waited for
     // quiescence: stop here instead of executing a rewind nobody asked for.
     if (invocation.signal.aborted) {
