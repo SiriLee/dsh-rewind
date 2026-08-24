@@ -23,16 +23,12 @@
 
 ## 发现的兼容性问题
 
-### R-OPENSTEP：日志存在未闭合 step 时，rewind 会破坏 token-meter 重放（中等风险，待修复）
+### R-OPENSTEP：日志存在未闭合 step 时，rewind 会破坏 token-meter 重放（**harness 侧问题，插件可选加固**）
 
-- **场景**：日志携带未闭合的 `step/start`（异常日志），插件无感知地追加幽灵 step 帧，
-  token-meter 随后抛 `step/start at seq N arrived before turn T/step S ended`——该会话的
-  手动 `/compact` 每次报错、自动压缩每次静默失败（warn）。
-- **探针**：`tests/compat-interop.test.ts` → `DISCOVERY R-OPENSTEP`（钉住当前不兼容行为）。
-- **判定**：待修复。防御性修复成本低：rewind 前检测未闭合 step 并**明确拒绝**
-  （新增 `RewindError('open-step')`）。修复后该探针断言反转（拒绝而非重放失败）。
-- **修复建议**：`planRewind` 开头扫描 `step/start`/`step/end` 配对，未闭合即抛
-  `RewindError('open-step')`；`rewindErrorResult` 增加文案映射（zh/en）。
+> **定性（已修正）**：根因在 harness 的崩溃恢复——resume 时 agent-loop 直接开新 turn
+> （`agent.ts:251` `phase.turn + 1`）**不闭合遗留 step**，因此「继续对话」同样触发
+> token-meter 校验失败；rewind 只是触发者之一，不是病根。故**不属于插件职责**；
+> 插件加防御性拒绝（`open-step`）属可选自保，不解决根本问题。
 
 #### 未闭合 `step/start` 的具体触发情况（源码确认）
 
@@ -56,14 +52,15 @@
 - **rewind 的角色**：若用户先 rewind（而非继续对话），幽灵 step/start 成为第一个踩中者，
   且插件无防御性检测——把「局部异常日志」升级为「用户可感知的 /compact 失效」。
 
-### G3（新确认，行为差异非崩溃）：rewind 让 token-meter 的 usage 锚点短暂失效
+### G3（已确认：合理行为，非缺陷）：rewind 让 token-meter 的 usage 锚点短暂失效
 
-- **场景**：rewind 的 marker 是日志最后一条 `assistant/message` 且无 `usage`，token-meter
+- **机制**：rewind 的 marker 是日志最后一条 `assistant/message` 且无 `usage`，token-meter
   的 `_sync` 重放以它收尾，把 `MeasurementAnchor.baseline` 从 provider 实测 `usage` 覆盖为
   启发式 `estimated`——直到下一条带 usage 的真实消息才恢复（探针验证了完整链条：
   `usage → rewind → estimated → 真实 turn → usage`）。
-- **影响**：token 压力估算短暂退回启发式；对自动压缩阈值判断有微小偏差，不破坏功能。
-- **探针**：`tests/compat-gaps.test.ts` → `G3`（钉住该行为）。
+- **定性（已确认）**：marker 语义上就是空消息，不携带 usage 是正确的；锚点短暂退回估算
+  是该语义的自然结果，且短暂、自愈、不破坏功能。**属于预期行为，不修复**。
+- **探针**：`tests/compat-gaps.test.ts` → `G3`（钉住该行为，防止未来 harness 变更改变它）。
 
 ## 已验证兼容的面（探针通过）
 
@@ -100,6 +97,14 @@
 - 真实 LLM 流式与自动标题生成（L2 stub 化）。
 - 真实 SQLite 索引生命周期（`dsh-session-query-sqlite` 未安装、含原生依赖）。
 - 浏览器端实际渲染 replay（客户端契约已由 `client-contract.test.ts` 覆盖逻辑层）。
+- 真实 JSONL 持久化往返（`dsh-session-persistence-jsonl` 依赖 native `koffi`；往返验证的是
+  harness 自身 zstd/JSON 编解码，插件不参与，价值/成本不划算，未安装）。
+- session-reference 的 `SessionReferenceResolver.prepare` 需完整 session-query 服务；其数据
+  基础（current-surface 投影）已由 G1 探针（`foldSurface` 转换）覆盖。
+- telemetry 管道（`dsh-session-telemetry-otel`）与附件 provider（`dsh-attachment-local`）。
+- 运行中的 workflow/jobs 被 rewind 取消：工具契约要求 observe `exec.signal` 并 settle
+  （`packages/core/tools/src/index.ts`），rewind 触发的是 harness 标准取消，非插件特有——
+  静态确认，未实测真实 workflow。
 
 ## 排查矩阵（子系统 × 不变量）
 
