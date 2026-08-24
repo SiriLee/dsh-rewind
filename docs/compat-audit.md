@@ -23,12 +23,17 @@
 
 ## 发现的兼容性问题
 
-### R-OPENSTEP：日志存在未闭合 step 时，rewind 会破坏 token-meter 重放（**harness 侧问题，插件可选加固**）
+### R-OPENSTEP：日志存在未闭合 step 时，rewind 会破坏 token-meter 重放（**harness 侧问题；插件守卫已尝试并回退**）
 
-> **定性（已修正）**：根因在 harness 的崩溃恢复——resume 时 agent-loop 直接开新 turn
-> （`agent.ts:251` `phase.turn + 1`）**不闭合遗留 step**，因此「继续对话」同样触发
-> token-meter 校验失败；rewind 只是触发者之一，不是病根。故**不属于插件职责**；
-> 插件加防御性拒绝（`open-step`）属可选自保，不解决根本问题。
+> **根因（harness 侧）**：崩溃遗留的未闭合 step 会让 token-meter 重放拒绝任何后续
+> step 活动。DSH `0.1.1-rc.2` 已在加载时用 `interruptedTurnClosers`
+> （`dsh-session/repair`）自动闭合崩溃遗留的 step/turn/tool 边界——**崩溃路径已根治**。
+>
+> **插件守卫（已尝试并回退）**：曾实现 `hasOpenStep` + `planRewind` 前置拒绝
+> （`open-step`），但在**真实会话日志上产生误判**（正常回退被拒、GUI 验证功能缺失），
+> 已 revert（`177ec14`）。结论：**插件不设守卫**，接受残余风险（运行中第三方插件
+> 产生未闭合 step 时，rewind 可能破坏 /compact——该日志本身已异常，继续对话同样触发）。
+> 根治方向在 harness（token-meter 对未闭合 step 的恢复），不在插件。
 
 #### 未闭合 `step/start` 的具体触发情况（源码确认）
 
@@ -121,6 +126,6 @@
 | 客户端顺序 | — | — | ✓ | — | — | — | ✓ | — |
 | plan-mode | — | — | — | — | — | — | — | ✓（静态） |
 
-✓ = 探针通过；— = 不适用。R-OPENSTEP 未列入（待修复项）。G3 见「已知边界」。
+✓ = 探针通过；— = 不适用。R-OPENSTEP 见上（harness 已修、插件不设守卫）。G3 见「已知边界」。
 缺口探针 `tests/compat-gaps.test.ts`：G1 surface 分类（`foldSurface` current/shadowed/log-only）
 与 G2 projection checkpoint 均验证通过；G3 钉住 token-meter baseline 行为差异。
