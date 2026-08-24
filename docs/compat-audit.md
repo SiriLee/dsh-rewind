@@ -25,17 +25,36 @@
 
 ### R-OPENSTEP：日志存在未闭合 step 时，rewind 会破坏 token-meter 重放（中等风险，待修复）
 
-- **场景**：日志携带未闭合的 `step/start`（异常日志：手工编辑、崩溃发生在 agent-loop 的
-  `finally` 闭合之前、或第三方插件 bug）。插件无感知地追加幽灵 step 帧，token-meter 随后
-  抛 `step/start at seq N arrived before turn T/step S ended`——之后每次 `measure()` 都抛错，
-  会话的 `/compact` 与自动压缩**持续失效**。
+- **场景**：日志携带未闭合的 `step/start`（异常日志），插件无感知地追加幽灵 step 帧，
+  token-meter 随后抛 `step/start at seq N arrived before turn T/step S ended`——该会话的
+  手动 `/compact` 每次报错、自动压缩每次静默失败（warn）。
 - **探针**：`tests/compat-interop.test.ts` → `DISCOVERY R-OPENSTEP`（钉住当前不兼容行为）。
-- **判定**：待修复。真实 agent-loop 用 `finally` 保证正常路径总闭合 step/turn
-  （`packages/core/agent-loop/src/agent.ts`），所以正常会话不触发；但防御性修复成本低：
-  rewind 前检测未闭合 step 并**明确拒绝**（新增 `RewindError('open-step')`），避免静默破坏
-  `/compact`。修复后该探针断言反转（拒绝而非重放失败）。
+- **判定**：待修复。防御性修复成本低：rewind 前检测未闭合 step 并**明确拒绝**
+  （新增 `RewindError('open-step')`）。修复后该探针断言反转（拒绝而非重放失败）。
 - **修复建议**：`planRewind` 开头扫描 `step/start`/`step/end` 配对，未闭合即抛
   `RewindError('open-step')`；`rewindErrorResult` 增加文案映射（zh/en）。
+
+#### 未闭合 `step/start` 的具体触发情况（源码确认）
+
+全仓**只有一处** append `step/start`：`packages/core/agent-loop/src/agent.ts:279`（官方包内
+无其他生产者；`session/end-seed` 等修复只做 torn-write 截断，不处理逻辑未闭合）。
+
+| # | 触发路径 | 现实性 | 依据 |
+|---|---|---|---|
+| P1 | **进程非优雅终止**：`step/start` 经 write-behind 批量落盘（`session-persistence/src/write-behind.ts`，`maxDelayMs` 后写一批）→ step 执行中（LLM 流式/工具，秒级到分钟级）→ SIGKILL / OOM-kill / 断电 / WSL 强关 → `step/end`（在 `finally`，进程活着才执行）未落盘 | **最现实** | `agent.ts:292` finally；write-behind 批量；torn-write 修复只截断写一半的行 |
+| P2 | **第三方插件 bug**：官方包只有 agent-loop 一个生产者，但外部插件可任意 `session.append('step/start', …)` 不闭合 | 可能 | 公开 `Session.append` |
+| P3 | **手工编辑会话文件**：改 `~/.dsh/…/session.jsonl[.zstd]`（zstd 需解压/重压；plaintext 配置可直接改） | 可能但费事 | `persistence-jsonl/format.ts`（`JsonlCompression = 'zstd' \| 'none'`） |
+| P4 | **append 自身故障**：`finally` 里 `append('step/end')` 抛错（payload 是纯数字，几乎不可能） | 理论 | `agent.ts:292` |
+
+**放大机制（rewind 不是唯一触发者）**：崩溃后 resume，agent-loop `turn()` 直接
+`phase.turn + 1` 开新 turn（`agent.ts:251-255`），**不闭合遗留 step**——所以「继续对话」
+（新 `step/start`）同样踩中 token-meter 校验。影响范围精确界定：
+
+- **对话本身不受影响**（请求路径不调用 `tokenMeter.measure`，全仓仅 compaction-basic 调用）；
+- **手动 `/compact` 永久报错**（`compactNow` 首步 `measure()` 抛原始错误）；
+- **自动压缩永久静默失效**（`agent/pre-step` 钩子 catch 后仅 warn，对话继续）；
+- **rewind 的角色**：若用户先 rewind（而非继续对话），幽灵 step/start 成为第一个踩中者，
+  且插件无防御性检测——把「局部异常日志」升级为「用户可感知的 /compact 失效」。
 
 ### G3（新确认，行为差异非崩溃）：rewind 让 token-meter 的 usage 锚点短暂失效
 
