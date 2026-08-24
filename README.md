@@ -109,6 +109,14 @@ The essential difference: dsh-turn-rewind keeps the log immutable and therefore 
 > This project and DeepSeek Harness are both in developer preview. Pin exact
 > versions in reproducible environments and review the behavior notes above.
 
+## Client contract
+
+Third-party DOM plugins that need to know which transcript rows a rewind
+withdrew should consume the stable, locale-independent helpers exported from
+`dsh-rewind-plugin/client` (`hiddenSeqsOf`, `targetSeqOfArgs`) — never parse
+`outcome.text`. The `data-dsh-rewind-hidden` attribute marks withdrawn rows
+(observational only). Details: [docs/client-contract.md](docs/client-contract.md).
+
 ## Known issues
 
 Rewinds created with versions `≤ v0.2.4` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). The offline repair tool ships **inside the npm package** (`dsh-rewind-repair`). This only affects sessions you already had before upgrading — a fresh install never hits it.

@@ -109,6 +109,14 @@ dsh plugin --profile web add dsh-rewind-plugin
 > 本项目与 DeepSeek Harness 均处于开发者预览阶段。可复现环境请 pin 精确版本，
 > 并阅读上述行为说明。
 
+## 客户端契约
+
+需要获知哪些转录行被回退撤回的第三方 DOM 插件，应使用
+`dsh-rewind-plugin/client` 导出的稳定、与本地化无关的纯函数
+（`hiddenSeqsOf`、`targetSeqOfArgs`），切勿解析 `outcome.text`。
+`data-dsh-rewind-hidden` 属性标记被撤回的行（仅观测性）。
+详见：[docs/client-contract.zh.md](docs/client-contract.zh.md)。
+
 ## 已知问题
 
 `v0.2.4` 及之前版本创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。离线修复工具**已随 npm 包内置**（`dsh-rewind-repair`）。只影响升级前就已存在的旧会话——全新安装永不触发。
