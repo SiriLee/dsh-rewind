@@ -135,10 +135,19 @@ This plugin only appends rewind-marker events to the session log; it never delet
 ```sh
 npm install            # devDeps from the npm registry
 npm run typecheck      # tsc on all three surfaces (host + client + client-test)
-npm test               # vitest: rewind / snapshot / hidden / session-cwd / integration
+npm test               # vitest: rewind / snapshot / hidden / session-cwd / integration / compat-invariants / compat-interop
 npm run build          # esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end
+node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end (incl. real /compact after rewind)
 ```
+
+`npm test` and `verify-host` include the **compatibility probe suites**
+([docs/compat-audit.md](docs/compat-audit.md)): scenario-generated logs drive the
+real harness packages (token-meter, compaction, session-stats/title/goal folds,
+resume preflight) through rewind markers and assert the compatibility
+invariants. A failing probe is a discovered incompatibility, not a mock
+artifact. One finding is recorded open: **R-OPENSTEP** — a log carrying an
+unclosed `step/start` makes a later rewind break token-meter replay; the
+intended fix is an up-front `open-step` rejection in `planRewind`.
 
 `prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
 

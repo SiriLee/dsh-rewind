@@ -12,6 +12,16 @@
 - [commands.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/commands.md) — command registration (`ctx.commands.register`, `CommandInvocation`, `CommandResult`)
 - [tools.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/tools.md) — tool execution seam (`tools/pre-execute` / `tools/post-execute`, `ToolExecution`)
 - [session-query.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-query.md) — session query / `foldSurface` read-only interfaces
+- [token-meter.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/token-meter.md) — replay-aware token meter (`TokenMeter.measure`, surface pricing)
+- [compaction.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/compaction.md) — compaction seam / `compaction/*` events / `BasicCompactionEngine` (`summarize()` hook)
+- [session-projection.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-projection.md) — projection registry (`SessionProjectionRegistry.snapshot/checkpoint`)
+- [session-stats](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/session/session-stats) — whole-log stats projection (folds ALL events; rewind does not roll back counts)
+- [session-title.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-title.md) — durable title state (`foldSessionTitle`)
+- [goal.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/goal.md) — goal fold (`foldGoal`) and round admission
+
+Compatibility probes against these subsystems (test-driven investigation, the
+`compat-invariants` / `compat-interop` vitest suites + the `verify-host` real
+`/compact` chain): [compat-audit.md](compat-audit.md).
 
 Also under `docs/` at the repo root: `persistence-catalog.md` (full
 `SessionEventMap`), `tool-catalog.md` (tool inventory), `config-catalog.md`

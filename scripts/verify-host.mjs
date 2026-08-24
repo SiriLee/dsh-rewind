@@ -22,12 +22,28 @@
  *     and deletes files created after the target;
  *  9. a running agent is force-stopped before the rewind (not refused);
  * 10. a cancel that never quiesces aborts the rewind (timeout path);
- * 11. subagent edits are NOT tracked (Claude Code alignment).
+ * 11. subagent edits are NOT tracked (Claude Code alignment);
+ * 12. the REAL `/compact` command (command-compact + compaction-basic with a
+ *     stubbed summarizer, no LLM) lands a compaction/start…end transaction on
+ *     top of a rewind marker and the log stays replayable (token-meter +
+ *     Session.create resume preflight);
+ * 12b. a small post-rewind surface makes /compact a legal no-op that never
+ *     fires a transaction and stays replayable;
+ * 13. rewind → real turn → rewind → real /compact stays replayable and the
+ *     compaction bookkeeping stays balanced;
+ * 14. rewinding across a compaction checkpoint is refused with the plugin's
+ *     own error (not a crash);
+ * 15. no rewind/compact combination ever leaves a dangling step/start or
+ *     turn/start frame in the log.
  */
 import { Context } from '@deepseek-ai/cordis'
+import { CommandId } from '@deepseek-ai/dsh-commands'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
+import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
+import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -86,24 +102,83 @@ function makeInbox(initial = []) {
 
 /** Minimal Agent double carrying the fields executeRewind reads today. */
 function makeAgent(id, session, status = 'idle', inbox = makeInbox()) {
-  return { id, session, status, inbox }
+  return {
+    id, session, status, inbox,
+    options: { provider: 'test', model: 'test-model' },
+    // Manual compaction requires an idle agent whose maintenance task runs
+    // with its own signal (ManualCompactAgentContext).
+    runMaintenance: async task => {
+      if (status !== 'idle') throw new Error('agent is not idle')
+      return task(aborted())
+    },
+  }
+}
+
+/**
+ * A session shaped like a REAL harness session (the agent loop's exact event
+ * shape: turn/start → step/start → user → assistant → step/end → turn/end),
+ * so the harness token-meter replay accepts it — required to drive the real
+ * `/compact` transaction.
+ */
+function buildFramedSession(id, turns = 2) {
+  const session = Session.create(SessionId(id))
+  for (let turn = 1; turn <= turns; turn++) {
+    session.append('turn/start', { turn })
+    session.append('step/start', { turn, step: 1 })
+    // Long enough content that a 3-turn retained span out-tokens the
+    // compaction backend's fixed checkpoint preamble — otherwise /compact
+    // legally no-ops ("summary not smaller than the shadowed content").
+    session.append('user/message', user(`framed question ${turn}: the quick brown fox jumps over the lazy dog and keeps running through the deep forest`), { surfaceOp: 'append' })
+    session.append('assistant/message', { turn, step: 1, message: assistant(`framed answer ${turn}: the response covers the requested detail, the follow-up implications, and the remaining open questions for the user to decide on`) }, { surfaceOp: 'append' })
+    session.append('step/end', { turn, step: 1 })
+    session.append('turn/end', { turn, reason: { kind: 'completed' } })
+  }
+  return session
+}
+
+/** True when the log holds no unclosed step/start and no unclosed turn/start. */
+function hasNoDanglingFrames(events) {
+  const openSteps = new Map()
+  for (const event of events) {
+    if (event.type === 'step/start') openSteps.set(`${event.data.turn}:${event.data.step}`, true)
+    else if (event.type === 'step/end') openSteps.delete(`${event.data.turn}:${event.data.step}`)
+  }
+  let openTurn = false
+  for (const event of events) {
+    if (event.type === 'turn/start') openTurn = true
+    else if (event.type === 'turn/end') openTurn = false
+  }
+  return openSteps.size === 0 && !openTurn
 }
 
 const session = buildSession('verify-host')
 const agent = makeAgent(session.id, session)
 
 const ctx = new Context()
-let registered = null
+const commands = new Map()
 ctx.provide('commands', {
   register: definition => {
-    registered = definition
-    return () => {}
+    commands.set(definition.name, definition)
+    return () => { commands.delete(definition.name) }
   },
 })
 ctx.provide('fs', fs)
+ctx.provide('sessions', { flush: async () => {} })
+// The real token-meter service (registers itself as ctx.tokenMeter) and a
+// real compaction backend whose ONLY hook is a stubbed summarize() — the
+// manual `/compact` command path needs no LLM.
+new TokenMeter(ctx)
+class StubCompactionEngine extends BasicCompactionEngine {
+  constructor() { super(ctx, { summarizationProvider: 'test', summarizationModel: 'test-model' }) }
+  async summarize(input, agent, signal) {
+    return { summary: [{ type: 'text', text: 'rewind-compat summary' }], provider: 'test', model: 'test-model' }
+  }
+}
+new StubCompactionEngine(ctx)
 applyRewind(ctx, { snapshotDir: snapRoot })
+applyCommandCompact(ctx)
 
-const call = (agentOf, rawInput) => registered.handler({ commandId: Symbol('cid'), agent: agentOf, rawInput, signal: aborted() })
+const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: CommandId('cid'), agent: agentOf, rawInput, signal: aborted() })
 
 /**
  * Simulate one tracked tool call: before-capture, dispatch writes the file,
@@ -130,7 +205,7 @@ const check = (name, ok, detail) => {
 }
 
 // 1. command registered
-check('command registered', typeof registered?.handler === 'function' && registered.name === 'rewind', JSON.stringify(registered))
+check('command registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
 
 // 2. bare /rewind (manual, no parameters) withdraws the most recent user
 //    message (seq 2 "second question") and everything after it
@@ -305,6 +380,92 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   let subDirExists = false
   try { await readdir(subSessionDir); subDirExists = true } catch { subDirExists = false }
   check('no snapshot dir for the subagent session', !subDirExists, subSessionDir)
+}
+
+// 12. I5/I1 probe — the REAL /compact command lands on top of a rewind marker
+//     and the log stays replayable (token-meter + resume preflight). Six
+//     turns keep the surface large enough that the real transaction fires
+//     (the compaction backend refuses to shrink a surface whose framed
+//     summary would not be smaller than the shadowed content).
+{
+  const cs = buildFramedSession('verify-compact', 8)
+  const ca = makeAgent(cs.id, cs)
+  const rewindResult = await call(ca, '@20 chat')
+  check('rewind before real /compact succeeds', rewindResult.kind === 'success', rewindResult.text)
+
+  const compactDef = commands.get('compact')
+  check('compact command registered by command-compact', typeof compactDef?.handler === 'function', JSON.stringify(compactDef))
+  const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
+  check('real /compact succeeds after rewind', compactResult.kind === 'success', JSON.stringify(compactResult))
+
+  const events = cs.events
+  const compStarts = events.filter(e => e.type === 'compaction/start').length
+  const compEnds = events.filter(e => e.type === 'compaction/end').length
+  check('compaction/start…end pair lands once', compStarts === 1 && compEnds === 1, `start=${compStarts} end=${compEnds}`)
+
+  let meterOk = true
+  let resumeOk = true
+  let framesOk = hasNoDanglingFrames(events)
+  try { new TokenMeter(new Context()).measure(cs) } catch { meterOk = false }
+  try { Session.create(cs.id, cs.events) } catch { resumeOk = false }
+  check('token-meter replays rewind+compact log', meterOk, '')
+  check('resume preflight replays rewind+compact log', resumeOk, '')
+  check('no dangling step/turn frames after rewind+compact', framesOk, '')
+}
+
+// 12b. A small post-rewind surface makes /compact a legal no-op ("No
+//      compactable history yet") — the transaction must not fire and the log
+//      must stay replayable.
+{
+  const cs = buildFramedSession('verify-compact-nop', 2)
+  const ca = makeAgent(cs.id, cs)
+  await call(ca, '@2 chat')
+  const compactDef = commands.get('compact')
+  const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
+  check('small-surface /compact after rewind is a legal no-op', compactResult.kind === 'success' && /No compactable history/.test(compactResult.text), JSON.stringify(compactResult))
+  const starts = cs.events.filter(e => e.type === 'compaction/start').length
+  check('no compaction transaction on the no-op path', starts === 0, `starts=${starts}`)
+  let ok = true
+  try { new TokenMeter(new Context()).measure(cs); Session.create(cs.id, cs.events) } catch { ok = false }
+  check('no-op path stays replayable', ok, '')
+}
+
+// 13. I1 stress probe — continue with a real turn, rewind again, compact
+//     again: the log stays replayable at every step.
+{
+  const cs = buildFramedSession('verify-compact2', 8)
+  const ca = makeAgent(cs.id, cs)
+  await call(ca, '@20 chat')
+  // A real harness turn continues after the rewind.
+  cs.append('turn/start', { turn: 9 })
+  cs.append('step/start', { turn: 9, step: 1 })
+  cs.append('user/message', user('ninth question'), { surfaceOp: 'append' })
+  cs.append('assistant/message', { turn: 9, step: 1, message: assistant('ninth answer') }, { surfaceOp: 'append' })
+  cs.append('step/end', { turn: 9, step: 1 })
+  cs.append('turn/end', { turn: 9, reason: { kind: 'completed' } })
+  await call(ca, '@20 chat') // rewind again
+  const compactDef = commands.get('compact')
+  const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
+  check('second /compact after rewind+turn succeeds', compactResult.kind === 'success', JSON.stringify(compactResult))
+  const pairs = cs.events.filter(e => e.type === 'compaction/start').length === cs.events.filter(e => e.type === 'compaction/end').length
+  check('compaction bookkeeping stays balanced (stress)', pairs, '')
+  let ok = true
+  try { new TokenMeter(new Context()).measure(cs); Session.create(cs.id, cs.events) } catch { ok = false }
+  check('rewind+turn+compact log replays (meter + resume)', ok, '')
+  check('no dangling step/turn frames (stress)', hasNoDanglingFrames(cs.events), '')
+}
+
+// 14. I5 probe — rewinding to a message shadowed by a compaction checkpoint
+//     is refused by the plugin with its own error (not a crash).
+{
+  const cs = buildFramedSession('verify-checkpoint', 8)
+  const ca = makeAgent(cs.id, cs)
+  await call(ca, '@20 chat')
+  const compactDef = commands.get('compact')
+  await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
+  // seq 2 is turn 1's question — now shadowed by the compaction checkpoint.
+  const refused = await call(ca, '@2 chat')
+  check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
 }
 
 await rm(tmpRoot, { recursive: true, force: true })
