@@ -401,6 +401,7 @@ function openRetractPopover(opts: PopoverOptions): void {
   root.replaceChildren(
     el('div', CLASS.popoverTitle, t('popover.retract.title')),
     el('div', CLASS.popoverTarget, t('popover.retract.target', { preview: previewText })),
+    el('div', CLASS.popoverImpact, t('popover.retract.hint')),
     actions,
   )
 

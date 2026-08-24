@@ -39,7 +39,7 @@ import { hiddenSeqsOf, isExecutedRewindCommand } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
-import { matchPendingRows } from './pending.ts'
+import { matchPendingRows, retractSpan } from './pending.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
 type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
@@ -230,6 +230,24 @@ interface QueueLike {
 }
 
 /**
+ * The pending bubble row's message text EXCLUDING its trailing actions
+ * container. The harness copy button inside that container wraps its label in
+ * a Tooltip whose bubble mounts (hover, delayMs=0) as a DOM node inside the
+ * row — so the full row `textContent` flips between "message" and
+ * "message+Copy" with the mouse. Reading the bubble text from a CLONE (the
+ * live row is never touched) keeps the strict equality in `matchPendingRows`
+ * stable while the user hovers the action buttons.
+ */
+function bubbleTextOf(row: HTMLElement): string {
+  const clone = row.cloneNode(true) as HTMLElement
+  // The actions container is the last child of the pending bubble row. If the
+  // harness structure ever changes, the clone keeps the extra text and the
+  // strict match degrades to no button (never a wrong attachment).
+  clone.lastElementChild?.remove()
+  return clone.textContent ?? ''
+}
+
+/**
  * Collect the portal targets of one session's pending steering bubbles. The
  * retract button is the pre-sent window's counterpart of the durable rewind
  * button: it exists whenever the Host holds the message in its next-step
@@ -244,7 +262,7 @@ function collectPendingTargets(snapshot: QueueLike): readonly PortalTarget[] {
   if (steering.length === 0) return []
   const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
   const matched = matchPendingRows(
-    rows.map((row) => ({ text: row.textContent ?? '' })),
+    rows.map((row) => ({ text: bubbleTextOf(row) })),
     steering.map((item) => ({ id: item.id, text: item.text })),
   )
   const targets: PortalTarget[] = []
@@ -351,6 +369,23 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
         )
       }
       const next = [...collectTargets(chat, hiddenSeqs), ...collectPendingTargets(snapshot)]
+      // DIAGNOSTICS (flicker investigation — remove once confirmed fixed):
+      // report every refresh's pending-matching inputs so a flickering session
+      // can be correlated with the exact DOM/mirror state (bubble text vs
+      // mirror text, row/steering counts, subagent, resulting targets).
+      {
+        const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
+        const steering = (snapshot as { queue?: readonly { id: string; placement: string; text: string | null }[] }).queue
+          ?.filter((item) => item.placement === 'steering') ?? []
+        if (rows.length > 0 || steering.length > 0) {
+          console.debug(
+            `[dsh-rewind][diag] rows=${rows.length} bubbleText=[${rows.map((r) => JSON.stringify(bubbleTextOf(r))).join(',')}] ` +
+            `steering=${steering.length} ids=[${steering.map((s) => s.id).join(',')}] text=[${steering.map((s) => JSON.stringify(s.text)).join(',')}] ` +
+            `subagent=${JSON.stringify((snapshot as { subagent?: unknown }).subagent)} ` +
+            `pendingTargets=${next.filter((t) => t.kind === 'pending').length} durableTargets=${next.filter((t) => t.kind === 'durable').length}`,
+          )
+        }
+      }
       // Diff: no change → no re-render (the observer fires on every mutation;
       // only an actual target-set change should touch React).
       setTargets(current => (sameTargets(current, next) ? current : next))
@@ -457,20 +492,37 @@ function composerText(): string {
 }
 
 /**
- * Retract one pre-sent steering message: remove it from the host inbox, then
- * (only when the composer is empty — Claude Code's auto-restore guard, so a
- * draft the user is typing is never clobbered) put its text back for editing.
+ * Rewind to one pre-sent (pending steering) message, with the same semantics
+ * as a durable rewind — "pause first, then roll back to before the target":
+ *
+ * 1. Pause the running turn (Claude Code's rewind-always-stops-first rule; a
+ *    no-op when the agent is already idle). Queued (next-turn) messages are
+ *    untouched — the harness QueueDock already offers per-item edit/remove.
+ * 2. Retract the target steering message and every steering message after it
+ *    (the rollback point's "future"), oldest first, via the session's own
+ *    `updateQueue` channel.
+ * 3. Put the target's text back in the composer (only when it is empty —
+ *    Claude Code's auto-restore guard, so a draft the user is typing is never
+ *    clobbered).
+ *
  * A removal failure is silently ignored: the realistic failure is
  * `queue-item-not-found` — the message was claimed by the running turn a
  * moment ago, in which case the durable row's regular rewind button takes
  * over with no gap.
  */
 async function retractPending(session: SessionFace, itemId: string, text: string | null): Promise<void> {
+  // 1. Pause first (Claude Code parity). Idempotent when already idle.
+  await session.cancel()
+  // 2. Retract the target and its future (steering only; queued stays).
   // The item id comes from the queue mirror's `id` field, which the harness
   // brands as MessageId; cast at this single boundary to avoid a new type
   // dependency on the branding package.
-  const result = await session.updateQueue(itemId as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
-  if (!result.ok) return
+  const queue = session.getSnapshot().queue
+  const steering = queue.filter((item) => item.placement === 'steering')
+  for (const id of retractSpan(steering, itemId)) {
+    await session.updateQueue(id as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
+  }
+  // 3. Refill the composer (empty-composer guard).
   if (text !== null && text !== '' && composerText().trim() === '') {
     fillComposer(text)
   }
