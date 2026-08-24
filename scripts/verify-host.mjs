@@ -71,8 +71,26 @@ function buildSession(id, cwd, extra = {}) {
   return session
 }
 
+/** Minimal Inbox double: a mutable next-step list with a removing remove(). */
+function makeInbox(initial = []) {
+  const nextStep = [...initial]
+  return {
+    nextStep,
+    remove(messageId) {
+      const index = nextStep.findIndex((message) => message.id === messageId)
+      if (index >= 0) nextStep.splice(index, 1)
+      return index >= 0
+    },
+  }
+}
+
+/** Minimal Agent double carrying the fields executeRewind reads today. */
+function makeAgent(id, session, status = 'idle', inbox = makeInbox()) {
+  return { id, session, status, inbox }
+}
+
 const session = buildSession('verify-host')
-const agent = { id: session.id, session, status: 'idle' }
+const agent = makeAgent(session.id, session)
 
 const ctx = new Context()
 let registered = null
@@ -126,7 +144,7 @@ check('log stays append-only (5 events)', session.events.length === 5, `events=$
 // 3. /rewind @<seq> chat (the button's exact call form) cuts the surface on a
 //    fresh session
 const paramSession = buildSession('verify-param')
-const paramAgent = { id: paramSession.id, session: paramSession, status: 'idle' }
+const paramAgent = makeAgent(paramSession.id, paramSession)
 const before = [...paramSession.surface.nodes]
 const chatResult = await call(paramAgent, '@2 chat')
 const after = [...paramSession.surface.nodes]
@@ -191,7 +209,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 // 6. relative paths resolve against the session cwd (fs-tools rule)
 {
   const cwdSession = buildSession('verify-cwd', wsDir)
-  const cwdAgent = { id: cwdSession.id, session: cwdSession, status: 'idle' }
+  const cwdAgent = makeAgent(cwdSession.id, cwdSession)
   const relPath = join(wsDir, 'rel.txt')
   await writeFile(relPath, 'relative original', 'utf8')
   cwdSession.append('user/message', user('relative question'), { surfaceOp: 'append' })
@@ -206,7 +224,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 // 7. preview on a message with no recorded changes reports none
 {
   const cleanSession = buildSession('verify-norec')
-  const cleanAgent = { id: cleanSession.id, session: cleanSession, status: 'idle' }
+  const cleanAgent = makeAgent(cleanSession.id, cleanSession)
   const previewResult = await call(cleanAgent, 'preview @2 both')
   check('preview with no entries reports no changes', previewResult.kind === 'success' && previewResult.text.includes('No restorable changes after the target.') && /impact=0/.test(previewResult.text), previewResult.text)
 }
@@ -218,9 +236,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   // `whenIdle` resolves once cancel flips status back to idle (the real
   // harness loop's activity promise settles the same way).
   const running = {
-    id: runningSession.id,
-    session: runningSession,
-    status: 'running',
+    ...makeAgent(runningSession.id, runningSession, 'running'),
     cancel: () => { cancelled = true; running.status = 'idle' },
     whenIdle: () => new Promise(resolve => {
       const poll = () => { if (running.status === 'idle') resolve(); else setTimeout(poll, 10) }
@@ -232,15 +248,25 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
   check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
 }
 
+// 8b. an IDLE agent with pending steering messages: the rewind drops them
+//     (they belong to the future being cut) while queued (next-turn) messages
+//     are left untouched — the harness QueueDock owns those.
+{
+  const pendSession = buildSession('verify-pending')
+  const pendInbox = makeInbox([{ id: 'steer-1' }, { id: 'steer-2' }])
+  const pendAgent = makeAgent(pendSession.id, pendSession, 'idle', pendInbox)
+  const pendResult = await call(pendAgent, '@2 chat')
+  check('rewind with pending steering succeeds', pendResult.kind === 'success', pendResult.text)
+  check('pending steering dropped by rewind', pendInbox.nextStep.length === 0, `nextStep=${JSON.stringify(pendInbox.nextStep)}`)
+}
+
 // 9. a cancel that never quiesces aborts the rewind (timeout path)
 {
   const stuckSession = buildSession('verify-stuck')
   // `whenIdle` never settles and cancel does nothing: the rewind must give up
   // at the idle-wait deadline instead of appending mid-turn.
   const stuck = {
-    id: stuckSession.id,
-    session: stuckSession,
-    status: 'running',
+    ...makeAgent(stuckSession.id, stuckSession, 'running'),
     cancel: () => {},
     whenIdle: () => new Promise(() => {}),
   }
@@ -253,7 +279,7 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 //     could never restore it, so the capture is skipped entirely.
 {
   const subSession = buildSession('verify-sub', wsDir, { origin: 'subagent', delegationDepth: 1 })
-  const subAgent = { id: subSession.id, session: subSession, status: 'idle' }
+  const subAgent = makeAgent(subSession.id, subSession)
   const subFile = join(wsDir, 'sub.txt')
   await writeFile(subFile, 'sub original', 'utf8')
   subSession.append('user/message', user('sub question'), { surfaceOp: 'append' })
