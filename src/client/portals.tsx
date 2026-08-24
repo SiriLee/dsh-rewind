@@ -168,13 +168,38 @@ export async function runRewindAndFill(
   // success outcome; wait for exactly that (longer than the preview wait:
   // a running turn is cancelled first, which can take seconds).
   const outcome = await waitForCommand(session, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
-  if (outcome === null || outcome.kind !== 'success') return
+  if (outcome === null) return
+  if (outcome.kind !== 'success') {
+    // The host rejected the rewind (e.g. the target was shadowed by
+    // compaction and is no longer in the model context). The refusal is the
+    // correct behavior, but it must not fail silently — surface the host's
+    // reason instead.
+    showHint(outcome.text ?? 'rewind failed')
+    return
+  }
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
   if (currentSessionId() !== session.sessionId) return
   const text = userTextAt(session, seq)
   if (text === undefined || text === '') return
   fillComposer(text)
+}
+
+/** Transient status hint above the composer (same styling as the input guard). */
+function showHint(text: string): void {
+  const textarea = document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
+  const hint = document.createElement('div')
+  hint.className = CLASS.guardHint
+  hint.setAttribute('role', 'status')
+  hint.textContent = text
+  document.body.appendChild(hint)
+  if (textarea !== null) {
+    const card = textarea.closest('[data-composer-card]')
+    const rect = card instanceof HTMLElement ? card.getBoundingClientRect() : textarea.getBoundingClientRect()
+    hint.style.left = `${Math.round(rect.left)}px`
+    hint.style.bottom = `${Math.round(window.innerHeight - rect.top + 8)}px`
+  }
+  window.setTimeout(() => hint.remove(), 3200)
 }
 
 /** The composer textarea dsh renders for the current session's input. */

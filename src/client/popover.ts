@@ -430,7 +430,11 @@ export function openPopover(opts: PopoverOptions): void {
   root.setAttribute('aria-label', t('popover.title'))
 
   /** Availability of the "rewind conversation and code" mode, resolved from a preview. */
-  type BothState = { state: 'loading' } | { state: 'hasChanges' } | { state: 'noChanges' }
+  type BothState =
+    | { state: 'loading' }
+    | { state: 'hasChanges' }
+    | { state: 'noChanges' }
+    | { state: 'error'; message: string }
   let bothState: BothState = { state: 'loading' }
   /** Impact outcome fetched at open; reused by the both-step (no second command row). */
   let impactOutcome: PreviewOutcome = null
@@ -452,6 +456,12 @@ export function openPopover(opts: PopoverOptions): void {
       // Claude Code shows the code-restore options only when the checkpoint has
       // tracked file changes; a muted note keeps the layout stable.
       children.push(el('div', CLASS.popoverImpact, t('popover.noChanges')))
+    } else if (bothState.state === 'error') {
+      // The preview failed (e.g. the target was shadowed by compaction): show
+      // the host's reason instead of hanging on "checking…" forever, and keep
+      // the both-mode entry hidden — it can never succeed for an unreachable
+      // target.
+      children.push(el('div', CLASS.popoverImpact, t('popover.impact.failed', { message: bothState.message })))
     } else {
       const option = modeOption(
         t('popover.both'),
@@ -518,6 +528,11 @@ export function openPopover(opts: PopoverOptions): void {
     impactOutcome = outcome
     if (outcome !== null && outcome.kind === 'success') {
       bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
+    } else if (outcome !== null && outcome.kind === 'error') {
+      // Surface the host's rejection (e.g. "no longer in the model context
+      // (shadowed by compaction)") instead of leaving the modes step stuck on
+      // "checking file changes…" with a permanently disabled both entry.
+      bothState = { state: 'error', message: outcome.text ?? 'unknown error' }
     }
     renderModes()
     shell.position()
