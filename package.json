@@ -23,9 +23,6 @@
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
-  "bin": {
-    "dsh-rewind-repair": "scripts/repair-markers.mjs"
-  },
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -44,8 +41,7 @@
     "README.zh.md",
     "docs",
     "assets",
-    "LICENSE",
-    "scripts/repair-markers.mjs"
+    "LICENSE"
   ],
   "dsh": {
     "bundle": {

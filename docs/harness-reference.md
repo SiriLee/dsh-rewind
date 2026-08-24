@@ -47,9 +47,8 @@ src/client/locales.ts   zh / en copy (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
 scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
 scripts/verify-host.mjs end-to-end host verification (18 checks)
-scripts/repair-markers.mjs  offline marker-turn repair tool (ships as `dsh-rewind-repair`)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration)
-docs/                   maintainer docs: harness reference, troubleshooting, release steps
+docs/                   maintainer docs: harness reference, release steps
 assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
 package.json            dsh.bundle + dsh.client manifests, optional peerDependencies

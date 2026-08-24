@@ -66,7 +66,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 - 标记携带 `sourceEventSeqs` 覆盖所有被遮蔽节点，`Session.append` 的 surface 规则校验切割合法性（仅限当前 surface 上的连续区间）。
 - 因为标记**内容为空**，harness 会将其派生为 `null`——永不进入模型上下文、也永不渲染成对话内容。agent 与用户看到的对话都回到目标消息当时的样子。
 - 标记的 **turn 号复用最后一个已开始的回合**（`markerTurnOf`），而不是「最后回合 + 1」：harness 恰好用 `最后 turn/start + 1` 编号下一条真实回合。若标记也取这个数，日志里就会出现同一 turn 的 `assistant/message` 先于 `turn/start` 的乱序，客户端 conversation 构建器会以 `conversation Context …:turn-tail… received an update before its start Match` 拒绝重放——历史加载失败、整个对话从界面消失。复用已消费的 turn 号则标记只是上一个已完成回合尾部的一次无害追加，永不与新回合冲突。
-- 标记自带**幽灵步骤框架**——自己的 `step/start` … `step/end`，step 号取该回合未用过的新号（`markerStepOf`）：harness 的 token-meter 重放要求每条 `assistant/message` 位于打开的 step 内，裸标记会让该会话的 `/compact` 失效（见[已知问题](#已知问题)）。
+- 标记自带**幽灵步骤框架**——自己的 `step/start` … `step/end`，step 号取该回合未用过的新号（`markerStepOf`）：harness 的 token-meter 重放要求每条 `assistant/message` 位于打开的 step 内，裸标记则会让该会话的 `/compact` 失效。
 - append-only 日志**不被改写**——审计轨迹完整保留每条被撤回的事件，只有模型可见的 surface 被剪掉，下一条请求从目标消息起派生上下文。
 
 若 agent 正在运行（LLM 思考/流式输出），会先强制停止（`cancel({ kind: 'user' })`）并等待 quiescence 再回退；停不下来则中止并报错。
@@ -99,7 +99,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 | 跟踪范围 | 仅写类工具编辑（同 Claude Code） | 任意 Git 管理文件（要求 Git worktree） |
 | 公共服务 API | 无——聚焦单用途插件 | 有——`ctx.changeLedger` 服务 + `/turn-rewind` HTTP 端点 |
 
-本质区别：dsh-turn-rewind 因保持日志不可变而必须派生新会话；本插件用空标记**就地剪掉**模型可见 surface，于是原对话在同一个窗口继续——这段并不平凡的实现（见[已知问题](#已知问题)）正是 dsh-turn-rewind 绕开的部分。
+本质区别：dsh-turn-rewind 因保持日志不可变而必须派生新会话；本插件用空标记**就地剪掉**模型可见 surface，于是原对话在同一个窗口继续——这段并不平凡的实现正是 dsh-turn-rewind 绕开的部分。
 
 ## 兼容性
 
@@ -120,11 +120,9 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## 已知问题
 
-`v0.2.4` 及之前版本创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。离线修复工具**已随 npm 包内置**（`dsh-rewind-repair`）。只影响升级前就已存在的旧会话——全新安装永不触发。
+`v0.2.4` 及之前版本创建的回退在随后继续对话时可能损坏客户端重放（标记 turn 与下一个 `turn/start` 撞号）。只影响升级前就已存在的旧会话。离线修复工具（`dsh-rewind-repair`）在 v0.4.0 之前随包提供，此后不再提供——请新建会话。
 
-`v0.3.3` 及之前版本的回退以裸标记追加（无步骤框架），token-meter 重放会拒绝该日志，`/compact` 对该会话失效。当前版本已兼容；已受影响的旧会话无法在线修复——请新建会话。
-
-完整步骤见：[docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)
+`v0.3.3` 及之前版本的回退以裸标记追加（无步骤框架），token-meter 重放会拒绝该日志，`/compact` 对该会话失效。新版本均已兼容；已受影响的旧会话暂不提供在线修复——请新建会话。
 
 ## 安全
 

@@ -66,7 +66,7 @@ The plugin appends an **empty-content marker** `assistant/message` into the sess
 - The marker carries `sourceEventSeqs` covering every shadowed node, and `Session.append`'s surface rules validate the cut (a contiguous range on the current surface).
 - Because the marker is **empty**, the harness derives it to `null` — it never enters the model context and never renders as conversation content. Agent and user both see the conversation exactly as it was at the target.
 - The marker's **turn number reuses the last started turn** (`markerTurnOf`), never `lastTurn + 1`: the harness numbers its next real turn exactly `last turn/start + 1`, so a `maxTurn + 1` marker would sit *before* that `turn/start` — the client conversation builder rejects the ordering (`…turn-tail… received an update before its start Match`) and history load fails. Reusing an already-consumed turn makes the marker a harmless trailing update on the previous completed turn's tail — it can never collide with a future turn.
-- The marker rides a **ghost step frame** — its own `step/start` … `step/end` with a fresh step number (`markerStepOf`) — because the harness token-meter requires every `assistant/message` to sit inside an open step of the same turn/step; a bare idle-time marker would fail its replay and break `/compact` for the session (see [Known issues](#known-issues)).
+- The marker rides a **ghost step frame** — its own `step/start` … `step/end` with a fresh step number (`markerStepOf`) — because the harness token-meter requires every `assistant/message` to sit inside an open step of the same turn/step; a bare idle-time marker would fail its replay and break `/compact` for the session.
 - The append-only log is **untouched** — every withdrawn event stays in the audit trail; only the model-visible surface is cut, so the next request derives its context from the target onward.
 
 A running turn (LLM thinking / streaming) is force-stopped first (`cancel({ kind: 'user' })`) and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
@@ -120,11 +120,9 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 ## Known issues
 
-Rewinds created with versions `≤ v0.2.4` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). The offline repair tool ships **inside the npm package** (`dsh-rewind-repair`). This only affects sessions you already had before upgrading — a fresh install never hits it.
+Rewinds created with versions `≤ v0.2.4` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). Only pre-upgrade sessions are affected. The offline repair tool (`dsh-rewind-repair`) was shipped before v0.4.0 and is no longer provided — start a new session.
 
-Rewinds from `≤ v0.3.3` appended a bare marker (no step frame); the harness token-meter rejects such a log on replay, so `/compact` fails for that session. Current rewinds are compatible; an affected old session cannot be repaired online — start a new session.
-
-Full instructions: [docs/troubleshooting.md](docs/troubleshooting.md)
+Rewinds from `≤ v0.3.3` appended a bare marker (no step frame); the harness token-meter rejects such a log on replay, so `/compact` fails for that session. Newer versions are compatible; affected old sessions have no online repair yet — start a new session.
 
 ## Security
 
