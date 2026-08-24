@@ -39,6 +39,7 @@ import { hiddenSeqsOf, isExecutedRewindCommand } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
+import { matchPendingRows } from './pending.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
 type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
@@ -50,14 +51,29 @@ interface ChatLike {
 }
 
 /** One portal target: the actions row of a user/steering seat + its durable node. */
-interface PortalTarget {
-  readonly key: string
-  /** The row's actions container (React portal target). */
-  readonly container: HTMLElement
-  readonly seq: number
-  readonly time: number
-  readonly preview: string
-}
+export type PortalTarget =
+  | {
+      readonly kind: 'durable'
+      /** The seat's chat node key (React reconciliation + diff identity). */
+      readonly key: string
+      /** The row's actions container (React portal target). */
+      readonly container: HTMLElement
+      readonly seq: number
+      readonly time: number
+      readonly preview: string
+    }
+  | {
+      readonly kind: 'pending'
+      /** `pending:${itemId}` — stable per inbox occurrence. */
+      readonly key: string
+      /** The row's actions container (React portal target). */
+      readonly container: HTMLElement
+      /** The host inbox occurrence the retract button addresses. */
+      readonly itemId: string
+      /** Complete editable text; null when the message contains non-text blocks. */
+      readonly text: string | null
+      readonly preview: string
+    }
 
 /** Capabilities the session-scoped bridge receives from the plugin apply(). */
 export interface RewindBridgeDeps {
@@ -173,6 +189,9 @@ const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 /** The row container whose hover reveals the actions (and the time). */
 const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 
+/** Pending steering bubble rows (Host-authoritative pre-admission projection). */
+const PENDING_SEAT_SELECTOR = '[data-pending-steering][data-time-hover-root]'
+
 /** Collect the portal targets of one session: user rows × snapshot nodes. */
 function collectTargets(chat: ChatLike, hiddenSeqs: ReadonlySet<number>): readonly PortalTarget[] {
   const rows = new Map<string, HTMLElement>()
@@ -194,7 +213,61 @@ function collectTargets(chat: ChatLike, hiddenSeqs: ReadonlySet<number>): readon
     // copy/branch IconActions; refuse to portal when the DOM does not match
     // (a layout change must not break the conversation).
     if (!(actions instanceof HTMLElement) || actions.querySelector('button') === null) continue
-    targets.push({ key, container: actions, seq: user.seq, time: user.time, preview: messagePreviewOf(user) })
+    targets.push({ kind: 'durable', key, container: actions, seq: user.seq, time: user.time, preview: messagePreviewOf(user) })
+  }
+  return targets
+}
+
+/** The session snapshot slice the pending collector reads (structural subset). */
+interface QueueLike {
+  readonly queue: readonly {
+    readonly id: string
+    readonly placement: string
+    readonly preview: string
+    readonly text: string | null
+  }[]
+  readonly subagent: unknown
+}
+
+/**
+ * Collect the portal targets of one session's pending steering bubbles. The
+ * retract button is the pre-sent window's counterpart of the durable rewind
+ * button: it exists whenever the Host holds the message in its next-step
+ * inbox (running or paused), and it retracts through the session's own
+ * `updateQueue` channel — no DSH behavior changes.
+ */
+function collectPendingTargets(snapshot: QueueLike): readonly PortalTarget[] {
+  // Subagent sessions reject queue mutations host-side; mirror the harness's
+  // own QueueDock gate (queueMutable = subagent === null).
+  if (snapshot.subagent !== null) return []
+  const steering = snapshot.queue.filter((item) => item.placement === 'steering')
+  if (steering.length === 0) return []
+  const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
+  const matched = matchPendingRows(
+    rows.map((row) => ({ text: row.textContent ?? '' })),
+    steering.map((item) => ({ id: item.id, text: item.text })),
+  )
+  const targets: PortalTarget[] = []
+  for (let i = 0; i < matched.length; i++) {
+    const itemId = matched[i]!
+    if (itemId === null) continue
+    const row = rows[i]
+    if (row === undefined) continue
+    // Unlike durable rows, the pending bubble row IS the time-hover root (no
+    // outer seat wrapper); its actions row is the last child and holds the
+    // copy IconAction — refuse to portal when the DOM does not match.
+    const messageRoot = row.matches(ACTIONS_ROOT_SELECTOR) ? row : row.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
+    const actions = messageRoot?.lastElementChild
+    if (!(actions instanceof HTMLElement) || actions.querySelector('button') === null) continue
+    const item = steering[i]!
+    targets.push({
+      kind: 'pending',
+      key: `pending:${itemId}`,
+      container: actions,
+      itemId,
+      text: item.text,
+      preview: item.preview,
+    })
   }
   return targets
 }
@@ -203,10 +276,9 @@ function collectTargets(chat: ChatLike, hiddenSeqs: ReadonlySet<number>): readon
 function sameTargets(left: readonly PortalTarget[], right: readonly PortalTarget[]): boolean {
   return left.length === right.length && left.every((target, index) => {
     const other = right[index]
-    return other !== undefined
-      && target.key === other.key
-      && target.container === other.container
-      && target.seq === other.seq
+    if (other === undefined || target.key !== other.key || target.container !== other.container) return false
+    if (target.kind === 'durable') return other.kind === 'durable' && target.seq === other.seq
+    return other.kind === 'pending' && target.itemId === other.itemId
   })
 }
 
@@ -243,7 +315,8 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
         setTargets([])
         return
       }
-      const chat = session.getSnapshot().chat
+      const snapshot = session.getSnapshot()
+      const chat = snapshot.chat
       const hiddenSeqs = hiddenSeqsOf(chat)
       let hiddenCount = 0
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
@@ -277,7 +350,7 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
           `[dsh-rewind] hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
         )
       }
-      const next = collectTargets(chat, hiddenSeqs)
+      const next = [...collectTargets(chat, hiddenSeqs), ...collectPendingTargets(snapshot)]
       // Diff: no change → no re-render (the observer fires on every mutation;
       // only an actual target-set change should touch React).
       setTargets(current => (sameTargets(current, next) ? current : next))
@@ -308,21 +381,33 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
   }, [sessionId, sessionOf])
 
   return targets.map(target => createPortal(
-    <RewindButton
-      key={target.key}
-      target={target}
-      sessionId={sessionId}
-      sessionOf={sessionOf}
-      currentSessionId={currentSessionId}
-      t={t}
-    />,
+    target.kind === 'pending'
+      ? (
+        <RetractButton
+          key={target.key}
+          target={target}
+          sessionId={sessionId}
+          sessionOf={sessionOf}
+          t={t}
+        />
+      )
+      : (
+        <RewindButton
+          key={target.key}
+          target={target}
+          sessionId={sessionId}
+          sessionOf={sessionOf}
+          currentSessionId={currentSessionId}
+          t={t}
+        />
+      ),
     target.container,
     target.key,
   ))
 }
 
 interface RewindButtonProps {
-  readonly target: PortalTarget
+  readonly target: Extract<PortalTarget, { kind: 'durable' }>
   readonly sessionId: string
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   readonly currentSessionId: () => string | undefined
@@ -359,6 +444,67 @@ function RewindButton({ target, sessionId, sessionOf, currentSessionId, t }: Rew
       className={CLASS.button}
       aria-label={t('button.aria')}
       title={t('button.title')}
+      onClick={onClick}
+      dangerouslySetInnerHTML={{ __html: REWIND_ICON_SVG }}
+    />
+  )
+}
+
+/** The current composer draft (empty when the composer is absent). */
+function composerText(): string {
+  const textarea = document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
+  return textarea === null ? '' : textarea.value
+}
+
+/**
+ * Retract one pre-sent steering message: remove it from the host inbox, then
+ * (only when the composer is empty — Claude Code's auto-restore guard, so a
+ * draft the user is typing is never clobbered) put its text back for editing.
+ * A removal failure is silently ignored: the realistic failure is
+ * `queue-item-not-found` — the message was claimed by the running turn a
+ * moment ago, in which case the durable row's regular rewind button takes
+ * over with no gap.
+ */
+async function retractPending(session: SessionFace, itemId: string, text: string | null): Promise<void> {
+  // The item id comes from the queue mirror's `id` field, which the harness
+  // brands as MessageId; cast at this single boundary to avoid a new type
+  // dependency on the branding package.
+  const result = await session.updateQueue(itemId as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
+  if (!result.ok) return
+  if (text !== null && text !== '' && composerText().trim() === '') {
+    fillComposer(text)
+  }
+}
+
+interface RetractButtonProps {
+  readonly target: Extract<PortalTarget, { kind: 'pending' }>
+  readonly sessionId: string
+  readonly sessionOf: (sessionId: string) => SessionFace | undefined
+  readonly t: Translate
+}
+
+/** The per-pending-message ↶ button (same visual family as the durable button). */
+function RetractButton({ target, sessionId, sessionOf, t }: RetractButtonProps): ReactNode {
+  const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
+    event.stopPropagation()
+    const session = sessionOf(sessionId)
+    if (session === undefined) return
+    openPopover({
+      session,
+      preview: target.preview,
+      anchor: event.currentTarget,
+      t,
+      retract: { itemId: target.itemId, text: target.text },
+      onRetract: () => { void retractPending(session, target.itemId, target.text) },
+    })
+  }
+
+  return (
+    <button
+      type="button"
+      className={CLASS.button}
+      aria-label={t('button.retract.aria')}
+      title={t('button.retract.title')}
       onClick={onClick}
       dangerouslySetInnerHTML={{ __html: REWIND_ICON_SVG }}
     />
