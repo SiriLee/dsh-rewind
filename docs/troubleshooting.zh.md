@@ -11,6 +11,4 @@ npm exec --yes --package=dsh-rewind-plugin@0.3.3 -- dsh-rewind-repair
 npm exec --yes --package=dsh-rewind-plugin@0.3.3 -- dsh-rewind-repair -- --dry-run  # 只预览不写盘
 ```
 
-`@0.3.3` 为示例版本，任意 v0.4.0 之前的版本均可。如需长期保留工具：`npm i -g dsh-rewind-plugin@0.3.3` 后直接运行 `dsh-rewind-repair`。
-
 工具只改写标记事件的 `data.turn`（保持 seq / 顺序 / zstd 帧结构不变），改前自动备份原文件——可安全重复运行。源码方式：v0.4.0 之前的 tag 下 `node scripts/repair-markers.mjs`（参数相同）。
