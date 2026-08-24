@@ -9,6 +9,24 @@
  * transcript) is untouched; only the model-visible surface is cut, so the
  * next request derives its context from the target message onward.
  *
+ * Marker shape (v0.3.4+): the marker is an EMPTY `assistant/message` with a
+ * replace `surfaceOp`, wrapped in its own step frame —
+ *
+ *   step/start (turn, step) → assistant/message (marker) → step/end (turn, step)
+ *
+ * The step frame exists because the harness token-meter replays the log and
+ * requires every `assistant/message` to sit inside an OPEN step whose
+ * `(turn, step)` matches exactly (`token meter: assistant/message at seq N
+ * has no matching step/start event` otherwise) — a bare marker appended while
+ * idle (every step already closed) makes every later measure() call throw,
+ * which disables /compact and automatic compaction. The frame's `turn` is the
+ * LAST STARTED turn (`markerTurnOf`) and `step` is that turn's next unused
+ * step number (`markerStepOf`): never a reused one, or the client
+ * conversation assembler sees a duplicate `step/start` and rejects the log
+ * with "received more than one start Match". The agent loop numbers its own
+ * steps from memory (each new turn restarts at 1), so the ghost step can
+ * never collide with a future real step.
+ *
  * @module dsh-rewind/rewind
  */
 
@@ -111,6 +129,34 @@ export function markerTurnOf(events: readonly SessionEvent[]): number {
     }
   }
   return lastStarted
+}
+
+/**
+ * Step number for the rewind marker's ghost step frame.
+ *
+ * The marker's `assistant/message` must be wrapped in `step/start` …
+ * `step/end` of the SAME `(turn, step)` so the harness token-meter replay
+ * accepts it (see the module doc). The step number MUST be a step this turn
+ * has never started: the client conversation assembler treats `step/start`
+ * as the start of an `assistant-step` context keyed `turn:step`, so reusing
+ * an already-started step number makes the log replay throw "received more
+ * than one start Match" and the history disappears from the UI. Reusing
+ * `lastStep + 1` is always safe: the harness numbers a turn's steps from
+ * memory (each new turn restarts at 1), so the ghost step can never collide
+ * with a future real step of this turn.
+ *
+ * @param events - the full session event log.
+ * @param turn - the marker's turn (normally `markerTurnOf(events)`).
+ * @returns the smallest step number this turn has never started (≥ 1).
+ */
+export function markerStepOf(events: readonly SessionEvent[], turn: number): number {
+  let lastStarted = 0
+  for (const event of events) {
+    if (event.type === 'step/start' && event.data.turn === turn && event.data.step > lastStarted) {
+      lastStarted = event.data.step
+    }
+  }
+  return lastStarted + 1
 }
 
 /** Narrow an event to a user message. */

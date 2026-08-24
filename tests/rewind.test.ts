@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
-  formatCandidate, formatCandidateList, listRewindCandidates, markerTurnOf, messagePreview, parseRewindTarget,
+  formatCandidate, formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, messagePreview, parseRewindTarget,
   planRewind, RewindError,
 } from '../src/rewind.ts'
 
@@ -90,6 +90,29 @@ function twoTurnLog(): readonly SessionEvent[] {
     assistantEvent(6, 'second answer'),
     turnEndEvent(7, 2),
   ]
+}
+
+function stepStartEvent(seq: number, turn: number, step: number): SessionEvent<'step/start'> {
+  return { type: 'step/start', seq, time: seq * 60_000, data: { turn, step } } as SessionEvent<'step/start'>
+}
+
+function stepEndEvent(seq: number, turn: number, step: number): SessionEvent<'step/end'> {
+  return { type: 'step/end', seq, time: seq * 60_000, data: { turn, step } } as SessionEvent<'step/end'>
+}
+
+/**
+ * A rewind marker in the v0.3.4+ ghost-step shape, exactly like the host's
+ * `executeRewind` appends it: an empty assistant/message wrapped in its own
+ * `step/start` … `step/end` frame with a fresh step number. The events are
+ * appended in order; seqs continue from the log's tail.
+ */
+function appendGhostStepMarker(events: SessionEvent[], turn: number): SessionEvent[] {
+  const step = markerStepOf(events, turn)
+  const seq = events.length
+  events.push(stepStartEvent(seq, turn, step))
+  events.push({ ...assistantEvent(seq + 1, ''), data: { turn, step, message: createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } }) } } as SessionEvent<'assistant/message'>)
+  events.push(stepEndEvent(seq + 2, turn, step))
+  return events
 }
 
 describe('parseRewindTarget', () => {
@@ -319,22 +342,22 @@ describe('markerTurnOf (regression: marker turn must never collide with the harn
 
   it('stays collision-free after the harness continues the conversation (the exact crash repro)', () => {
     const events = [...twoTurnLog()]
-    // The rewind executes: an empty marker is appended with markerTurnOf…
+    // The rewind executes: a ghost-step marker is appended with markerTurnOf…
     const markerTurn = markerTurnOf(events)
-    events.push({ ...assistantEvent(8, ''), data: { turn: markerTurn, step: 0, message: createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } }) } } as SessionEvent<'assistant/message'>)
+    appendGhostStepMarker(events, markerTurn)
+    const markerEvent = events[events.length - 2] as SessionEvent<'assistant/message'>
     // …and then the harness opens its NEXT real turn: `last turn/start + 1`.
     const nextRealTurn = markerTurn + 1
-    events.push(turnStartEvent(9, nextRealTurn))
+    events.push(turnStartEvent(events.length, nextRealTurn))
     // The client builder requires every `turn/start` to be the FIRST match of
     // its turn-tail context — no `assistant/message` may precede it.
-    const markerEvent = events[events.length - 2] as SessionEvent<'assistant/message'>
     const turnStart = events[events.length - 1] as SessionEvent<'turn/start'>
     expect(turnStart.data.turn).toBe(3)
     expect(markerEvent.data.turn).not.toBe(turnStart.data.turn)
   })
 
   it('ignores assistant/message and turn/end turn numbers (legacy markers included)', () => {
-    const events = [
+    const events: SessionEvent[] = [
       ...twoTurnLog(),
       // A legacy (pre-fix) marker numbered 3 followed by the harness turn/start 3.
       { ...assistantEvent(8, ''), data: { turn: 3, step: 0, message: createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } }) } } as SessionEvent<'assistant/message'>,
@@ -354,5 +377,85 @@ describe('markerTurnOf (regression: marker turn must never collide with the harn
     const { events } = sampleLog()
     expect(events.some(event => event.type === 'turn/start')).toBe(false)
     expect(markerTurnOf(events)).toBe(0)
+  })
+})
+
+describe('markerStepOf (ghost-step frame: a fresh step number the client assembler can never reject)', () => {
+  it('returns 1 for a turn that never started a step', () => {
+    const events = [
+      turnStartEvent(0, 1),
+      userEvent(1, 'question'),
+      assistantEvent(2, 'answer'),
+      turnEndEvent(3, 1),
+    ]
+    expect(markerStepOf(events, 1)).toBe(1)
+  })
+
+  it('advances past the turn\'s already-started steps', () => {
+    const events = [
+      turnStartEvent(0, 1),
+      stepStartEvent(1, 1, 1),
+      userEvent(2, 'question'),
+      assistantEvent(3, 'answer'),
+      stepEndEvent(4, 1, 1),
+      turnEndEvent(5, 1),
+    ]
+    expect(markerStepOf(events, 1)).toBe(2)
+  })
+
+  it('counts ONLY the target turn\'s steps (a later turn does not advance it)', () => {
+    const events = [
+      turnStartEvent(0, 1),
+      stepStartEvent(1, 1, 1),
+      userEvent(2, 'first question'),
+      assistantEvent(3, 'first answer'),
+      stepEndEvent(4, 1, 1),
+      turnEndEvent(5, 1),
+      turnStartEvent(6, 2),
+      stepStartEvent(7, 2, 1),
+      userEvent(8, 'second question'),
+      assistantEvent(9, 'second answer'),
+      stepEndEvent(10, 2, 1),
+      turnEndEvent(11, 2),
+      // turn 2 starts a second step; turn 1 only ever started step 1.
+      stepStartEvent(12, 2, 2),
+      stepEndEvent(13, 2, 2),
+    ]
+    expect(markerStepOf(events, 1)).toBe(2)
+    expect(markerStepOf(events, 2)).toBe(3)
+  })
+
+  it('keeps advancing across repeated rewinds in the same turn (the multi-rewind accumulation case)', () => {
+    const events: SessionEvent[] = [...twoTurnLog()]
+    // First rewind: ghost step 1 of turn 2.
+    appendGhostStepMarker(events, 2)
+    expect(markerStepOf(events, 2)).toBe(2)
+    // Second rewind: ghost step 2 of turn 2 — still fresh, never reused.
+    appendGhostStepMarker(events, 2)
+    expect(markerStepOf(events, 2)).toBe(3)
+    // Every (turn, step) pair in the log is unique — the client's
+    // assistant-step contexts never see a duplicate start.
+    const seen = new Set<string>()
+    for (const event of events) {
+      if (event.type !== 'step/start') continue
+      const key = `${event.data.turn}:${event.data.step}`
+      expect(seen.has(key)).toBe(false)
+      seen.add(key)
+    }
+  })
+
+  it('ignores steps of other turns even when they start later', () => {
+    const events = [
+      turnStartEvent(0, 1),
+      stepStartEvent(1, 1, 1),
+      stepEndEvent(2, 1, 1),
+      turnEndEvent(3, 1),
+      turnStartEvent(4, 2),
+      stepStartEvent(5, 2, 1),
+      stepEndEvent(6, 2, 1),
+      turnEndEvent(7, 2),
+    ]
+    expect(markerStepOf(events, 1)).toBe(2)
+    expect(markerStepOf(events, 2)).toBe(2)
   })
 })

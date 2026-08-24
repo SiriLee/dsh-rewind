@@ -139,7 +139,9 @@ const bareResult = await call(agent, '')
 const bareAfter = [...session.surface.nodes]
 check('bare /rewind succeeds', bareResult.kind === 'success', bareResult.text)
 check('bare /rewind withdraws the latest message', bareAfter.length === 3 && bareAfter[0] === 0 && bareAfter[1] === 1 && bareAfter[2] > 3, `before ${JSON.stringify(bareBefore)} -> after ${JSON.stringify(bareAfter)}`)
-check('log stays append-only (5 events)', session.events.length === 5, `events=${session.events.length}`)
+// The marker rides a ghost-step frame (step/start + step/end) so the harness
+// token-meter replay accepts it (issue #2: bare markers break /compact).
+check('log stays append-only (7 events: 4 + marker frame)', session.events.length === 7, `events=${session.events.length}`)
 
 // 3. /rewind @<seq> chat (the button's exact call form) cuts the surface on a
 //    fresh session
@@ -150,16 +152,19 @@ const chatResult = await call(paramAgent, '@2 chat')
 const after = [...paramSession.surface.nodes]
 check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
 check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
-check('log stays append-only (5 events)', paramSession.events.length === 5, `events=${paramSession.events.length}`)
+// Same ghost-step frame as above: 4 seed events + step/start + marker + step/end.
+check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.length === 7, `events=${paramSession.events.length}`)
 
 // 4. a tracked write commits a before-backup; rewinding both restores the
 //    real file and deletes files created after the target
 {
   const aPath = join(wsDir, 'a.txt')
   await writeFile(aPath, 'original content', 'utf8')
-  // The next user message anchors the turn that will edit a.txt (seq 5).
+  // The next user message anchors the turn that will edit a.txt. Resolve it
+  // dynamically: the shared session already carries the ghost-step marker
+  // frame from the bare rewind above, so seqs are not contiguous from 4.
   session.append('user/message', user('third question'), { surfaceOp: 'append' })
-  const anchorSeq = 5
+  const anchorSeq = session.events.findLast(event => event.type === 'user/message').seq
   await runWrite(agent, 'c1', aPath, 'rewritten') // before-capture: 'original content'
   const createdPath = join(wsDir, 'created.txt')
   await runWrite(agent, 'c2', createdPath, 'new') // file did not exist: before-capture = created
@@ -197,13 +202,19 @@ check('log stays append-only (5 events)', paramSession.events.length === 5, `eve
 
 // 5. a denied call never commits (no phantom entry)
 {
+  // Own session so the anchor stays stable (the shared session's seqs drift
+  // with each rewind's ghost-step frame).
+  const deniedSession = buildSession('verify-denied')
+  const deniedAgent = makeAgent(deniedSession.id, deniedSession)
+  deniedSession.append('user/message', user('denied anchor question'), { surfaceOp: 'append' })
+  const anchorSeq = deniedSession.events.findLast(event => event.type === 'user/message').seq
   const deniedPath = join(wsDir, 'denied.txt')
   await writeFile(deniedPath, 'x', 'utf8')
-  const exec = { callId: 'c3', name: 'write', arguments: { file_path: deniedPath, content: 'denied write' }, agent, signal: aborted() }
+  const exec = { callId: 'c3', name: 'write', arguments: { file_path: deniedPath, content: 'denied write' }, agent: deniedAgent, signal: aborted() }
   await ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'deny', reason: 'no' }))
   await ctx.waterfall('tools/post-execute', exec, { isError: true, error: { message: 'denied', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
-  const preview = await call(agent, 'preview @5 both')
-  check('denied call is not in the impact list', !preview.text.includes(deniedPath), preview.text)
+  const preview = await call(deniedAgent, `preview @${anchorSeq} both`)
+  check('denied call is not in the impact list', preview.kind === 'success' && !preview.text.includes(deniedPath), preview.text)
 }
 
 // 6. relative paths resolve against the session cwd (fs-tools rule)

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { markerTurnOf, planRewind } from '../src/rewind.ts'
+import { markerStepOf, markerTurnOf, planRewind } from '../src/rewind.ts'
 
 function textMessage(text: string) {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -27,19 +27,31 @@ function emptyMarker(): AssistantMessage {
 }
 
 /**
- * Append the rewind marker (empty assistant) as the surface replacement.
- * The turn comes from `markerTurnOf` — the LAST STARTED turn — exactly like
- * the host's `executeRewind` does. A marker must never be numbered
- * `lastTurn/start + 1`: the harness numbers its next real turn that way, so
- * the log would hold an `assistant/message` BEFORE the `turn/start` of the
- * same turn, which the client conversation-context builder rejects
- * ("…received an update before its start Match") and history vanishes.
+ * Append the rewind marker (empty assistant) as the surface replacement,
+ * wrapped in its own ghost-step frame — the exact shape the host's
+ * `executeRewind` appends since v0.3.4:
+ *
+ *   step/start (turn, fresh step) → assistant/message (marker) → step/end
+ *
+ * The turn comes from `markerTurnOf` — the LAST STARTED turn — and the step
+ * from `markerStepOf` (that turn's next unused step number). The step frame
+ * exists because the harness token-meter replays the log and requires every
+ * `assistant/message` to sit inside an OPEN step of the same (turn, step);
+ * a bare marker appended while idle would make every later measure() throw
+ * ("no matching step/start event"), silently breaking /compact. The step
+ * number must be fresh: the client conversation assembler treats
+ * `step/start` as a context start, so a reused number makes history load
+ * fail with "received more than one start Match".
  */
 function applyRewind(session: Session, plan: ReturnType<typeof planRewind>): number {
-  const event = session.append('assistant/message', { turn: markerTurnOf(session.events), step: 0, message: emptyMarker() }, {
+  const turn = markerTurnOf(session.events)
+  const step = markerStepOf(session.events, turn)
+  session.append('step/start', { turn, step })
+  const event = session.append('assistant/message', { turn, step, message: emptyMarker() }, {
     surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
     sourceEventSeqs: [...plan.shadowedSeqs],
   })
+  session.append('step/end', { turn, step })
   return event.seq
 }
 
@@ -110,12 +122,13 @@ describe('in-place rewind over a real session', () => {
 
     const markerSeq = applyRewind(session, plan)
 
-    // The log stays append-only (audit trail intact).
-    expect(session.events).toHaveLength(5)
-    expect(markerSeq).toBe(4)
+    // The log stays append-only (audit trail intact); the ghost step frame
+    // adds step/start + step/end around the marker.
+    expect(session.events).toHaveLength(7)
+    expect(markerSeq).toBe(5)
 
     // The surface ends at the (unrendered, empty) marker.
-    expect([...session.surface.nodes]).toEqual([0, 1, 4])
+    expect([...session.surface.nodes]).toEqual([0, 1, 5])
 
     // The model context is exactly "before the withdrawn message": no marker,
     // no second question, no second answer.
@@ -159,13 +172,13 @@ describe('in-place rewind over a real session', () => {
     const session = buildSession()
     const first = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
     applyRewind(session, first)
-    expect([...session.surface.nodes]).toEqual([0, 1, 4])
+    expect([...session.surface.nodes]).toEqual([0, 1, 5])
 
     // Rewind again, to the first user message: everything (incl. the marker
     // and the first message itself) is withdrawn.
     const second = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
     expect(second.targetSeq).toBe(0)
-    expect(second.shadowedSeqs).toEqual([0, 1, 4])
+    expect(second.shadowedSeqs).toEqual([0, 1, 5])
     const markerSeq = applyRewind(session, second)
     expect([...session.surface.nodes]).toEqual([markerSeq])
     expect(session.deriveMessages()).toEqual([])
@@ -180,7 +193,7 @@ describe('in-place rewind over a real session', () => {
     const withdraw = planRewind(open.events, open.surface.nodes, { kind: 'seq', seq: 1 })
     expect(withdraw.shadowedSeqs).toEqual([1])
     applyRewind(open, withdraw)
-    expect([...open.surface.nodes]).toEqual([0, 2])
+    expect([...open.surface.nodes]).toEqual([0, 3])
 
     open.append('user/message', textMessage('the corrected question'), { surfaceOp: 'append' })
     const messages = open.deriveMessages()
@@ -196,6 +209,7 @@ describe('in-place rewind over a real session', () => {
     const messages = session.deriveMessages()
     expect(messages.map(m => (m.content[0] as { text: string }).text))
       .toEqual(['follow-up question'])
-    expect([...session.surface.nodes]).toEqual([markerSeq, 5])
+    // marker at seq 5 (step/start 4 … marker 5 … step/end 6), follow-up at seq 7.
+    expect([...session.surface.nodes]).toEqual([markerSeq, 7])
   })
 })

@@ -35,7 +35,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { unlink } from 'node:fs/promises'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { formatCandidateList, listRewindCandidates, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type RestoreOutcome } from './snapshot.ts'
 
@@ -241,6 +241,14 @@ async function commitEntry(
  * `lastTurn + 1`: the harness numbers its next real turn exactly `lastTurn
  * turn/start + 1`, so a `maxTurn + 1` marker collides with the following
  * `turn/start` and breaks history replay (see `markerTurnOf`).
+ *
+ * The marker is appended inside a GHOST STEP frame (`step/start` …
+ * `step/end` with the marker between them, step number from `markerStepOf`):
+ * the harness token-meter replays the log and rejects any `assistant/message`
+ * that does not sit inside an open step of the same `(turn, step)` — a bare
+ * marker (appended while idle, every step already closed) would make every
+ * later measure() throw, silently disabling /compact and automatic
+ * compaction. See `markerStepOf` for why the step number must be fresh.
  */
 function buildMarker(): AssistantMessage {
   return createAssistantMessage({
@@ -476,10 +484,31 @@ async function executeRewind(
       // model context and renders nothing, so the surface simply ends before
       // the withdrawn messages — agent and user both see the conversation as
       // it was before the target.
-      event = agent.session.append('assistant/message', { turn: markerTurnOf(agent.session.events), step: 0, message: marker }, {
-        surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-        sourceEventSeqs: [...plan.shadowedSeqs],
-      })
+      //
+      // It is wrapped in a ghost step frame (`step/start` … `step/end`, fresh
+      // step number) so the harness token-meter replay accepts the marker:
+      // token-meter requires every `assistant/message` to sit inside an open
+      // step of the same (turn, step), and the marker is appended while idle
+      // (every real step already closed). Without the frame, the first
+      // measure() after the rewind throws "no matching step/start event" and
+      // /compact (and automatic compaction) stay broken for the session.
+      const turn = markerTurnOf(agent.session.events)
+      const step = markerStepOf(agent.session.events, turn)
+      agent.session.append('step/start', { turn, step })
+      try {
+        event = agent.session.append('assistant/message', { turn, step, message: marker }, {
+          surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
+          sourceEventSeqs: [...plan.shadowedSeqs],
+        })
+      } catch (error) {
+        // The step/start above already committed; close the ghost step so the
+        // log never carries a dangling open step (a later token-meter replay
+        // would reject the first step/end it sees). Only the surface-replace
+        // append can fail here (range validation); step/end itself cannot.
+        agent.session.append('step/end', { turn, step })
+        throw error
+      }
+      agent.session.append('step/end', { turn, step })
     } catch (error) {
       return {
         kind: 'error',
