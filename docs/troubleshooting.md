@@ -34,9 +34,14 @@ Behavioral notes verified by the compatibility probe suites
 - **Files written by a cancelled tool call** (write happened, no result, no
   snapshot commit) cannot be restored by "conversation and code".
 
-Open finding — **R-OPENSTEP**: a session log carrying an *unclosed*
-`step/start` (abnormal log: manual edit, crash before the agent loop's
-`finally` closed the step, or a buggy third-party plugin) makes a later rewind
-append a ghost-step frame the token-meter rejects, breaking `/compact` for
-that session. The intended fix is an up-front `open-step` rejection in
-`planRewind`; tracked in the compat-audit.
+**Defended — R-OPENSTEP**: a session log carrying an *unclosed* `step/start`
+(abnormal log: a crash before the agent loop's `finally` closed the step, a
+manual log edit, or a buggy third-party plugin). Since v0.4.1 the plugin
+detects this in `planRewind` and refuses the rewind with a typed
+`open-step` error (with repair guidance) instead of silently breaking
+token-meter replay (and `/compact`) for the session. The refusal is live
+detection — it never writes to the log — so **repairing the log restores
+rewinds**: append the missing `step/end` (and `turn/end` if the turn is also
+open) to the session file, or start a new session. Root cause is harness
+crash recovery (resume opens the next turn without closing the leftover
+step); tracked in the compat-audit.

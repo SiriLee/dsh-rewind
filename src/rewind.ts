@@ -51,6 +51,7 @@ export type RewindErrorCode =
   | 'invalid-index'
   | 'not-a-user-message'
   | 'not-on-surface'
+  | 'open-step'
 
 /** A typed rewind failure. The host renders `code` into user-facing copy. */
 export class RewindError extends Error {
@@ -157,6 +158,32 @@ export function markerStepOf(events: readonly SessionEvent[], turn: number): num
     }
   }
   return lastStarted + 1
+}
+
+/**
+ * True when the log holds a `step/start` with no matching `step/end` — an
+ * unclosed step (abnormal log: a crash before the agent loop's `finally`
+ * closed the step, a manual log edit, or a buggy third-party plugin).
+ *
+ * The harness token-meter replays the log and rejects ANY later `step/start`
+ * while a previous step is still open ("step/start at seq N arrived before
+ * turn T/step S ended"), so a rewind's ghost-step frame would permanently
+ * break token-meter replay for the session (and with it /compact). Rewinds
+ * are therefore refused up front on such logs; see `planRewind`.
+ *
+ * @param events - the full session event log.
+ * @returns whether any step is currently unclosed.
+ */
+export function hasOpenStep(events: readonly SessionEvent[]): boolean {
+  const open = new Set<string>()
+  for (const event of events) {
+    if (event.type === 'step/start') {
+      open.add(`${event.data.turn}:${event.data.step}`)
+    } else if (event.type === 'step/end') {
+      open.delete(`${event.data.turn}:${event.data.step}`)
+    }
+  }
+  return open.size > 0
 }
 
 /** Narrow an event to a user message. */
@@ -284,6 +311,20 @@ export function planRewind(
   surface: readonly number[],
   target: RewindTarget,
 ): RewindPlan {
+  // Defensive guard (R-OPENSTEP): a log holding an unclosed step/start is
+  // already rejected by the harness token-meter for ANY new step activity,
+  // including this rewind's ghost-step frame. Appending the frame anyway
+  // would permanently break token-meter replay for the session (and with it
+  // /compact), so refuse up front with a typed error instead of silently
+  // degrading the session. The refusal is live detection — it never mutates
+  // the log — so once the log is repaired (or the harness starts closing
+  // leftover steps on resume) rewinds work again with no unlock step.
+  if (hasOpenStep(events)) {
+    throw new RewindError(
+      'open-step',
+      'the session log holds an unclosed step/start; a rewind would break token-meter replay (and /compact)',
+    )
+  }
   let targetSeq: number
   if (target.kind === 'seq') {
     targetSeq = target.seq

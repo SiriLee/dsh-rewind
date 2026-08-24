@@ -552,6 +552,7 @@ function rewindErrorResult(error: unknown): CommandResult {
       'invalid-index': error.message,
       'not-a-user-message': error.message,
       'not-on-surface': error.message,
+      'open-step': t('openStep'),
     }[error.code]
     return { kind: 'error', text }
   }

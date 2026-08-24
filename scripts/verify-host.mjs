@@ -33,7 +33,11 @@
  *     compaction bookkeeping stays balanced;
  * 14. rewinding across a compaction checkpoint is refused with the plugin's
  *     own error (not a crash);
- * 15. no rewind/compact combination ever leaves a dangling step/start or
+ * 14. rewinding across a compaction checkpoint is refused with the plugin's
+ *     own error (not a crash);
+ * 15. a log holding an unclosed step/start refuses the rewind up front
+ *     (open-step defense), and rewinds recover once the log is repaired;
+ * 16. no rewind/compact combination ever leaves a dangling step/start or
  *     turn/start frame in the log.
  */
 import { Context } from '@deepseek-ai/cordis'
@@ -466,6 +470,27 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   // seq 2 is turn 1's question — now shadowed by the compaction checkpoint.
   const refused = await call(ca, '@2 chat')
   check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
+}
+
+// 15. R-OPENSTEP defense — a log holding an unclosed step/start refuses the
+//     rewind up front with the open-step error; closing the step restores it.
+{
+  const cs = buildFramedSession('verify-openstep', 1)
+  cs.append('turn/start', { turn: 2 })
+  cs.append('step/start', { turn: 2, step: 1 }) // never closed
+  cs.append('user/message', user('dangling question'), { surfaceOp: 'append' })
+  cs.append('assistant/message', { turn: 2, step: 1, message: assistant('dangling answer') }, { surfaceOp: 'append' })
+  const ca = makeAgent(cs.id, cs)
+  const refused = await call(ca, '@2 chat')
+  check('rewind on an unclosed-step log is refused', refused.kind === 'error' && /unclosed step/.test(refused.text), refused.text)
+  // The refusal is live detection: close the dangling step and rewinds work.
+  cs.append('step/end', { turn: 2, step: 1 })
+  cs.append('turn/end', { turn: 2, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+  const recovered = await call(ca, '@2 chat')
+  check('rewind recovers after the log is repaired', recovered.kind === 'success', recovered.text)
+  let ok = true
+  try { new TokenMeter(new Context()).measure(cs); Session.create(cs.id, cs.events) } catch { ok = false }
+  check('repaired log replays (meter + resume)', ok, '')
 }
 
 await rm(tmpRoot, { recursive: true, force: true })
