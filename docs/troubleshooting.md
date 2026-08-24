@@ -17,4 +17,6 @@ npm exec --yes --package=dsh-rewind-plugin@0.3.3 -- dsh-rewind-repair
 npm exec --yes --package=dsh-rewind-plugin@0.3.3 -- dsh-rewind-repair -- --dry-run  # preview only
 ```
 
+`@0.3.3` is an example — any pre-v0.4.0 release works. To keep the tool installed globally: `npm i -g dsh-rewind-plugin@0.3.3`, then run `dsh-rewind-repair` directly.
+
 It only rewrites the marker events' `data.turn` (seqs, order, and zstd frame structure intact) and backs up the original file before writing — safe to run repeatedly. From a source checkout of a pre-v0.4.0 tag: `node scripts/repair-markers.mjs` (identical flags).
