@@ -267,3 +267,9 @@ export function apply(ctx: ClientContext): void {
     }
   }, 'dsh-rewind client lifecycle')
 }
+
+/**
+ * Public contract — rewind visibility. Stable, semver-protected; the rest of
+ * this module is internal. See `docs/client-contract.md`.
+ */
+export { hiddenSeqsOf, targetSeqOfArgs, type HiddenChat } from './hidden.ts'

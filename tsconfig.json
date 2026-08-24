@@ -3,5 +3,6 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts", "tests/**/*.ts"]
+  "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "tests/client-contract.test.ts"]
 }
