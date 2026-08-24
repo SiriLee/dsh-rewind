@@ -120,7 +120,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 ## Known issues
 
-Rewinds created with versions `≤ v0.2.4` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). Only pre-upgrade sessions are affected. The offline repair tool (`dsh-rewind-repair`) was shipped before v0.4.0 and is no longer provided — start a new session.
+Rewinds created with versions `≤ v0.2.4` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). Only pre-upgrade sessions are affected. The offline repair tool (`dsh-rewind-repair`) was shipped before v0.4.0 and is no longer provided from v0.4.0 on — install a pre-v0.4.0 release if you need it ([docs/troubleshooting.md](docs/troubleshooting.md)).
 
 Rewinds from `≤ v0.3.3` appended a bare marker (no step frame); the harness token-meter rejects such a log on replay, so `/compact` fails for that session. Newer versions are compatible; affected old sessions have no online repair yet — start a new session.
 
