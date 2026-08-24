@@ -4,3 +4,4 @@ lib/
 .DS_Store
 *.log
 tmp/
+hello-dsh.txt
