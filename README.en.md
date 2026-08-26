@@ -1,6 +1,6 @@
 # dsh-rewind
 
-Conversation rewind for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): **rewind to any earlier user message in the same session window** (Claude Code `/rewind` semantics) — rewind the model context and session window to an earlier user message, and optionally restore workspace files from disk-persisted before-backups.
+Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window** — no new branch, no window switch, with optional workspace-file restore (full Claude Code `/rewind` semantics).
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![npm license](https://img.shields.io/npm/l/dsh-rewind-plugin.svg)](https://github.com/SiriLee/dsh-rewind/blob/main/LICENSE)
@@ -8,20 +8,15 @@ Conversation rewind for [DeepSeek Harness](https://github.com/deepseek-ai/deepse
 
 > English | [中文](README.md)
 
-A deliberately focused plugin with one job: **rewind to any earlier user message, in place**.
+A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 
-| Mode | Conversation | Workspace files |
-| --- | --- | --- |
-| **Rewind conversation only** | Cut back to the target message | Untouched |
-| **Rewind conversation and code** | Cut back to the target message | Restored to their state before it (modified files written back, later-created files deleted) |
-
-Rewinding is time-travel: the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript — no new session, no window switch — and the target's text is offered back in the composer so you can edit and re-send it.
-
-The plugin never rewrites the session log (append-only) and never touches your git repository; the before-backups are **persisted on disk**, so you can keep rewinding after restarting dsh.
+- **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it.
+- **Lightweight workspace backup** — Claude Code-aligned behavior: only file-writing tools are tracked, a lightweight before-backup is **persisted on disk**, and your git repository is never touched or relied on.
+- **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your content.
 
 ## Preview
 
-Each user message gains a compact **↶ rewind** action in its action row. Clicking it opens a mode-selection popover; "conversation and code" first shows the exact restore / delete list for confirmation (the option is hidden when there are no tracked changes — like Claude Code's code-restore visibility).
+Every user message carries a **↶ rewind** button in its action row. Clicking it opens a mode-selection popover — "**rewind conversation only**" or "**rewind conversation and code**", the latter showing the file-change list for confirmation first. You can also rewind conveniently via the **`/rewind` command** or a **keyboard shortcut**.
 
 <table>
   <tr>
@@ -53,11 +48,9 @@ Install from a local checkout or a pinned commit — `dsh plugin --profile web a
 
 ## Usage
 
-1. **Hover** any user message you sent — a **↶ rewind** button appears in its action row.
-2. **Click it.** The target is that message; a small popover offers the two modes ("conversation and code" is only shown when there are restorable changes after the target).
-3. The rewind takes effect immediately: the conversation returns to how it looked at the target message, a confirmation result message appears in the conversation, and the withdrawn message's text is filled back into the composer — edit and re-send.
-
-**Command-line entry**: type `/rewind` and press Enter to open the candidate picker; selecting a target continues the same flow as the button.
+1. Find the user message you want to rewind to in the conversation, or type `/rewind` to open the candidate picker.
+2. **Select it.** A small popover offers the two modes ("conversation and code" is only shown when there are restorable changes after the target).
+3. The rewind takes effect immediately: the conversation returns to how it looked at the target message, and the withdrawn message's text is filled back into the composer — edit and re-send.
 
 **Keyboard**: both the candidate picker and the mode popover support ↑↓ to move, Enter to confirm, Esc to cancel/back.
 
@@ -68,8 +61,21 @@ Rewinds can be repeated — step back to earlier messages one at a time; but a r
 
 - The file-restore action of "conversation and code" is not re-backed up.
 - Every rewind appends one marker event to the log (see [How it works](#how-it-works)).
+- **Interruptions rewind too** — a `steering` interruption message the model hasn't read yet is also a valid rewind target.
+- **A rewind interrupts the running turn** — to execute the rewind safely.
 
 </details>
+
+## Why it stands out
+
+Compared with the common approaches, here is the trade-off this plugin makes on "rewind":
+
+| Dimension | Common approach | This plugin |
+| --- | --- | --- |
+| Conversation rewind | Fork / branch a new conversation | **In-place rewind** — no new session, no window switch |
+| File restore | None / git-managed / whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore (aligned with Claude Code) |
+| Dependencies | Often needs a Git repo or a full snapshot engine | **None** — no git required, works on any directory |
+| Storage footprint | Whole-tree snapshots take space | **Lightweight** — only files touched by write tools are stored, persisted on disk |
 
 ## How it works
 
@@ -121,18 +127,8 @@ The plugin tracks the write-class tools — `write`, `edit`, `str_replace_editor
 This plugin deliberately stays lightweight and focused on one thing — "conversation rewind". The following are **out of its scope**:
 
 - **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. For whole-worktree snapshot rollback, use a dedicated snapshot tool (or your git).
+- **Subagent edits** — not tracked (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session.
 - **Fork / branch rewind** — the harness already provides this ("branch in new chat"); no need to reinvent it.
-
-## Why it stands out
-
-Compared with the common approaches, here is the trade-off this plugin makes on "rewind":
-
-| Dimension | Common approach | This plugin |
-| --- | --- | --- |
-| Conversation rewind | Fork / branch a new conversation | **In-place rewind** — no new session, no window switch |
-| File restore | None / git-managed / whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore (aligned with Claude Code) |
-| Dependencies | Often needs a Git repo or a full snapshot engine | **None** — no git required, works on any directory |
-| Storage footprint | Whole-tree snapshots take space | **Lightweight** — only files touched by write tools are stored, persisted on disk |
 
 ## Compatibility
 
