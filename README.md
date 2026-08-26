@@ -1,173 +1,190 @@
 # dsh-rewind
 
-In-place conversation rewind for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness): Claude Code's `/rewind` semantics inside the **same session window** — cut the model context back to an earlier user message, and optionally restore workspace files from disk-persisted before-backups.
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 插件：**同一会话窗口的对话回退**（Claude Code `/rewind` 语义）——把模型上下文和会话窗口回溯到更早的一条用户消息，并可基于**落盘的写前备份**还原工作区文件。
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![npm license](https://img.shields.io/npm/l/dsh-rewind-plugin.svg)](https://github.com/SiriLee/dsh-rewind/blob/main/LICENSE)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 
-> English | [中文](README.zh.md)
+> [English](README.en.md) | 中文
 
-A deliberately focused plugin with one job: rewind to any earlier user message, in place.
+刻意保持聚焦，只做一件事：**就地回退到任意更早的用户消息**。
 
-| Mode | Conversation | Workspace files |
+| 模式 | 对话 | 工作区文件 |
 | --- | --- | --- |
-| **Rewind conversation only** | Cut back to the target message | Untouched |
-| **Rewind conversation and code** | Cut back to the target message | Restored to their state before it (modified files written back, later-created files deleted) |
+| **仅回退对话** | 剪回目标消息之前 | 不动 |
+| **回退对话和代码** | 剪回目标消息之前 | 还原到目标之前的 state（改过的文件写回、之后新建的文件删除） |
 
-Rewinding is time-travel: the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript — no new session, no window switch — and the target's text is offered back in the composer so you can edit and re-send it.
+回退即**时间回溯**：目标消息及其之后全部内容（agent 回复、工具调用）从模型上下文**与**渲染对话中撤回——不新建会话、不切换窗口——目标消息的文本会回填输入框，可修改后重发。
 
-The plugin never rewrites the append-only session log and never touches your git repository.
+插件从不改写会话日志（append-only），从不触碰你的 git 仓库；写前轻量备份**落盘持久化**，中途重启 dsh 也能接着回退。
 
-## Preview
+## 效果预览
 
-Each user message gains a compact **↶ rewind** action in its action row. Clicking it opens a mode-selection popover; "conversation and code" first shows the exact restore / delete list for confirmation (the option is hidden when there are no tracked changes — like Claude Code's code-restore visibility).
+每条用户消息的操作行上多出一个 **↶ 回退** 按钮。点击后弹出模式选择浮层；「回退对话和代码」会先展示待还原/删除的文件清单再确认（目标之后无跟踪变更时不显示该选项，对齐 Claude Code 的 code-restore 可见性）。
 
 <table>
   <tr>
-    <td align="center"><img src="assets/screenshots/rewind-button.png" width="440" alt="Per-message ↶ rewind button"><br><sub>Per-message ↶ rewind button</sub></td>
-    <td align="center"><img src="assets/screenshots/mode-popover.png" width="440" alt="Mode-selection popover"><br><sub>Mode-selection popover</sub></td>
+    <td align="center"><img src="assets/screenshots/rewind-button.png" width="440" alt="用户消息旁的 ↶ 回退按钮"><br><sub>用户消息旁的 ↶ 回退按钮</sub></td>
+    <td align="center"><img src="assets/screenshots/mode-popover.png" width="440" alt="模式选择浮层"><br><sub>模式选择浮层</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="assets/screenshots/impact-list.png" width="440" alt="Impact list"><br><sub>"Conversation and code" impact list</sub></td>
-    <td align="center"><img src="assets/screenshots/rewind-candidates.png" width="440" alt="/rewind candidate picker"><br><sub>/rewind candidate picker</sub></td>
+    <td align="center"><img src="assets/screenshots/impact-list.png" width="440" alt="影响清单"><br><sub>「回退对话和代码」影响清单</sub></td>
+    <td align="center"><img src="assets/screenshots/rewind-candidates.png" width="440" alt="/rewind 候选面板"><br><sub>/rewind 候选面板</sub></td>
   </tr>
 </table>
 
-## Install
+## 安装
 
 ```sh
 dsh plugin --profile web add dsh-rewind-plugin
 ```
 
-Restart `dsh web` (`--profile web`) after installing.
+装完重启 `dsh web`（`--profile web`）。
 
-> ⚠️ The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
+> ⚠️ npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
 
-For contributors: install from a local checkout or a pinned commit — `dsh plugin --profile web add /path/to/dsh-rewind` or `dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>`. A git install fails on first run until you add an `allowBuilds` key to the profile's `pnpm-workspace.yaml` (pnpm blocks git dependencies from running build scripts); after that it runs the plugin's `prepare` and installs it.
+<details>
+<summary><b>给贡献者：本地 / pin commit 安装</b></summary>
 
-## Usage
+可从本地 checkout 或 pin 的 commit 安装——`dsh plugin --profile web add /path/to/dsh-rewind` 或 `dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>`。git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本，需先在 profile 的 `pnpm-workspace.yaml` 加 `allowBuilds`；之后 pnpm 会执行插件的 `prepare`（完整构建）并装入 profile。
 
-1. **Hover** any user message you sent — a **↶ rewind** button appears in its action row.
-2. **Click it.** The target is that message; a small popover offers the two modes ("conversation and code" is hidden when no tracked file changes exist after the target).
-3. The rewind executes as an in-session command; a result message confirms, and the withdrawn message's text is filled back into the composer for editing and re-sending.
+</details>
 
-**Command-line entry**: type a bare `/rewind` and press Enter to open the candidate picker; selecting a target continues the same flow as the button.
+## 使用
 
-Both the candidate picker and the mode popover support the keyboard: ↑↓ to move, Enter to confirm, Esc to cancel/back.
+1. **悬停**任意你发送过的用户消息——操作行出现 **↶ 回退** 按钮。
+2. **点击它。** 目标即这条消息；小浮层提供两种模式（「回退对话和代码」仅在目标之后有可还原的变更时显示）。
+3. 回退立即生效：对话回到目标消息当时的样子，一条确认结果消息出现在对话里，被撤回消息的文本自动填入输入框——改完直接重发。
 
-Rewinds can be repeated (each appends a marker to the log). A rewind cannot be undone through the plugin, but the withdrawn messages can be recovered by manually editing the session log. The file-restore action is not re-backed up.
+**命令行入口**：输入 `/rewind` 回车，打开候选列表选择目标，后续流程与按钮一致。
 
-## How it works
+**键盘操作**：候选列表与模式浮层均支持 ↑↓ 移动、Enter 确认、Esc 取消/返回。
 
-### 1. Conversation rewind (in-place)
+回退可以反复进行——可以一步步退到更早的消息；但回退本身**无法撤销**，被撤回的内容仍保留在会话日志中，可手动编辑日志恢复。
 
-The plugin appends an **empty-content marker** `assistant/message` into the session log whose `surfaceOp: { op: 'replace', start, end }` replaces every surface node after the target message with the marker:
+<details>
+<summary><b>边界说明</b></summary>
 
-- The marker carries `sourceEventSeqs` covering every shadowed node, and `Session.append`'s surface rules validate the cut (a contiguous range on the current surface).
-- Because the marker is **empty**, the harness derives it to `null` — it never enters the model context and never renders as conversation content. Agent and user both see the conversation exactly as it was at the target.
-- The marker's **turn number reuses the last started turn** (`markerTurnOf`), never `lastTurn + 1`: the harness numbers its next real turn exactly `last turn/start + 1`, so a `maxTurn + 1` marker would sit *before* that `turn/start` — the client conversation builder rejects the ordering (`…turn-tail… received an update before its start Match`) and history load fails. Reusing an already-consumed turn makes the marker a harmless trailing update on the previous completed turn's tail — it can never collide with a future turn.
-- The marker rides a **ghost step frame** — its own `step/start` … `step/end` with a fresh step number (`markerStepOf`) — because the harness token-meter requires every `assistant/message` to sit inside an open step of the same turn/step; a bare idle-time marker would fail its replay and break `/compact` for the session.
-- The append-only log is **untouched** — every withdrawn event stays in the audit trail; only the model-visible surface is cut, so the next request derives its context from the target onward.
+- 「回退对话和代码」的文件还原动作不会再记录新备份。
+- 每次回退都会在日志中追加一条标记事件（详见[原理](#原理)）。
 
-A running turn (LLM thinking / streaming) is force-stopped first (`cancel({ kind: 'user' })`) and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
+</details>
 
-### 2. Checkpoint file restore
+## 原理
 
-The plugin tracks the write-class tools — `write`, `edit`, `str_replace_editor` (mutating commands `create` / `str_replace` / `insert`):
+机制与 Claude Code 的 checkpointing 同源（Claude Code 的文件历史也是逐文件记录 + 每条消息重扫已跟踪文件，并非整树快照）。本插件实现的是同一套语义，落在 dsh 上：
 
-1. **Before-capture** at `tools/execute` (the around-dispatch stage): the target file is read; the resolved path + content are held in a pending map. This stage runs only after any pre-execute approval gate let the call through — an `ask` short-circuit (dsh-edit-approval) **cannot skip** the backup, and a denied call never records. If the read fails (e.g. a permission error), the change is simply not backed up — the plugin warns in the log but **does not block the write**.
-2. **Disk commit** at `tools/post-execute`: the before-backup is written under the turn's anchor message seq (`~/.dsh/rewind-snapshots/<session>/<anchor seq>/<callId>.json`).
-3. **Restore** (`/rewind @<seq> both`): every backup anchored at or after the target applies once reconciled with the current disk — modified files are written back to their **earliest** captured before-state, files created after the target are deleted, files already matching the target state are left untouched (idempotent). Symbolic / hard links are skipped (they share an inode with another name; restoring through one would clobber both). Writes go through plain `node:fs`, independent of the fs service — under sandbox / remote backends, path resolution may be restricted.
-4. A tool body that **throws** skips `tools/post-execute`; a `tools/result` safety net clears the pending capture so nothing leaks in memory.
+### 1. 对话回退：怎么做到"就地"又不丢日志
 
-Backups persist across host restarts, bounded to the newest 100 anchor groups per session.
+对话日志是**只追加**的——插件绝不改写历史。回退的做法：往日志里追加一条**空内容标记**，用它把目标消息之后的全部对话内容"遮蔽"掉，让模型和界面都只看到目标之前的部分：
 
-## What it deliberately does NOT do
+- 标记本身是**空的**——不进入模型上下文、不渲染成任何对话内容，agent 和你看到的对话就是目标消息当时的样子；
+- 因为只是"遮蔽"而非"删除"，**被撤回的每一条事件都完整留在日志里**，审计可追溯；
+- 标记复用"最后一个已开始的回合"的编号，并自带独立的步骤框架——让 dsh 自身的机制（日志重放、`/compact` 压缩、续接检查）都能正确识别它，不会误认为真实对话（这些兼容细节经过专门的探针测试固化，见[开发](#开发)一节）。
 
-- **Whole-tree / git-first snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored: the same limitation as Claude Code, which defers such rollbacks to the user's git.
-- **Subagent edits** — not tracked (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session.
-- **Fork / branch rewind and `/compact`** — the harness already provides these ("branch in new chat", compact).
+<details>
+<summary><b>实现细节（给维护者）</b></summary>
 
-## Comparison with similar projects
+插件向会话日志追加一条空内容标记 `assistant/message`，其 `surfaceOp: { op: 'replace', start, end }` 把目标消息之后的全部 surface 节点替换为标记本身：
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) also has [Anionex/dsh-turn-rewind](https://github.com/Anionex/dsh-turn-rewind) — a rewind plugin with the same user-facing idea (a per-message action that rolls the conversation back and restores workspace files), but a different approach:
+- 标记携带 `sourceEventSeqs` 覆盖所有被遮蔽节点，`Session.append` 的 surface 规则校验切割合法性（仅限当前 surface 上的连续区间）。
+- 因为标记**内容为空**，harness 会将其派生为 `null`——永不进入模型上下文、也永不渲染成对话内容。
+- 标记的 **turn 号复用最后一个已开始的回合**（`markerTurnOf`），而不是「最后回合 + 1」：harness 恰好用 `最后 turn/start + 1` 编号下一条真实回合。若标记也取这个数，日志里就会出现同一 turn 的 `assistant/message` 先于 `turn/start` 的乱序，客户端 conversation 构建器会以 `conversation Context …:turn-tail… received an update before its start Match` 拒绝重放——历史加载失败、整个对话从界面消失。复用已消费的 turn 号则标记只是上一个已完成回合尾部的一次无害追加，永不与新回合冲突。
+- 标记自带**幽灵步骤框架**——自己的 `step/start` … `step/end`，step 号取该回合未用过的新号（`markerStepOf`）：harness 的 token-meter 重放要求每条 `assistant/message` 位于打开的 step 内，裸标记则会让该会话的 `/compact` 失效。
 
-| Dimension | dsh-rewind (this plugin) | Anionex dsh-turn-rewind |
+</details>
+
+若 agent 正在运行（LLM 思考/流式输出），会先强制停止并等待安静下来再回退；停不下来则中止并报错。
+
+### 2. 文件还原：写前备份 + 外部变更追踪 + 磁盘比对
+
+插件跟踪写文件的工具——`write`、`edit`、`str_replace_editor`：
+
+1. **写前备份**：每次写文件**之前**先把原内容存下来（在审批门放行之后捕获——审批短路不会漏备份，被拒绝的调用也不会记录；读取失败只警告、不阻塞写操作）。备份按当前对话轮次分组，**跨重启保留**（每会话保留最近 100 组）。
+2. **外部变更也追踪**：每条用户消息边界会重新检查所有已跟踪文件——外部编辑或删除（写工具从没参与过的改动）同样被记录下来，回退时一并还原。
+3. **还原前真实磁盘比对**：回退时实时读取文件当前内容，与目标状态比对——**只操作真正不一致的文件**：改过的写回最早备份、目标之后新建的删除、已一致的一律跳过（重复回退零副作用）。符号/硬链接跳过，避免误伤。
+
+<details>
+<summary><b>实现细节（给维护者）</b></summary>
+
+1. **写前备份**（`tools/execute`，around-dispatch 阶段）：读取目标文件，把解析后的路径与内容放入 pending 表。此阶段只在任何 pre-execute 审批门放行之后运行——审批 `ask` 短路（dsh-edit-approval）**无法跳过**备份，被拒绝的调用也不会记录。若读取失败（如权限错误），该次变更直接不入备份——插件只在日志中警告，**不会阻塞写操作**。
+2. **落盘提交**（`tools/post-execute`）：备份按当前轮**锚点消息 seq** 写入 `~/.dsh/rewind-snapshots/<会话>/<锚点 seq>/<callId>.json`。
+3. **外部变更追踪**（`reconcileTracked`）：消息边界处重扫已跟踪文件，磁盘状态与上次记录不同则记录一条 `recheck-<锚点>-<hash>` 条目（锚定边界消息）；首见路径必记（重启后第一次边界无条件记录当前状态——冗余但正确，对应 Claude Code 的 resume 后 restat 行为）。
+4. **还原**（`/rewind @<seq> both`）：`planRestore` 对每条记录实时探测磁盘——`before === null`（目标时不存在）仅当文件当前存在才计划删除（已缺失即已达成）；`before === 'X'` 仅当当前内容 ≠ X 才计划还原（一致即 no-op，幂等）；探测失败保守视为不一致（绝不静默跳过）。执行时 restore = 建父目录 + 写回内容，delete = 删文件（已不存在容忍为 no-op）；符号/硬链接跳过（与另一名字共享 inode，透过一个还原会误伤两个）；失败逐文件记录、不中止整轮。
+5. 工具体**抛异常**会跳过 `tools/post-execute`；`tools/result` 兜底清掉 pending，避免内存泄漏。备份跨 host 重启持久化，`prune` 每会话有界保留最近 100 组锚点。
+
+</details>
+
+## 明确不做的事
+
+本插件刻意保持轻量、聚焦"对话回退"这一件事，以下场景**不属于它的职责**：
+
+- **整树 / Git 级快照**——只跟踪写类工具编辑 + 已跟踪文件的外部改动，从未被工具碰过的文件不还原。需要 Git 工作树级的完整快照回退时，请交给专门的快照工具（或你的 git）。
+- **fork / 分支回退**——harness 已内置「在新对话中分支」，不重复造轮子。
+
+## 本插件的优势
+
+和常见的几种做法相比，本插件在"回退"这件事上的取舍：
+
+| 维度 | 常见做法 | 本插件 |
 | --- | --- | --- |
-| Conversation rollback | **In-place, same session/window** — the model-visible surface is cut back to the target; the append-only log is untouched | **Forks a new Session** at the previous `turn/end`; the original session is always retained |
-| File-restore engine | **Lightweight before-backups** of write-class tools only, restored via plain `node:fs` | **Change Ledger** — a durable restore-point engine with Git fences, an approval gate, rescue points and crash reconciliation |
-| Tracked-change scope | Only write-class tool edits (like Claude Code) | Any Git-managed file (Git worktree required) |
-| Public service API | No — a focused single-purpose plugin | Yes — `ctx.changeLedger` service + `/turn-rewind` HTTP endpoint |
+| 对话回退 | Fork 分支新建对话 | **就地回退**——不新建会话、不切窗口，便捷回退 |
+| 文件还原 | 无、git 管理、完整快照 | **写前轻量备份**——写文件前自动存原内容，一键还原（对齐 Claude Code） |
+| 依赖 | 常依赖 Git 仓库或完整快照引擎 | **无依赖**——不依赖 git，普通目录即可用 |
+| 存储开销 | 整树快照占空间大 | **轻量**——只存被写工具改动过的文件，落盘持久化 |
 
-The essential difference: dsh-turn-rewind keeps the log immutable and therefore forks a new session; this plugin cuts the model-visible surface in place with an empty marker, so the original conversation continues in the same window — the non-trivial part (see [Known issues](#known-issues)) that dsh-turn-rewind sidesteps.
+## 兼容性
 
-## Compatibility
-
-- Node.js `^22.19.0 || >=24.0.0`.
-- DeepSeek Harness web profile (`dsh --profile web`); peer `@deepseek-ai/*` packages are resolved by the harness at runtime.
+- Node.js `^22.19.0 || >=24.0.0`。
+- DeepSeek Harness web 配置档（`dsh --profile web`）；peer `@deepseek-ai/*` 包由 harness 运行时解析。
 
 > [!WARNING]
-> This project and DeepSeek Harness are both in developer preview. Pin exact
-> versions in reproducible environments and review the behavior notes above.
+> 本项目与 DeepSeek Harness 均处于开发者预览阶段。可复现环境请 pin 精确版本，
+> 并阅读上述行为说明。
 
-## Client contract
+## 客户端契约
 
-Third-party DOM plugins that need to know which transcript rows a rewind
-withdrew should consume the stable, locale-independent helpers exported from
-`dsh-rewind-plugin/client` (`hiddenSeqsOf`, `targetSeqOfArgs`) — never parse
-`outcome.text`. The `data-dsh-rewind-hidden` attribute marks withdrawn rows
-(observational only). Details: [docs/client-contract.md](docs/client-contract.md).
+需要获知哪些转录行被回退撤回的第三方 DOM 插件，应使用
+`dsh-rewind-plugin/client` 导出的稳定、与本地化无关的纯函数
+（`hiddenSeqsOf`、`targetSeqOfArgs`），切勿解析 `outcome.text`。
+`data-dsh-rewind-hidden` 属性标记被撤回的行（仅观测性）。
+详见：[docs/client-contract.zh.md](docs/client-contract.zh.md)。
 
-## Known issues
+## 已知问题
 
-Rewinds created with versions `≤ v0.2.4` could corrupt client replay when followed by more conversation (a marker turn collides with the next `turn/start`). Only pre-upgrade sessions are affected. The offline repair tool (`dsh-rewind-repair`) was shipped before v0.4.0 and is no longer provided from v0.4.0 on — install a pre-v0.4.0 release if you need it ([docs/troubleshooting.md](docs/troubleshooting.md)).
+1. **导出的日志是完整内容**——回退只是把消息从模型上下文和视图中移除，`/export` 导出的会话日志包含**已撤回的消息**。本插件无法改动导出。
+2. **v0.2.4 及更早版本**回退过的会话，继续对话后可能**加载历史失败**。可安装 v0.4.0 之前的版本，用随附的修复工具处理（[完整步骤](docs/troubleshooting.zh.md)）。
+3. **v0.3.3 及更早版本**回退过的会话，压缩对话（compact）可能不可用。新版本已兼容；受影响的旧会话建议新建会话。
 
-Rewinds from `≤ v0.3.3` appended a bare marker (no step frame); the harness token-meter rejects such a log on replay, so `/compact` fails for that session. Newer versions are compatible; affected old sessions have no online repair yet — start a new session.
+## 安全
 
-## Security
+本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。工作区文件仅在「回退对话和代码」时被改写，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials.
-
-> **Note:** a rewind only hides messages from view — the exported session log (`/export`) still contains them, and this plugin cannot alter exports. To remove a conversation completely, delete its session file.
-
-## Development
+## 开发
 
 ```sh
-npm install            # devDeps from the npm registry
-npm run typecheck      # tsc on all three surfaces (host + client + client-test)
-npm test               # vitest: rewind / snapshot / hidden / session-cwd / integration / compat-invariants / compat-interop
-npm run build          # esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end (incl. real /compact after rewind)
+npm install            # devDeps 来自 npm registry
+npm run typecheck      # tsc 三面编译（host + client + client-test）
+npm test               # vitest：全部单元与兼容性测试套件
+npm run build          # esbuild：lib/index.js（host ESM）+ lib/client.js（loader 闭包）+ .d.ts
+node scripts/verify-host.mjs   # 端到端验证构建产物
 ```
 
-`npm test` and `verify-host` include the **compatibility probe suites**
-([docs/compat-audit.md](docs/compat-audit.md)): scenario-generated logs drive the
-real harness packages (token-meter, compaction, session-stats/title/goal folds,
-resume preflight) through rewind markers and assert the compatibility
-invariants. A failing probe is a discovered incompatibility, not a mock
-artifact. One finding is recorded: **R-OPENSTEP** — a log carrying an
-unclosed `step/start` (crash leftover) makes any later step activity,
-including a rewind's ghost-step frame, break token-meter replay (and
-/compact). Harness `0.1.1-rc.2` fixes the crash path (`interruptedTurnClosers`
-closes leftover step/turn boundaries on load). A plugin-side guard was tried
-and reverted: it produced false positives on real session logs (rewind
-feature broken), so the plugin deliberately ships no guard — the residual
-risk (runtime-produced unclosed steps) is accepted.
+`prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的 `lib/` 与 `LICENSE`。
 
-`prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
+维护者：模块地图与 harness 接口参考见 [docs/harness-reference.md](docs/harness-reference.md)；发布步骤见 [docs/release.md](docs/release.md)。
 
-Maintainers: the module map and harness interface reference live in [docs/harness-reference.md](docs/harness-reference.md); publishing steps in [docs/release.md](docs/release.md).
+## 发布
 
-## Release
-
-Releases go out through GitHub Actions Trusted Publishing (OIDC, no stored `NPM_TOKEN`): push a `v<version>` tag and CI publishes with Sigstore provenance.
+通过 GitHub Actions Trusted Publishing（OIDC，无存储 `NPM_TOKEN`）发布：推送 `v<版本>` tag，CI 即带 Sigstore provenance 发布。
 
 ```sh
 npm version patch && git push origin main --tags
 ```
 
-One-time npm-side setup and the full workflow details: [docs/release.md](docs/release.md).
+一次性 npm 侧配置与完整流程：见 [docs/release.md](docs/release.md)。
 
-## License
+## 许可
 
 [MIT](LICENSE)
