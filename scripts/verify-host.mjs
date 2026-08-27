@@ -468,6 +468,21 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
 }
 
+// 15. deleting the plugin data directory wipes ONLY file backups: chat
+//     rewinds keep working and both-mode preview reports nothing left to
+//     restore (the store rebuilds from scratch on the next capture).
+{
+  await rm(snapRoot, { recursive: true, force: true })
+  const chatSession = buildSession('verify-wipe-chat')
+  const chatAgent = makeAgent(chatSession.id, chatSession)
+  const chatResult = await call(chatAgent, '@2 chat')
+  check('chat rewind works after the data dir is deleted', chatResult.kind === 'success', chatResult.text)
+  const previewSession = buildSession('verify-wipe-preview')
+  const previewAgent = makeAgent(previewSession.id, previewSession)
+  const preview = await call(previewAgent, 'preview @2 both')
+  check('both preview reports no restorable changes after the wipe', preview.kind === 'success' && /No restorable changes/.test(preview.text), preview.text)
+}
+
 await rm(tmpRoot, { recursive: true, force: true })
 console.log(failures === 0 ? '\nverify-host: all checks passed' : `\nverify-host: ${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

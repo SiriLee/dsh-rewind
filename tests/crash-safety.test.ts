@@ -425,4 +425,33 @@ describe('reconciliation auto-heal and failure reporting', () => {
     // recovery record of an interrupted restore.
     expect(await store.reconcileRestores(session)).toHaveLength(1)
   })
+
+  it('deleting the data directory leaves a clean store that rebuilds from scratch', async () => {
+    // A dedicated snapshot root, separate from the workspace files, so the
+    // wipe below removes ONLY the plugin's own data (like deleting
+    // ~/.dsh/rewind-snapshots in production).
+    const snapRoot = join(root, 'snapshots')
+    const s = new SnapshotStore(snapRoot)
+    const a = await touch('a.txt', 'A0')
+    await s.recordEntry(session, { callId: 'ca', anchorSeq: 5, path: a, before: 'A0' })
+    await writeFile(a, 'A1', 'utf8')
+    await s.restoreAfter(session, 5, unlink)
+    expect((await readdir(s.sessionDir(session))).some(n => n.startsWith('restore-journal-'))).toBe(true)
+
+    // The user deletes the plugin data directory: ALL plugin-owned state
+    // (checkpoints + journals) lives under this single root and disappears
+    // together. Every read path treats the missing root as empty…
+    await rm(snapRoot, { recursive: true, force: true })
+    expect(await s.reconcileRestores(session)).toEqual([])
+    expect(await s.entriesAfter(session, 5)).toEqual([])
+    expect(await s.restoreAfter(session, 5, unlink)).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+
+    // …and nothing is left half-initialized: new captures and restores work
+    // from a fresh, clean store.
+    await writeFile(a, 'A2', 'utf8')
+    await s.recordEntry(session, { callId: 'cb', anchorSeq: 6, path: a, before: 'A1' })
+    const outcome = await s.restoreAfter(session, 6, unlink)
+    expect(outcome.restored).toEqual([a])
+    expect(await readFile(a, 'utf8')).toBe('A1')
+  })
 })
