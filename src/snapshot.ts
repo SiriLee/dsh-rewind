@@ -20,6 +20,26 @@
  *   kept), and restores read/write the real file system with plain `node:fs`
  *   — independent of the fs service.
  *
+ * Crash safety (this module's own engineering asset):
+ *  - Checkpoint commits are ATOMIC: the entry JSON is written to a sibling
+ *    temp file and renamed over the target, so a host crash mid-write can
+ *    never leave a readable half-written entry — at worst an inert `.tmp`
+ *    leftover that the next commit of the same file overwrites and that no
+ *    reader ever picks up.
+ *  - Every restore pass is JOURNALED. Before mutating anything the store
+ *    captures the pre-restore ("rescue") state of each planned path and
+ *    persists an intent journal (`restore-journal-<op>.json` in the session
+ *    dir), then marks each action done as it is applied. A crash at any point
+ *    leaves the journal on disk; after a host restart
+ *    `reconcileRestores(sessionId)` re-derives from the REAL disk which
+ *    paths already match the target and which are still pending (reporting
+ *    "restored up to where, what changed"), auto-heals journals whose goal is
+ *    already reached, and `continueRestore` / `rollbackRestore` finish the
+ *    interrupted op or undo it back to the exact pre-restore state.
+ *  - Journal IO is best-effort and never fails a restore: if the journal
+ *    cannot be written the restore proceeds exactly like the pre-journal code
+ *    (crash safety degrades, behavior does not).
+ *
  * Restore semantics (identical to Claude Code): for every path with entries
  * anchored at or after the target message, apply the EARLIEST entry — write
  * the before content back, or delete the file when that entry recorded a
@@ -30,7 +50,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { lstat, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -74,6 +94,95 @@ export interface RestoreOutcome {
 
 /** Deletes one file by its real path (node:fs, bypassing the fs service). */
 export type DeleteFile = (path: string) => Promise<void>
+
+/**
+ * Test-only fault injection: a crash point inside the write/restore paths.
+ * The hook THROWS to simulate a host crash at the exact point; the throw
+ * propagates out of the store method, leaving the journal on disk in its
+ * current state. Production callers never pass it (undefined = no-op).
+ */
+export type CrashPoint = 'before-action' | 'after-action' | 'after-temp-write'
+
+/** Options for the journaled restore paths; `crash` is the test-only seam. */
+export interface RestoreRunOptions {
+  /**
+   * Throws at the given point to simulate a host crash: `before-action`
+   * (before an action's fs op), `after-action` (right after the fs op,
+   * before its done-mark is persisted), `after-temp-write` (inside an atomic
+   * commit, between the temp write and the rename). `index` is the action
+   * index for the restore loops.
+   */
+  readonly crash?: (point: CrashPoint, index?: number) => void
+}
+
+/**
+ * Lifecycle of one restore operation journal. Terminal states are kept on
+ * disk as a tiny audit trail and skipped by reconciliation.
+ */
+export type RestoreJournalState = 'running' | 'rollback-running' | 'completed' | 'rolled-back' | 'recovery-required'
+
+/**
+ * One journaled restore action — a mutable working record that the restore
+ * loop updates (done/failed) as it applies the pass.
+ */
+export interface RestoreJournalAction {
+  readonly path: string
+  readonly action: 'restore' | 'delete'
+  /** Target content for a restore; null for a delete. */
+  readonly before: string | null
+  /**
+   * Pre-restore disk state ("rescue"): the content the file had right before
+   * the restore started, or null when it was absent. Rollback writes this
+   * back, so the pre-restore state is recoverable exactly.
+   */
+  readonly rescue: string | null
+  /** Set when the rescue capture failed: rollback then skips this path. */
+  rescueError?: string
+  /** True once the action's fs op completed and was marked. */
+  done: boolean
+  /** Per-action failure message; the restore pass never aborts. */
+  failed?: string
+}
+
+/** Durable journal for one attempted restore (written atomically). */
+export interface RestoreJournal {
+  readonly version: 1
+  readonly id: string
+  readonly sessionId: string
+  readonly targetSeq: number
+  readonly startedAt: number
+  finishedAt?: number
+  state: RestoreJournalState
+  readonly actions: RestoreJournalAction[]
+  /** Set when a rollback pass failed partway (state becomes `recovery-required`). */
+  rollbackError?: string
+}
+
+/**
+ * Result of reconciling one interrupted restore journal against the real
+ * disk. Path status is relative to the op's current goal: the restore target
+ * for `running` journals, the pre-restore (rescue) state for
+ * `rollback-running` / `recovery-required` journals — disambiguate with
+ * {@link RestoreReconcileReport.journalState}.
+ */
+export interface RestoreReconcileReport {
+  readonly opId: string
+  /** `interrupted` = a crash left the op unfinished; `recovery-required` = a rollback could not complete. */
+  readonly state: 'interrupted' | 'recovery-required'
+  /** Raw journal state (`running` | `rollback-running` | `recovery-required`). */
+  readonly journalState: RestoreJournalState
+  readonly targetSeq: number
+  readonly startedAt: number
+  /** Paths whose disk already matches the op's goal. */
+  readonly restored: readonly string[]
+  /** Paths still short of the op's goal (not yet applied / not yet rolled back). */
+  readonly pending: readonly string[]
+  /** Actions that failed during the pass (kept failed until a redo succeeds). */
+  readonly failed: readonly { path: string; message: string }[]
+  readonly rollbackError?: string
+  /** Set when the journal file itself is corrupt: it cannot be reconciled. */
+  readonly corrupt?: string
+}
 
 /**
  * Current-on-disk state probe used by restore planning. Injected so the plan
@@ -125,6 +234,47 @@ function safeFileId(callId: string): string {
 function safeSessionId(sessionId: string): string {
   const safe = sessionId.replace(/[^a-zA-Z0-9._-]/g, '_')
   return safe === '..' || safe === '.' ? 'session' : safe
+}
+
+/**
+ * Atomic JSON file write: serialize to a sibling temp file, then rename over
+ * the target. A crash between the two steps leaves only the temp — never a
+ * readable half-written target — and rename is atomic, so readers always see
+ * either the old file or the complete new one. The temp name is deterministic
+ * (`<target>.tmp`): a crash-leftover temp is overwritten by the next write of
+ * the same target and is never picked up by readers (it does not end in
+ * `.json`). `afterTempWrite` is the test-only crash seam between the steps.
+ */
+async function writeJsonAtomic(file: string, data: unknown, afterTempWrite?: () => void): Promise<void> {
+  const tmp = `${file}.tmp`
+  await writeFile(tmp, JSON.stringify(data), 'utf8')
+  afterTempWrite?.()
+  await rename(tmp, file)
+}
+
+const RESTORE_JOURNAL_STATES = new Set<RestoreJournalState>(['running', 'rollback-running', 'completed', 'rolled-back', 'recovery-required'])
+
+/**
+ * Structural validation of a parsed journal. Unlike checkpoint entries (whose
+ * corruption is silently skipped), a corrupt journal is reported
+ * fail-loud by `reconcileRestores` — silently dropping it would silently
+ * erase the ability to recover the interrupted restore.
+ */
+function isRestoreJournal(value: unknown): value is RestoreJournal {
+  if (typeof value !== 'object' || value === null) return false
+  const v = value as Record<string, unknown>
+  if (typeof v.id !== 'string' || typeof v.sessionId !== 'string' || typeof v.targetSeq !== 'number') return false
+  if (typeof v.state !== 'string' || !RESTORE_JOURNAL_STATES.has(v.state as RestoreJournalState)) return false
+  if (!Array.isArray(v.actions)) return false
+  return v.actions.every(action => {
+    if (typeof action !== 'object' || action === null) return false
+    const a = action as Record<string, unknown>
+    return typeof a.path === 'string'
+      && (a.action === 'restore' || a.action === 'delete')
+      && (typeof a.before === 'string' || a.before === null)
+      && (typeof a.rescue === 'string' || a.rescue === null)
+      && typeof a.done === 'boolean'
+  })
 }
 
 /** Read one committed entry, or undefined when missing/corrupt. */
@@ -182,15 +332,24 @@ export class SnapshotStore {
     return join(this.sessionDir(sessionId), String(anchorSeq))
   }
 
-  /** Commit one before-backup under its turn's anchor group. */
+  /** Commit one before-backup under its turn's anchor group (atomic write). */
   async recordEntry(
     sessionId: string,
     entry: Omit<CheckpointEntry, 'time'>,
+    opts?: { readonly crash?: (point: CrashPoint) => void },
   ): Promise<void> {
     const dir = this.anchorDir(sessionId, entry.anchorSeq)
     await mkdir(dir, { recursive: true })
     const committed: CheckpointEntry = { ...entry, time: Date.now() }
-    await writeFile(join(dir, `${safeFileId(entry.callId)}.json`), JSON.stringify(committed), 'utf8')
+    // Atomic commit: a crash mid-write leaves only a `.tmp` file, never a
+    // half-written entry that readEntry would have to guess about.
+    await writeJsonAtomic(
+      join(dir, `${safeFileId(entry.callId)}.json`),
+      committed,
+      // Test-only crash seam: fire after the temp write so a "half-written"
+      // crash leaves no committed entry behind.
+      () => opts?.crash?.('after-temp-write'),
+    )
     // Prune at most once per interval: a turn with many writes would otherwise
     // pay a readdir + sort on every commit. The 100-group cap still holds —
     // the debounce only skips redundant scans within a burst.
@@ -333,12 +492,22 @@ export class SnapshotStore {
    * the backup; a delete whose file is ALREADY absent is a silent no-op (not
    * a failure — the target state is already reached). Failures are per-file
    * and never abort the pass.
+   *
+   * The pass is journaled for crash safety: the pre-restore ("rescue") state
+   * of every planned path is captured and an intent journal persisted BEFORE
+   * any mutation, then each action is marked done as it is applied. A host
+   * crash at any point leaves the journal on disk; after a restart
+   * {@link reconcileRestores} reports where the restore stopped,
+   * {@link continueRestore} finishes it and {@link rollbackRestore} undoes it
+   * back to the exact pre-restore state. Journal IO itself never fails the
+   * restore (it degrades to a journal-less pass).
    */
   async restoreAfter(
     sessionId: string,
     targetSeq: number,
     deleteFile: DeleteFile,
     probe: DiskProbe = defaultProbe,
+    opts?: RestoreRunOptions,
   ): Promise<RestoreOutcome> {
     const restored: string[] = []
     const deleted: string[] = []
@@ -346,28 +515,452 @@ export class SnapshotStore {
     const failed: { path: string; message: string }[] = []
     const { actions, skipped: skippedPaths } = await this.planRestore(sessionId, targetSeq, probe)
     skipped.push(...skippedPaths)
-    for (const action of actions) {
+    // Nothing to do: no journal, no extra IO — exactly the pre-journal no-op.
+    if (actions.length === 0) return { restored, deleted, skipped, failed }
+
+    const journal = await this.beginRestore(sessionId, targetSeq, actions, probe)
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i]!
+      opts?.crash?.('before-action', i) // test-only: crash before the fs op
+      const journalAction = journal.actions[i]!
+      let applied: 'restored' | 'deleted' | 'enoent'
       try {
-        if (action.action === 'delete') {
-          try {
-            await deleteFile(action.path)
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-            // Already absent: the delete is already done — the target state
-            // is reached, count nothing (Claude Code tolerates the same).
-            continue
-          }
-          deleted.push(action.path)
-        } else {
-          await mkdir(dirname(action.path), { recursive: true })
-          await writeFile(action.path, action.before, 'utf8')
-          restored.push(action.path)
+        applied = await this.applyActionToDisk(action.action, action.path, action.action === 'restore' ? action.before : null, deleteFile)
+        if (applied === 'enoent') {
+          // Already absent: the delete is already done — the target state is
+          // reached. Mark the action and count nothing (Claude Code tolerates
+          // the same).
+          journalAction.done = true
+          await this.saveJournal(journal)
+          continue
         }
       } catch (error) {
-        failed.push({ path: action.path, message: error instanceof Error ? error.message : String(error) })
+        // Per-file failure, never aborting the pass (unchanged semantics).
+        journalAction.failed = error instanceof Error ? error.message : String(error)
+        await this.saveJournal(journal)
+        failed.push({ path: action.path, message: journalAction.failed })
+        continue
+      }
+      // Test-only crash: right after the fs op, before the done-mark — the
+      // journal then shows done=false while the disk may already match, which
+      // reconciliation resolves from the REAL disk (disk is truth).
+      opts?.crash?.('after-action', i)
+      journalAction.done = true
+      await this.saveJournal(journal)
+      if (applied === 'restored') restored.push(action.path)
+      else deleted.push(action.path)
+    }
+    if (failed.length === 0) {
+      journal.state = 'completed'
+      journal.finishedAt = Date.now()
+    }
+    await this.saveJournal(journal)
+    return { restored, deleted, skipped, failed }
+  }
+
+  /** Prefix of one restore-op journal file inside the session dir. */
+  private static readonly JOURNAL_PREFIX = 'restore-journal-'
+
+  /** Absolute path of one restore-op journal file. */
+  private journalPath(sessionId: string, opId: string): string {
+    return join(this.sessionDir(sessionId), `${SnapshotStore.JOURNAL_PREFIX}${safeFileId(opId)}.json`)
+  }
+
+  /**
+   * Best-effort journal persist: journal IO failures are non-fatal by design —
+   * a restore must never fail because its audit journal could not be written.
+   * reconcileRestores() re-derives the true state from the disk, so a missing
+   * or stale journal only loses the trail, never the recovery ability.
+   */
+  private async saveJournal(journal: RestoreJournal): Promise<void> {
+    try {
+      await writeJsonAtomic(this.journalPath(journal.sessionId, journal.id), journal)
+    } catch {
+      // Non-fatal (see above).
+    }
+  }
+
+  /**
+   * Journal one restore pass before mutating anything: capture the rescue
+   * (pre-restore) state of every planned path and persist the intent
+   * atomically. Returns the in-memory journal; a persist failure degrades to
+   * a journal-less restore (non-fatal, see {@link saveJournal}).
+   */
+  private async beginRestore(
+    sessionId: string,
+    targetSeq: number,
+    actions: PlannedAction[],
+    probe: DiskProbe,
+  ): Promise<RestoreJournal> {
+    const journalActions: RestoreJournalAction[] = []
+    for (const action of actions) {
+      let rescue: string | null = null
+      let rescueError: string | undefined
+      try {
+        rescue = (await probe.readText(action.path)) ?? null
+      } catch (error) {
+        // Rescue capture failed (e.g. an unreadable file): the restore still
+        // proceeds exactly as before; rollback will skip this path and report
+        // it instead of guessing.
+        rescueError = error instanceof Error ? error.message : String(error)
+      }
+      const journalAction: RestoreJournalAction = {
+        path: action.path,
+        action: action.action,
+        before: action.action === 'restore' ? action.before : null,
+        rescue,
+        done: false,
+      }
+      if (rescueError !== undefined) journalAction.rescueError = rescueError
+      journalActions.push(journalAction)
+    }
+    const journal: RestoreJournal = {
+      version: 1,
+      id: `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      sessionId,
+      targetSeq,
+      startedAt: Date.now(),
+      state: 'running',
+      actions: journalActions,
+    }
+    await this.saveJournal(journal)
+    return journal
+  }
+
+  /**
+   * Read one journal by op id; undefined when it does not exist. A corrupt
+   * journal THROWS (fail-loud): unlike checkpoint entries, silently dropping
+   * a journal would silently erase the interrupted restore's recovery record.
+   */
+  private async readJournal(sessionId: string, opId: string): Promise<RestoreJournal | undefined> {
+    const file = this.journalPath(sessionId, opId)
+    let text: string
+    try {
+      text = await readFile(file, 'utf8')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+      throw error
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch (error) {
+      throw new Error(`restore journal ${file} is corrupt: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (!isRestoreJournal(parsed)) throw new Error(`restore journal ${file} failed schema validation`)
+    return parsed
+  }
+
+  /**
+   * Every journal file of a session — valid ones plus corrupt ones with their
+   * error — so reconciliation can report corruption instead of dropping it.
+   */
+  private async listJournals(sessionId: string): Promise<{ journals: RestoreJournal[]; corrupt: { file: string; message: string }[] }> {
+    const sessionDir = this.sessionDir(sessionId)
+    let names: string[]
+    try {
+      names = await readdir(sessionDir)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { journals: [], corrupt: [] }
+      throw error
+    }
+    const journals: RestoreJournal[] = []
+    const corrupt: { file: string; message: string }[] = []
+    for (const name of names) {
+      if (!name.startsWith(SnapshotStore.JOURNAL_PREFIX) || !name.endsWith('.json')) continue
+      try {
+        const parsed: unknown = JSON.parse(await readFile(join(sessionDir, name), 'utf8'))
+        if (!isRestoreJournal(parsed)) {
+          corrupt.push({ file: name, message: 'journal failed schema validation' })
+          continue
+        }
+        journals.push(parsed)
+      } catch (error) {
+        corrupt.push({ file: name, message: error instanceof Error ? error.message : String(error) })
       }
     }
-    return { restored, deleted, skipped, failed }
+    return { journals, corrupt }
+  }
+
+  /**
+   * Execute ONE fs mutation with exactly the pre-journal semantics: a delete
+   * runs through the injected deleteFile (ENOENT tolerated — the file is
+   * already absent, i.e. the target state is reached), a restore is a plain
+   * writeFile with a recursive mkdir of the parent. Returns how the outcome
+   * should record it.
+   */
+  private async applyActionToDisk(
+    kind: 'restore' | 'delete',
+    path: string,
+    content: string | null,
+    deleteFile: DeleteFile,
+  ): Promise<'restored' | 'deleted' | 'enoent'> {
+    if (kind === 'delete') {
+      try {
+        await deleteFile(path)
+        return 'deleted'
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        return 'enoent'
+      }
+    }
+    await mkdir(dirname(path), { recursive: true })
+    await writeFile(path, content!, 'utf8')
+    return 'restored'
+  }
+
+  /**
+   * Reconcile the session's restore journals against the real disk — the
+   * "host restart" account: for every interrupted op, report which paths
+   * already match its goal (restored) and which are still pending, and expose
+   * any recorded failures. Journals whose goal is already fully reached on
+   * disk (e.g. a later rewind completed the work) are auto-healed to their
+   * terminal state and not reported. A corrupt journal is reported
+   * `recovery-required` — never silently dropped.
+   *
+   * @param sessionId - session whose journals to reconcile.
+   * @param probe - current-disk state probe (defaults to the real FS).
+   * @returns one report per non-terminal journal still needing attention.
+   */
+  async reconcileRestores(sessionId: string, probe: DiskProbe = defaultProbe): Promise<RestoreReconcileReport[]> {
+    const { journals, corrupt } = await this.listJournals(sessionId)
+    const reports: RestoreReconcileReport[] = []
+    for (const bad of corrupt) {
+      reports.push({
+        opId: bad.file.slice(SnapshotStore.JOURNAL_PREFIX.length, -'.json'.length),
+        state: 'recovery-required',
+        journalState: 'recovery-required',
+        targetSeq: 0,
+        startedAt: 0,
+        restored: [],
+        pending: [],
+        failed: [],
+        corrupt: bad.message,
+      })
+    }
+    for (const journal of journals) {
+      if (journal.state === 'completed' || journal.state === 'rolled-back') continue
+      const report = await this.reconcileJournal(journal, probe)
+      if (report !== undefined) reports.push(report)
+    }
+    return reports.sort((a, b) => a.startedAt - b.startedAt || a.opId.localeCompare(b.opId))
+  }
+
+  /**
+   * Reconcile ONE non-terminal journal against the real disk. Returns
+   * undefined when the op's goal is already fully reached (auto-heals to the
+   * terminal state); otherwise a report of restored/pending/failed paths.
+   * For `running` journals the goal is the restore target; for
+   * `rollback-running` / `recovery-required` journals it is the rescue
+   * (pre-restore) state.
+   */
+  private async reconcileJournal(journal: RestoreJournal, probe: DiskProbe): Promise<RestoreReconcileReport | undefined> {
+    const rollbackPhase = journal.state === 'rollback-running' || journal.state === 'recovery-required'
+    const restored: string[] = []
+    const pending: string[] = []
+    const failed: { path: string; message: string }[] = []
+    let allReached = true
+    for (const action of journal.actions) {
+      if (action.failed !== undefined) {
+        // A recorded failure keeps the op non-terminal until a redo retries it.
+        failed.push({ path: action.path, message: action.failed })
+        allReached = false
+        continue
+      }
+      let reached: boolean
+      try {
+        const state = (await probe.readText(action.path)) ?? null
+        const goal = rollbackPhase ? action.rescue : action.action === 'delete' ? null : action.before
+        reached = state === goal
+      } catch {
+        reached = false // probe failure: conservative — never silently dropped
+      }
+      if (reached) restored.push(action.path)
+      else pending.push(action.path)
+      if (!reached) allReached = false
+    }
+    if (allReached && failed.length === 0) {
+      // The op's goal is already fully reached on disk: heal it to its
+      // terminal state so it stops appearing as an interruption.
+      if (rollbackPhase) journal.state = 'rolled-back'
+      else journal.state = 'completed'
+      journal.finishedAt = Date.now()
+      await this.saveJournal(journal)
+      return undefined
+    }
+    return {
+      opId: journal.id,
+      state: journal.state === 'recovery-required' ? 'recovery-required' : 'interrupted',
+      journalState: journal.state,
+      targetSeq: journal.targetSeq,
+      startedAt: journal.startedAt,
+      restored,
+      pending,
+      failed,
+      ...(journal.rollbackError === undefined ? {} : { rollbackError: journal.rollbackError }),
+    }
+  }
+
+  /**
+   * 补做 (redo) an interrupted restore: finish the op by applying every action
+   * whose disk state does not yet match its goal — the restore target for
+   * `running` journals. Actions are decided by the REAL disk (the same "disk
+   * is truth" rule as reconciliation), so a crash between an fs op and its
+   * done-mark is completed deterministically and a path the user already
+   * fixed is marked done without being rewritten. Failed actions are retried;
+   * a re-failure re-records the failure. The journal becomes `completed` once
+   * every action reaches the target.
+   */
+  async continueRestore(
+    sessionId: string,
+    opId: string,
+    deleteFile: DeleteFile,
+    probe: DiskProbe = defaultProbe,
+    opts?: RestoreRunOptions,
+  ): Promise<RestoreOutcome> {
+    const journal = await this.readJournal(sessionId, opId)
+    if (journal === undefined) throw new Error(`restore journal ${opId} not found for session ${sessionId}`)
+    if (journal.state !== 'running') {
+      throw new Error(`restore journal ${opId} is in state ${journal.state}; only a running restore can be continued`)
+    }
+    const restored: string[] = []
+    const deleted: string[] = []
+    const failed: { path: string; message: string }[] = []
+    for (let i = 0; i < journal.actions.length; i++) {
+      const action = journal.actions[i]!
+      opts?.crash?.('before-action', i) // test-only: crash before the fs op
+      let reached: boolean
+      try {
+        const state = (await probe.readText(action.path)) ?? null
+        reached = state === (action.action === 'delete' ? null : action.before)
+      } catch {
+        reached = false // probe failure: conservatively attempt the apply
+      }
+      if (reached) {
+        // Already at the target (applied before the crash, or user-fixed):
+        // mark it done without touching the disk.
+        action.done = true
+        delete action.failed
+        await this.saveJournal(journal)
+        continue
+      }
+      let applied: 'restored' | 'deleted' | 'enoent'
+      try {
+        applied = await this.applyActionToDisk(action.action, action.path, action.action === 'restore' ? action.before : null, deleteFile)
+        if (applied === 'enoent') {
+          action.done = true
+          await this.saveJournal(journal)
+          continue
+        }
+      } catch (error) {
+        action.failed = error instanceof Error ? error.message : String(error)
+        await this.saveJournal(journal)
+        failed.push({ path: action.path, message: action.failed })
+        continue
+      }
+      opts?.crash?.('after-action', i) // test-only: crash before the done-mark
+      action.done = true
+      delete action.failed
+      await this.saveJournal(journal)
+      if (applied === 'restored') restored.push(action.path)
+      else deleted.push(action.path)
+    }
+    if (journal.actions.every(action => action.done) && !journal.actions.some(action => action.failed !== undefined)) {
+      journal.state = 'completed'
+      journal.finishedAt = Date.now()
+      await this.saveJournal(journal)
+    }
+    return { restored, deleted, skipped: [], failed }
+  }
+
+  /**
+   * 回滚 (roll back) an interrupted restore: undo every action whose disk
+   * state does not match its rescue (pre-restore) record, returning the
+   * workspace to the exact state it had before the restore started. Decided
+   * by the REAL disk, so actions the crash left applied-but-unmarked are
+   * undone too, and a path already back at its rescue state is skipped —
+   * the pass is idempotent across crashes (a retry finishes the remaining
+   * actions). The journal moves `running` → `rollback-running` → `rolled-back`;
+   * a failed undo leaves it `recovery-required` (retryable), and paths whose
+   * rescue capture failed are reported and left untouched.
+   */
+  async rollbackRestore(
+    sessionId: string,
+    opId: string,
+    deleteFile: DeleteFile,
+    probe: DiskProbe = defaultProbe,
+    opts?: RestoreRunOptions,
+  ): Promise<RestoreOutcome> {
+    const journal = await this.readJournal(sessionId, opId)
+    if (journal === undefined) throw new Error(`restore journal ${opId} not found for session ${sessionId}`)
+    if (journal.state === 'completed' || journal.state === 'rolled-back') {
+      throw new Error(`restore journal ${opId} is already ${journal.state}`)
+    }
+    // A rollback is in flight: a crash between this write and the last rescue
+    // application leaves the journal in 'rollback-running'; the pass is
+    // idempotent, so a retry simply finishes the remaining actions.
+    if (journal.state !== 'rollback-running') {
+      journal.state = 'rollback-running'
+      await this.saveJournal(journal)
+    }
+    const restored: string[] = []
+    const deleted: string[] = []
+    const failed: { path: string; message: string }[] = []
+    let rollbackFailed = false
+    for (let i = 0; i < journal.actions.length; i++) {
+      const action = journal.actions[i]!
+      if (action.rescueError !== undefined) {
+        // The pre-restore state was never captured: this path cannot be
+        // undone — report it and leave it untouched (recovery-required).
+        journal.rollbackError = `rescue unavailable for ${action.path}: ${action.rescueError}`
+        journal.state = 'recovery-required'
+        await this.saveJournal(journal)
+        failed.push({ path: action.path, message: journal.rollbackError })
+        rollbackFailed = true
+        continue
+      }
+      opts?.crash?.('before-action', i) // test-only: crash before the fs op
+      let reached: boolean
+      try {
+        const state = (await probe.readText(action.path)) ?? null
+        reached = state === action.rescue
+      } catch {
+        reached = false // probe failure: conservatively attempt the undo
+      }
+      if (reached) {
+        // Already back at its pre-restore state: mark it undone.
+        action.done = false
+        await this.saveJournal(journal)
+        continue
+      }
+      let applied: 'restored' | 'deleted' | 'enoent'
+      try {
+        applied = await this.applyActionToDisk(action.rescue === null ? 'delete' : 'restore', action.path, action.rescue, deleteFile)
+        if (applied === 'enoent') {
+          action.done = false
+          await this.saveJournal(journal)
+          continue
+        }
+      } catch (error) {
+        journal.rollbackError = error instanceof Error ? error.message : String(error)
+        journal.state = 'recovery-required'
+        await this.saveJournal(journal)
+        failed.push({ path: action.path, message: journal.rollbackError })
+        rollbackFailed = true
+        continue
+      }
+      opts?.crash?.('after-action', i) // test-only: crash before the done-mark
+      action.done = false
+      await this.saveJournal(journal)
+      if (applied === 'restored') restored.push(action.path)
+      else deleted.push(action.path)
+    }
+    if (!rollbackFailed) {
+      journal.state = 'rolled-back'
+      journal.finishedAt = Date.now()
+      await this.saveJournal(journal)
+    }
+    return { restored, deleted, skipped: [], failed }
   }
 
   /**
