@@ -47,6 +47,15 @@ command channel), and only when all of the following hold:
 6. **Session binding**: the restore reads/writes only the store of the rewound
    session (paths are resolved display paths the session's own tools touched).
 
+**Concurrency scope**: the in-flight guard above only serializes concurrent
+*rewinds* of one session; it does not stop other processes from modifying the
+workspace. `planRestore` reconciles against the live disk at plan time, but
+there is no re-validation between planning and applying — a file changed by
+another process in that window is overwritten by the restore. The rescue state
+is captured at apply start, so `rollbackRestore` still returns the workspace
+to exactly the apply-start state, and per-file failures are reported rather
+than hidden.
+
 A failed gate fails closed: an invalid target, a missing store, an absent
 backup, or a cancelled invocation aborts the rewind with an error.
 
@@ -80,6 +89,9 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
   over that same tracked set) — a restore can never write an arbitrary path.
 - **Path resolution rule**: relative paths resolve against the session
   workspace cwd, mirroring the fs tools' own rule (`src/session-cwd.ts`).
+- **Bounded backups**: `prune` keeps the newest 100 anchor groups per session
+  (`MAX_ANCHOR_GROUPS`), so backup accumulation cannot grow the store without
+  bound (the exact cap is pinned in `docs/format.md`).
 
 ## Crash safety
 
@@ -118,6 +130,9 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
   still see the withdrawn messages (documented behavior, not a bug).
 - It does **not** restore files written by a cancelled tool call that never
   committed a backup.
+- **Subagent session edits are not tracked** (Claude Code alignment): a
+  subagent runs its own session, so the files it changes are not backed up and
+  cannot be restored by a rewind of the parent session.
 
 ## Reporting
 
