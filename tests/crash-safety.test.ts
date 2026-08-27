@@ -458,6 +458,31 @@ describe('reconciliation auto-heal and failure reporting', () => {
     expect(await store.reconcileRestores(session)).toHaveLength(1)
   })
 
+  it('a crash during prune materialization is safe: the link still resolves and a retry finishes', async () => {
+    const a = await touch('a.txt', 'A0')
+    // A chain of identical content across 3 anchors: c1 real, c2/c3 links.
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 1, path: a, before: 'A0' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 2, path: a, before: 'A0' })
+    await store.recordEntry(session, { callId: 'c3', anchorSeq: 3, path: a, before: 'A0' })
+    // Crash right after the materialization temp write, before the rename.
+    await expect(store.prune(session, 1, { crash: crashAt('after-temp-write').crash })).rejects.toThrow('simulated host crash')
+    // The doomed real (group 1) is still on disk and c3 (a kept link) still
+    // resolves — nothing dangled, the store is fully usable.
+    await writeFile(a, 'A1', 'utf8')
+    const beforeRetry = await store.restoreAfter(session, 3, unlink)
+    expect(beforeRetry.restored).toEqual([a])
+    expect(await readFile(a, 'utf8')).toBe('A0')
+    // A clean retry materializes then drops the oldest group; no dangling link.
+    await store.prune(session, 1)
+    const after = await store.entriesAfter(session, 1)
+    expect(after).toHaveLength(1)
+    expect('ref' in after[0]!).toBe(false) // materialized to a real snapshot
+    await writeFile(a, 'A2', 'utf8')
+    const outcome = await store.restoreAfter(session, 1, unlink)
+    expect(outcome.restored).toEqual([a])
+    expect(await readFile(a, 'utf8')).toBe('A0')
+  })
+
   it('deleting the data directory leaves a clean store that rebuilds from scratch', async () => {
     // A dedicated snapshot root, separate from the workspace files, so the
     // wipe below removes ONLY the plugin's own data (like deleting

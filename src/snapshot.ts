@@ -1148,8 +1148,13 @@ export class SnapshotStore {
    * dangling. Links form a linear predecessor chain, so materializing the first
    * link after each doomed real is enough — later links already point at that
    * materialized entry (or at other kept links), requiring no rewrite.
+   *
+   * `opts.crash` is the test-only seam: a crash fired inside a materialization
+   * write (between its temp write and rename) leaves ONLY a `.tmp` — the doomed
+   * real is still on disk and the kept link still resolves, so nothing dangles
+   * and a later prune simply re-materializes.
    */
-  async prune(sessionId: string, keep = MAX_ANCHOR_GROUPS): Promise<void> {
+  async prune(sessionId: string, keep = MAX_ANCHOR_GROUPS, opts?: { readonly crash?: (point: CrashPoint) => void }): Promise<void> {
     const sessionDir = this.sessionDir(sessionId)
     let names: string[]
     try {
@@ -1166,7 +1171,10 @@ export class SnapshotStore {
     if (excess <= 0) return
     const doomed = new Set(seqs.slice(0, excess))
     // Materialize surviving links that reference a doomed group's real
-    // snapshot (best-effort: a corrupt link is skipped, never crashing prune).
+    // snapshot. A link whose referent is ALREADY gone (dangling/corrupt) is
+    // skipped — evicting cannot make it worse. But if a materialization WRITE
+    // fails (transient IO or a crash), we abort prune BEFORE deleting anything,
+    // so a still-needed real is never removed while a kept link references it.
     for (const seq of seqs.slice(excess)) {
       const files = await readdir(this.anchorDir(sessionId, seq)).catch(() => [] as string[])
       for (const file of files) {
@@ -1176,21 +1184,20 @@ export class SnapshotStore {
         const slash = entry.ref.indexOf('/')
         const refAnchor = slash === -1 ? Number.NaN : Number(entry.ref.slice(0, slash))
         if (!Number.isSafeInteger(refAnchor) || !doomed.has(refAnchor)) continue
+        let before: string | null
         try {
-          const before = await this.resolveBefore(sessionId, entry)
-          const real: CheckpointEntry = {
-            callId: entry.callId,
-            anchorSeq: entry.anchorSeq,
-            path: entry.path,
-            before,
-            time: entry.time,
-          }
-          await writeJsonAtomic(join(this.anchorDir(sessionId, seq), file), real)
+          before = await this.resolveBefore(sessionId, entry)
         } catch {
-          // unreadable/cyclic link: skip — do not let one corrupt entry abort
-          // the window cap (it is already broken; deleting from here cannot
-          // make the store less safe for the rest)
+          continue // already-dangling link: not caused by this eviction
         }
+        const real: CheckpointEntry = {
+          callId: entry.callId,
+          anchorSeq: entry.anchorSeq,
+          path: entry.path,
+          before,
+          time: entry.time,
+        }
+        await writeJsonAtomic(join(this.anchorDir(sessionId, seq), file), real, () => opts?.crash?.('after-temp-write'))
       }
     }
     for (const seq of doomed) {
