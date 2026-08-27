@@ -39,7 +39,9 @@ them at runtime, so the published tarball does not carry them.
 ## Conventions
 - Code comments are written in English; git history uses conventional commits with
   English subjects (`feat`/`fix`/`docs`/`test`/`chore`/...).
-- Every change must pass `npm run check`.
+- Commit **one logical change per commit**: finish one feature/fix, run `npm run
+  check`, then commit and push before starting the next change.
+- Every change must pass `npm run check` before it is committed.
 - When DSH interfaces change, maintain the peer version ranges (see `docs/release/release.md`).
 
 ## Further reading
