@@ -76,6 +76,35 @@ export interface CheckpointEntry {
   readonly time: number
 }
 
+/**
+ * One in-place dedup link, keyed by tool call. When a tracked file is
+ * recorded with a `before` content identical to the immediately-prior entry
+ * for that path, the entry is stored as a LINK instead of a full copy: it
+ * carries no `before`, only a `ref` naming the prior entry file
+ * (`<anchorSeq>/<callId>.json`). The linear (predecessor-chained) ref makes
+ * restore resolution and prune materialization rewrite-free.
+ *
+ * The real-entry format ({@link CheckpointEntry}) is unchanged so existing
+ * data reads identically; links are a NEW entry kind only the current build
+ * understands (old-build reads of links are explicitly out of scope).
+ */
+export interface LinkEntry {
+  readonly callId: string
+  readonly anchorSeq: number
+  readonly path: string
+  /** `<anchorSeq>/<callId>.json` of the immediately-prior entry for the path. */
+  readonly ref: string
+  readonly time: number
+}
+
+/** Any on-disk entry: a full before-backup or an in-place dedup link. */
+export type StoredEntry = CheckpointEntry | LinkEntry
+
+/** True when an entry is a dedup link (carries `ref`, not `before`). */
+export function isLinkEntry(entry: StoredEntry): entry is LinkEntry {
+  return 'ref' in entry
+}
+
 /** Per-file restore impact preview (`/rewind preview @seq both`). */
 export interface FileImpact {
   readonly path: string
@@ -277,17 +306,28 @@ function isRestoreJournal(value: unknown): value is RestoreJournal {
   })
 }
 
-/** Read one committed entry, or undefined when missing/corrupt. */
-async function readEntry(file: string): Promise<CheckpointEntry | undefined> {
+/**
+ * Read one committed entry, or undefined when missing/corrupt. Returns a
+ * {@link LinkEntry} when the file carries `ref` (no `before`), else a
+ * {@link CheckpointEntry} — a real entry whose `before` is a string (content)
+ * or null (the file was created).
+ */
+async function readEntry(file: string): Promise<StoredEntry | undefined> {
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<CheckpointEntry>
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
     if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
-    return {
+    const base = {
       callId: String(parsed.callId ?? ''),
       anchorSeq: parsed.anchorSeq,
       path: parsed.path,
-      before: typeof parsed.before === 'string' ? parsed.before : null,
       time: typeof parsed.time === 'number' ? parsed.time : 0,
+    }
+    if (typeof parsed.ref === 'string') {
+      return { ...base, ref: parsed.ref }
+    }
+    return {
+      ...base,
+      before: typeof parsed.before === 'string' ? parsed.before : null,
     }
   } catch {
     return undefined
@@ -334,7 +374,27 @@ export class SnapshotStore {
    */
   private lastEntryTime = 0
 
-  constructor(readonly root: string = process.env[SNAPSHOT_ROOT_ENV] ?? DEFAULT_SNAPSHOT_ROOT) {}
+  /** Store options; `dedup` toggles in-place content dedup (default on). */
+  private readonly dedup: boolean
+
+  /**
+   * In-memory per-path "most recent entry" for content dedup, keyed by
+   * `<sessionId>\0<path>`. Each value holds the entry's effective `before`
+   * content and its own file ref, so a new record with the same content links
+   * to the immediately-prior entry (linear chain). Seeded lazily per session
+   * from the bounded on-disk window, so dedup survives a host restart.
+   */
+  private readonly lastEntry = new Map<string, { content: string | null; ref: string }>()
+
+  /** Sessions whose dedup state has been seeded from disk this process. */
+  private readonly seededSessions = new Set<string>()
+
+  constructor(
+    readonly root: string = process.env[SNAPSHOT_ROOT_ENV] ?? DEFAULT_SNAPSHOT_ROOT,
+    opts?: { readonly dedup?: boolean },
+  ) {
+    this.dedup = opts?.dedup ?? true
+  }
 
   /** Absolute path of one session's snapshot directory (id sanitized). */
   sessionDir(sessionId: string): string {
@@ -346,7 +406,58 @@ export class SnapshotStore {
     return join(this.sessionDir(sessionId), String(anchorSeq))
   }
 
-  /** Commit one before-backup under its turn's anchor group (atomic write). */
+  /** Absolute file ref (relative to the session dir) of an entry. */
+  private entryRefOf(sessionId: string, callId: string, anchorSeq: number): string {
+    return `${anchorSeq}/${safeFileId(callId)}.json`
+  }
+
+  /**
+   * Seed a session's dedup state from the existing (bounded) on-disk window:
+   * scan entries newest-first and record the most recent entry per path. This
+   * makes content dedup survive a host restart within the session window. A
+   * no-op after the first seed (or when `dedup` is disabled).
+   */
+  private async ensureDedupSeeded(sessionId: string): Promise<void> {
+    if (!this.dedup || this.seededSessions.has(sessionId)) return
+    this.seededSessions.add(sessionId)
+    try {
+      // entriesAfter returns newest-first; the first entry per path is its
+      // most recent one. Resolve a link to its effective content.
+      for (const entry of await this.entriesAfter(sessionId, 0)) {
+        const key = `${sessionId}\0${entry.path}`
+        if (this.lastEntry.has(key)) continue
+        const content = await this.resolveBefore(sessionId, entry)
+        this.lastEntry.set(key, { content, ref: this.entryRefOf(sessionId, entry.callId, entry.anchorSeq) })
+      }
+    } catch {
+      // Seeding is best-effort: an unreadable/corrupt session simply starts
+      // with an empty dedup state (redundant but correct, like a cold start).
+      this.seededSessions.delete(sessionId)
+    }
+  }
+
+  /**
+   * Resolve an entry's effective `before` content, following a link chain to
+   * its terminal real snapshot. Refs are strictly backward in
+   * `(anchorSeq, time)`, so the chain is acyclic and finite. A dangling or
+   * cyclic link throws — callers fail per-file (never silently dropping the
+   * path from a restore).
+   */
+  private async resolveBefore(
+    sessionId: string,
+    entry: StoredEntry,
+    seen = new Set<string>(),
+  ): Promise<string | null> {
+    if (!isLinkEntry(entry)) return entry.before
+    const key = `${entry.anchorSeq}:${entry.callId}`
+    if (seen.has(key)) throw new Error(`link cycle at ${entry.path} (${key})`)
+    seen.add(key)
+    const referenced = await readEntry(join(this.sessionDir(sessionId), entry.ref))
+    if (referenced === undefined) throw new Error(`dangling link ${entry.ref} for ${entry.path}`)
+    return this.resolveBefore(sessionId, referenced, seen)
+  }
+
+  /** Commit one before-backup (or an in-place dedup link) under its anchor. */
   async recordEntry(
     sessionId: string,
     entry: Omit<CheckpointEntry, 'time'>,
@@ -356,18 +467,32 @@ export class SnapshotStore {
     // instance, so same-millisecond commits stay capture-ordered.
     const time = Math.max(Date.now(), this.lastEntryTime + 1)
     this.lastEntryTime = time
+    await this.ensureDedupSeeded(sessionId)
     const dir = this.anchorDir(sessionId, entry.anchorSeq)
     await mkdir(dir, { recursive: true })
-    const committed: CheckpointEntry = { ...entry, time }
-    // Atomic commit: a crash mid-write leaves only a `.tmp` file, never a
-    // half-written entry that readEntry would have to guess about.
-    await writeJsonAtomic(
-      join(dir, `${safeFileId(entry.callId)}.json`),
-      committed,
-      // Test-only crash seam: fire after the temp write so a "half-written"
-      // crash leaves no committed entry behind.
-      () => opts?.crash?.('after-temp-write'),
-    )
+    const file = join(dir, `${safeFileId(entry.callId)}.json`)
+    const selfRef = this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
+    // Content dedup: when the new `before` equals the path's most recent
+    // recorded content, store a LINK to that prior entry instead of dup content.
+    // The prior entry is the immediately-preceding one, giving a linear chain.
+    const key = `${sessionId}\0${entry.path}`
+    const prior = this.lastEntry.get(key)
+    if (this.dedup && prior !== undefined && prior.content === entry.before) {
+      const committed: LinkEntry = {
+        callId: entry.callId,
+        anchorSeq: entry.anchorSeq,
+        path: entry.path,
+        ref: prior.ref,
+        time,
+      }
+      await writeJsonAtomic(file, committed, () => opts?.crash?.('after-temp-write'))
+      // The new link is now the most-recent entry for the path (same content).
+      this.lastEntry.set(key, { content: prior.content, ref: selfRef })
+    } else {
+      const committed: CheckpointEntry = { ...entry, time }
+      await writeJsonAtomic(file, committed, () => opts?.crash?.('after-temp-write'))
+      this.lastEntry.set(key, { content: entry.before, ref: selfRef })
+    }
     // Prune at most once per interval: a turn with many writes would otherwise
     // pay a readdir + sort on every commit. The 100-group cap still holds —
     // the debounce only skips redundant scans within a burst.
@@ -385,7 +510,7 @@ export class SnapshotStore {
    * turn's assistant response and tool calls), so only entries anchored at
    * earlier messages survive.
    */
-  async entriesAfter(sessionId: string, targetSeq: number): Promise<CheckpointEntry[]> {
+  async entriesAfter(sessionId: string, targetSeq: number): Promise<StoredEntry[]> {
     const sessionDir = this.sessionDir(sessionId)
     let names: string[]
     try {
@@ -394,7 +519,7 @@ export class SnapshotStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw error
     }
-    const entries: CheckpointEntry[] = []
+    const entries: StoredEntry[] = []
     for (const name of names) {
       const anchorSeq = Number(name)
       if (!Number.isSafeInteger(anchorSeq) || anchorSeq < targetSeq) continue
@@ -412,8 +537,8 @@ export class SnapshotStore {
    * Per-path EARLIEST committed entry anchored at or after the target — the
    * single source of truth for both restore and impact preview.
    */
-  private async earliestEntries(sessionId: string, targetSeq: number): Promise<Map<string, CheckpointEntry>> {
-    const earliest = new Map<string, CheckpointEntry>()
+  private async earliestEntries(sessionId: string, targetSeq: number): Promise<Map<string, StoredEntry>> {
+    const earliest = new Map<string, StoredEntry>()
     for (const entry of await this.entriesAfter(sessionId, targetSeq)) {
       const current = earliest.get(entry.path)
       if (current === undefined || entry.anchorSeq < current.anchorSeq || (entry.anchorSeq === current.anchorSeq && entry.time < current.time)) {
@@ -449,43 +574,59 @@ export class SnapshotStore {
    * @param sessionId - session whose snapshot store to plan against.
    * @param targetSeq - rewind target; entries anchored at/after it apply.
    * @param probe - current-disk state probe (defaults to the real FS).
-   * @returns the planned actions plus the link paths that were skipped.
+   * @returns the planned actions, the link paths skipped, and per-file failures.
    */
   private async planRestore(
     sessionId: string,
     targetSeq: number,
     probe: DiskProbe,
-  ): Promise<{ actions: PlannedAction[]; skipped: string[] }> {
+  ): Promise<{ actions: PlannedAction[]; skipped: string[]; failed: { path: string; message: string }[] }> {
     const actions: PlannedAction[] = []
     const skipped: string[] = []
+    const failed: { path: string; message: string }[] = []
     for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
       try {
         if (await probe.isLink(entry.path)) {
           skipped.push(entry.path)
           continue
         }
+        // A dedup link resolves to its terminal real content; a dangling or
+        // cyclic link is a per-file integrity failure, never a silent skip.
+        let before: string | null
+        try {
+          before = await this.resolveBefore(sessionId, entry)
+        } catch (error) {
+          failed.push({ path: entry.path, message: error instanceof Error ? error.message : String(error) })
+          continue
+        }
         const current = await probe.readText(entry.path)
-        if (entry.before === null) {
+        if (before === null) {
           // The file was created at/after the target: delete it when it is
           // still present. An absent file already matches the target state.
           if (current !== undefined) actions.push({ path: entry.path, action: 'delete' })
-        } else if (current !== entry.before) {
+        } else if (current !== before) {
           // The file differs from its pre-edit content (or is missing):
           // write the before content back. Identical content is a no-op.
-          actions.push({ path: entry.path, action: 'restore', before: entry.before })
+          actions.push({ path: entry.path, action: 'restore', before })
         }
       } catch (error) {
         // Probe failure: conservative — treat as differing. A restore still
         // attempts the write, a delete still attempts the unlink (failures
         // surface per-file in the restore outcome, never silently skipped).
-        if (entry.before === null) {
+        let before: string | null
+        try {
+          before = await this.resolveBefore(sessionId, entry)
+        } catch {
+          before = null
+        }
+        if (before === null) {
           actions.push({ path: entry.path, action: 'delete' })
         } else {
-          actions.push({ path: entry.path, action: 'restore', before: entry.before })
+          actions.push({ path: entry.path, action: 'restore', before })
         }
       }
     }
-    return { actions, skipped }
+    return { actions, skipped, failed }
   }
 
   /** Per-file restore impact: only actions that would actually change the disk. */
@@ -531,8 +672,9 @@ export class SnapshotStore {
     const deleted: string[] = []
     const skipped: string[] = []
     const failed: { path: string; message: string }[] = []
-    const { actions, skipped: skippedPaths } = await this.planRestore(sessionId, targetSeq, probe)
+    const { actions, skipped: skippedPaths, failed: planFailed } = await this.planRestore(sessionId, targetSeq, probe)
     skipped.push(...skippedPaths)
+    failed.push(...planFailed)
     // Nothing to do: no journal, no extra IO — exactly the pre-journal no-op.
     if (actions.length === 0) return { restored, deleted, skipped, failed }
 
@@ -998,6 +1140,14 @@ export class SnapshotStore {
    * recycles terminal restore journals (see {@link pruneTerminalJournals}),
    * so the per-commit cap bounds BOTH the checkpoint entries and the journal
    * accumulation.
+   *
+   * Because dedup links reference prior entries, eviction is LINK-AWARE: before
+   * deleting the oldest groups, any SURVIVING (kept-group) link whose `ref`
+   * lands on a real snapshot inside a doomed group is MATERIALIZED (rewritten
+   * as a real snapshot carrying the resolved content), so no kept link is left
+   * dangling. Links form a linear predecessor chain, so materializing the first
+   * link after each doomed real is enough — later links already point at that
+   * materialized entry (or at other kept links), requiring no rewrite.
    */
   async prune(sessionId: string, keep = MAX_ANCHOR_GROUPS): Promise<void> {
     const sessionDir = this.sessionDir(sessionId)
@@ -1014,7 +1164,36 @@ export class SnapshotStore {
     const seqs = names.map(Number).filter(seq => Number.isSafeInteger(seq)).sort((a, b) => a - b)
     const excess = seqs.length - keep
     if (excess <= 0) return
-    for (const seq of seqs.slice(0, excess)) {
+    const doomed = new Set(seqs.slice(0, excess))
+    // Materialize surviving links that reference a doomed group's real
+    // snapshot (best-effort: a corrupt link is skipped, never crashing prune).
+    for (const seq of seqs.slice(excess)) {
+      const files = await readdir(this.anchorDir(sessionId, seq)).catch(() => [] as string[])
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue
+        const entry = await readEntry(join(this.anchorDir(sessionId, seq), file))
+        if (entry === undefined || !isLinkEntry(entry)) continue
+        const slash = entry.ref.indexOf('/')
+        const refAnchor = slash === -1 ? Number.NaN : Number(entry.ref.slice(0, slash))
+        if (!Number.isSafeInteger(refAnchor) || !doomed.has(refAnchor)) continue
+        try {
+          const before = await this.resolveBefore(sessionId, entry)
+          const real: CheckpointEntry = {
+            callId: entry.callId,
+            anchorSeq: entry.anchorSeq,
+            path: entry.path,
+            before,
+            time: entry.time,
+          }
+          await writeJsonAtomic(join(this.anchorDir(sessionId, seq), file), real)
+        } catch {
+          // unreadable/cyclic link: skip — do not let one corrupt entry abort
+          // the window cap (it is already broken; deleting from here cannot
+          // make the store less safe for the rest)
+        }
+      }
+    }
+    for (const seq of doomed) {
       await rm(this.anchorDir(sessionId, seq), { recursive: true, force: true })
     }
   }

@@ -49,6 +49,8 @@ export const inject = ['commands', 'tools']
 export interface RewindConfig {
   /** Checkpoint store root (defaults to `~/.dsh/rewind-snapshots`). */
   readonly snapshotDir?: string
+  /** In-place content dedup (identical before-content → link). Default `true`. */
+  readonly dedup?: boolean
 }
 
 /** Tool names whose mutations the checkpoint tracker follows. */
@@ -644,7 +646,7 @@ async function handleRewind(
  * @param config - optional override of the checkpoint store root.
  */
 export function apply(ctx: Context, config?: RewindConfig): void {
-  const store = new SnapshotStore(config?.snapshotDir)
+  const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup })
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()

@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { reconcileTracked, SnapshotStore, type DiskProbe } from '../src/snapshot.ts'
+import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -342,5 +342,127 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     const tracked = await store.trackedPaths(session)
     const states = new Map<string, string | null>()
     expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(0)
+  })
+})
+
+describe('content dedup (in-place link; old + new entry format)', () => {
+  it('reads pre-dedup (legacy, no `ref`) entries correctly: restore/impacts/tracked', async () => {
+    const file = await touch('a.txt', 'original')
+    // Simulate an OLD-format entry written by a pre-dedup build (no `ref`).
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'legacy1.json'), JSON.stringify({ callId: 'legacy1', anchorSeq: 5, path: file, before: 'original', time: 1 }))
+    await writeFile(file, 'changed', 'utf8')
+    expect((await store.trackedPaths(session)).has(file)).toBe(true)
+    expect(await store.impactsAfter(session, 5)).toEqual([{ path: file, action: 'restore' }])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('original')
+  })
+
+  it('dedups a new identical write against a legacy real entry (new reads old)', async () => {
+    const file = await touch('a.txt', 'v')
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'legacy1.json'), JSON.stringify({ callId: 'legacy1', anchorSeq: 5, path: file, before: 'same', time: 1 }))
+    await store.recordEntry(session, { callId: 'new1', anchorSeq: 6, path: file, before: 'same' })
+    const entries = await store.entriesAfter(session, 5)
+    const links = entries.filter(isLinkEntry)
+    expect(links).toHaveLength(1)
+    expect(links[0]!.ref).toBe('5/legacy1.json') // the new entry links to the legacy real
+    expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1)
+  })
+
+  it('collapses the boundary-recheck + write-tool double record into one real + one link', async () => {
+    const file = await touch('a.txt', 'v')
+    // recheck (boundary) records the current state, then the turn's tool edit
+    // captures the SAME before — the second becomes a link to the first.
+    await store.recordEntry(session, { callId: 'recheck-5', anchorSeq: 5, path: file, before: 'same' })
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'same' })
+    const entries = await store.entriesAfter(session, 5)
+    expect(entries).toHaveLength(2)
+    expect(entries.filter(isLinkEntry)).toHaveLength(1)
+    expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1)
+  })
+
+  it('keeps genuinely different content as separate real snapshots (no false dedup)', async () => {
+    const file = await touch('a.txt', 'v')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'v1' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: 'v2' })
+    const entries = await store.entriesAfter(session, 5)
+    expect(entries.filter(isLinkEntry)).toHaveLength(0)
+    expect(entries).toHaveLength(2)
+  })
+
+  it('restores the correct content when the earliest entry at the target is a link', async () => {
+    const file = await touch('a.txt', 'v')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    await writeFile(file, 'edited', 'utf8')
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: 'edited' })
+    await writeFile(file, 'final', 'utf8')
+    await store.recordEntry(session, { callId: 'c3', anchorSeq: 7, path: file, before: 'edited' }) // link to c2
+    const outcome = await store.restoreAfter(session, 7, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('edited')
+  })
+
+  it('writes full copies when dedup is disabled', async () => {
+    const file = await touch('a.txt', 'v')
+    const s = new SnapshotStore(root, { dedup: false })
+    await s.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'same' })
+    await s.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: 'same' })
+    const entries = await s.entriesAfter(session, 5)
+    expect(entries.filter(isLinkEntry)).toHaveLength(0)
+    expect(entries).toHaveLength(2)
+  })
+
+  it('persists and rereads link entries across a restart (new format read)', async () => {
+    const file = await touch('a.txt', 'v')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'X' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: 'X' }) // link
+    const reopened = new SnapshotStore(root)
+    await writeFile(file, 'changed', 'utf8')
+    const outcome = await reopened.restoreAfter(session, 6, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('X')
+  })
+
+  it('seeds dedup state from disk after a restart so identical content still links', async () => {
+    const file = await touch('a.txt', 'v')
+    const s1 = new SnapshotStore(root)
+    await s1.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'X' })
+    const s2 = new SnapshotStore(root)
+    await s2.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: 'X' })
+    const entries = await s2.entriesAfter(session, 5)
+    expect(entries.filter(isLinkEntry)).toHaveLength(1)
+    expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1)
+  })
+
+  it('materializes links before dropping the referenced group during prune (no dangling)', async () => {
+    const file = await touch('a.txt', 'v')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 1, path: file, before: 'A' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 2, path: file, before: 'A' })
+    await store.recordEntry(session, { callId: 'c3', anchorSeq: 3, path: file, before: 'A' })
+    await store.prune(session, 1)
+    const entries = await store.entriesAfter(session, 1)
+    expect(entries).toHaveLength(1)
+    const survivor = entries[0]!
+    if (isLinkEntry(survivor)) throw new Error('expected a materialized real snapshot')
+    expect(survivor.before).toBe('A')
+    // Reopen on disk and confirm the surviving entry restores without a dangling link.
+    const reopened = new SnapshotStore(root)
+    await writeFile(file, 'changed', 'utf8')
+    const outcome = await reopened.restoreAfter(session, 1, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('A')
+  })
+
+  it('reports a dangling (corrupt) link as a per-file failure, never silently skipping', async () => {
+    const file = await touch('a.txt', 'v')
+    await mkdir(store.anchorDir(session, 6), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 6), 'c2.json'), JSON.stringify({ callId: 'c2', anchorSeq: 6, path: file, ref: '99/missing.json', time: 1 }))
+    const outcome = await store.restoreAfter(session, 6, unlink)
+    expect(outcome.failed).toHaveLength(1)
+    expect(outcome.failed[0]!.path).toBe(file)
+    expect(outcome.restored).toEqual([])
+    expect(outcome.deleted).toEqual([])
   })
 })
