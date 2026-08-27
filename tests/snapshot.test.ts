@@ -369,6 +369,12 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     expect(links).toHaveLength(1)
     expect(links[0]!.ref).toBe('5/legacy1.json') // the new entry links to the legacy real
     expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1)
+    // The link is not just structural: restoring through it pulls the LEGACY
+    // (old-format) real content back, proving new-reads-old actually works.
+    await writeFile(file, 'changed', 'utf8')
+    const outcome = await store.restoreAfter(session, 6, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('same')
   })
 
   it('collapses the boundary-recheck + write-tool double record into one real + one link', async () => {
