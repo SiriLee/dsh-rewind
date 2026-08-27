@@ -320,6 +320,20 @@ export class SnapshotStore {
 
   private lastPruneAt = 0
 
+  /**
+   * Monotonic entry clock. Date.now() has 1ms precision, so back-to-back
+   * commits in the same millisecond would TIE on the entry `time` field and
+   * entriesAfter's (anchorSeq, time) sort would fall back to the readdir
+   * order — filesystem-dependent, so a re-read could pick the WRONG "earliest"
+   * version for a path. Bumping past the previous commit keeps the capture
+   * order reproducible after a re-read. The read-modify-write below is
+   * synchronous (before the first await), so concurrent commits can never
+   * observe the same value. Across restarts wall-clock monotonicity holds
+   * (restart gaps dwarf 1ms); a backwards NTP step is the only way to break
+   * it, and even then the in-process order still holds.
+   */
+  private lastEntryTime = 0
+
   constructor(readonly root: string = process.env[SNAPSHOT_ROOT_ENV] ?? DEFAULT_SNAPSHOT_ROOT) {}
 
   /** Absolute path of one session's snapshot directory (id sanitized). */
@@ -338,9 +352,13 @@ export class SnapshotStore {
     entry: Omit<CheckpointEntry, 'time'>,
     opts?: { readonly crash?: (point: CrashPoint) => void },
   ): Promise<void> {
+    // Monotonic time (see lastEntryTime): strictly increasing per store
+    // instance, so same-millisecond commits stay capture-ordered.
+    const time = Math.max(Date.now(), this.lastEntryTime + 1)
+    this.lastEntryTime = time
     const dir = this.anchorDir(sessionId, entry.anchorSeq)
     await mkdir(dir, { recursive: true })
-    const committed: CheckpointEntry = { ...entry, time: Date.now() }
+    const committed: CheckpointEntry = { ...entry, time }
     // Atomic commit: a crash mid-write leaves only a `.tmp` file, never a
     // half-written entry that readEntry would have to guess about.
     await writeJsonAtomic(

@@ -22,7 +22,7 @@
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SnapshotStore, type CrashPoint, type RestoreJournal, type RestoreRunOptions } from '../src/snapshot.ts'
 
 let root: string
@@ -89,6 +89,38 @@ async function seedThreeFileScenario(): Promise<{ a: string; b: string; c: strin
 }
 
 describe('atomic checkpoint commits', () => {
+  it('same-millisecond commits on one file still restore the FIRST capture', async () => {
+    const file = await touch('f.txt', 'v0')
+    // Freeze the clock so both captures land in the same millisecond: without
+    // the monotonic bump the entries tie on `time` and earliestEntries would
+    // depend on the filesystem's readdir order — restoring v1 (the later
+    // capture) instead of v0. With the bump the capture order is
+    // deterministic and reproducible after a re-read.
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'v0' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 5, path: file, before: 'v1' })
+    vi.restoreAllMocks()
+    await writeFile(file, 'v2', 'utf8')
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('v0')
+  })
+
+  it('entry timestamps are strictly increasing within a store', async () => {
+    const file = await touch('f.txt', 'v0')
+    // Frozen clock: two captures in the same millisecond must still get
+    // distinct, capture-ordered timestamps (deterministic assertion of the
+    // monotonic bump — independent of any filesystem readdir order).
+    vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'v0' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 5, path: file, before: 'v1' })
+    vi.restoreAllMocks()
+    // entriesAfter returns newest first, so c2 (later capture) leads.
+    const [later, earlier] = await store.entriesAfter(session, 5)
+    expect(later!.time).toBeGreaterThan(earlier!.time)
+  })
+
   it('a crash between the temp write and the rename commits nothing', async () => {
     const file = await touch('a.txt', 'original')
     await expect(
