@@ -21,24 +21,21 @@ It only rewrites the marker events' `data.turn` (seqs, order, and zstd frame str
 
 ## Known compatibility boundaries
 
-Behavioral notes verified by the compatibility probe suites
-([audit.md](audit.md)) — none of these is a crash:
+Behavioral notes — none of these is a crash — verified by the compatibility
+probe suites; the audit [audit.md](audit.md) is the source of truth and lists
+the probes that pin each one:
 
-- **Session stats / telemetry do not roll back**: whole-log folds count the
-  withdrawn turns, and telemetry records the rewind's marker and ghost-step
-  frame under the reused turn. Expected whole-log semantics.
-- **Withdrawn messages stay searchable and exported**: rewind cuts only the
-  model-visible surface; full-text search and `/export` still see the raw log.
-- **Session titles may regenerate** after a rewind (title derives from the
-  current surface).
-- **Files written by a cancelled tool call** (write happened, no result, no
-  snapshot commit) cannot be restored by "conversation and code".
+- Session stats / telemetry do **not** roll back with a rewind.
+- Withdrawn messages stay **searchable and exported** (`/export` and full-text
+  search read the raw log).
+- Session titles may **regenerate** (title derives from the current surface).
+- Files written by a **cancelled tool call** (write happened, no snapshot
+  commit) cannot be restored by "conversation and code".
 
-**R-OPENSTEP** (harness-side, plugin does not guard): a session log carrying
-an *unclosed* `step/start` (a crash before the agent loop's `finally` closed
-the step) makes any later step activity break token-meter replay (and
-`/compact`). Harness `0.1.1-rc.2` fixes the crash path on load
-(`interruptedTurnClosers` closes leftover step/turn boundaries). A plugin-side
-up-front rejection was implemented and **reverted** (false positives broke the
-rewind feature on real session logs, `177ec14`); the residual runtime-produced
-risk is accepted. Tracked in the compat-audit.
+**R-OPENSTEP** (harness-side, plugin does not guard): a session log carrying an
+*unclosed* `step/start` (a crash before the agent loop's `finally` closed the
+step) makes later step activity break token-meter replay, so `/compact` can
+fail after a rewind. Harness `0.1.1-rc.2` fixes the crash path on load
+(`interruptedTurnClosers`); a plugin-side up-front rejection was tried and
+**reverted** (`177ec14`, false positives on real logs). Deep analysis:
+[audit.md](audit.md) → R-OPENSTEP.

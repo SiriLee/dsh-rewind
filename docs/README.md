@@ -14,7 +14,7 @@ index/navigation entry point.
 | `contract/client-contract.md` | Rewind visibility contract for third-party DOM plugins (`.zh` mirror) | integrators |
 | `compat/audit.md` | Compatibility audit: verified surfaces, recorded findings, probe matrix | maintainers |
 | `compat/troubleshooting.md` | Known issues & repair steps (`.zh` mirror) | users / maintainers |
-| `release/release.md` | Release workflow & DSH peer-version alignment | maintainers |
+| `release/release.md` | Release workflow & DSH peer-version alignment (`.zh` mirror) | maintainers |
 
 Repo-root docs outside `docs/`: `SECURITY.md` (security model) and
 `CONTRIBUTING.md` (contribution guide).
@@ -22,8 +22,7 @@ Repo-root docs outside `docs/`: `SECURITY.md` (security model) and
 ## Conventions
 
 - Bilingual docs use the `.md` / `.zh.md` file split (e.g. `contract/client-contract.md`
-  + `contract/client-contract.zh.md`); `release/release.md` is intentionally bilingual
-  in a single file.
+  + `contract/client-contract.zh.md`, `release/release.md` + `release/release.zh.md`).
 - `compat/audit.md` is the single source of truth for compatibility conclusions;
   other docs link to it instead of restating them.
 - Cross-links are relative so the whole `docs/` directory stays relocatable — and it

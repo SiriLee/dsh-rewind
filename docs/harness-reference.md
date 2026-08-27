@@ -45,6 +45,10 @@ Also under `docs/` at the repo root: `persistence-catalog.md` (full
 
 ## Plugin source layout
 
+The module map below duplicates `AGENTS.md` (`Layout at a glance`), which is
+the canonical source; this block only adds the finer-grained client-side files
+and packaging entries.
+
 ```
 src/index.ts            host plugin: /rewind command + checkpoint pipeline (tools/execute|post-execute)
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing

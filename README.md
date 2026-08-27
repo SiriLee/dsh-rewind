@@ -168,7 +168,7 @@ node scripts/verify-host.mjs   # 端到端验证构建产物
 npm version patch && git push origin main --tags
 ```
 
-一次性 npm 侧配置与完整流程：见 [docs/release/release.md](docs/release/release.md)。
+一次性 npm 侧配置与完整流程：见 [docs/release/release.zh.md](docs/release/release.zh.md)。
 
 ## 许可
 
