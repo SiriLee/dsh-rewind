@@ -383,6 +383,29 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1)
   })
 
+  it('realistic double-record via the boundary recheck + next tool capture is deduped', async () => {
+    const file = await touch('a.txt', 'A')
+    // Turn 1: a tool edits A→X; the recordEntry captures before=A.
+    await store.recordEntry(session, { callId: 'tool1', anchorSeq: 5, path: file, before: 'A' })
+    await writeFile(file, 'X', 'utf8')
+    // Turn 2 boundary: reconcileTracked re-reads the tracked file; the state
+    // changed to X, so it records a before=X entry at the boundary.
+    const tracked = await store.trackedPaths(session)
+    const states = new Map<string, string | null>()
+    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    // Turn 2 tool: edits X→Y; the capture before is ALSO X — dedup turns this
+    // into a link to the boundary's X entry instead of a second full copy.
+    await store.recordEntry(session, { callId: 'tool2', anchorSeq: 7, path: file, before: 'X' })
+    const entries = await store.entriesAfter(session, 5)
+    expect(entries.filter(isLinkEntry)).toHaveLength(1)
+    expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(2) // A@5, X@7(recheck)
+    // Rewinding to the second turn restores X (through the earliest X entry).
+    await writeFile(file, 'Y', 'utf8')
+    const outcome = await store.restoreAfter(session, 7, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('X')
+  })
+
   it('keeps genuinely different content as separate real snapshots (no false dedup)', async () => {
     const file = await touch('a.txt', 'v')
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'v1' })
