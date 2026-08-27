@@ -32,7 +32,7 @@ them at runtime, so the published tarball does not carry them.
 - `src/session-cwd.ts` — session working-directory resolution (fs-tools rule)
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation
 - `scripts/` — `build.mjs` (artifacts), `verify-host.mjs` (host verification)
-- `docs/` — organized: `contract/` (client contract), `compat/` (audit + troubleshooting), `release/`, plus `harness-reference.md`
+- `docs/` — organized: `contract/` (client contract), `compat/` (audit + troubleshooting), `release/`, plus `harness-reference.md`, `format.md`, `architecture.md`; repo root holds `SECURITY.md` and `CONTRIBUTING.md`
 - `tests/` — vitest suites (rewind / snapshot / hidden / session-cwd / integration)
 
 ## Conventions

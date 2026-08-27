@@ -8,11 +8,16 @@ index/navigation entry point.
 
 | Path | Purpose | Audience |
 | --- | --- | --- |
+| `architecture.md` | Module layering, rewind/checkpoint pipelines, compatibility strategy, roadmap | maintainers |
+| `format.md` | Durable on-disk format spec (checkpoint entries + restore journals) | maintainers |
 | `harness-reference.md` | DeepSeek Harness interface reference + plugin source layout | maintainers |
 | `contract/client-contract.md` | Rewind visibility contract for third-party DOM plugins (`.zh` mirror) | integrators |
 | `compat/audit.md` | Compatibility audit: verified surfaces, recorded findings, probe matrix | maintainers |
 | `compat/troubleshooting.md` | Known issues & repair steps (`.zh` mirror) | users / maintainers |
 | `release/release.md` | Release workflow & DSH peer-version alignment | maintainers |
+
+Repo-root docs outside `docs/`: `SECURITY.md` (security model) and
+`CONTRIBUTING.md` (contribution guide).
 
 ## Conventions
 

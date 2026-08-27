@@ -142,7 +142,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## 安全
 
-本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。工作区文件仅在「回退对话和代码」时被改写，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。删除 `~/.dsh/rewind-snapshots/` 仅清除文件备份（对话回退不受影响），插件会自动重建。
+本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。工作区文件仅在「回退对话和代码」时被改写，备份与还原都限定在 `~/.dsh/rewind-snapshots/` 内。不触碰你的 git 仓库，无网络请求，不访问任何凭据。删除 `~/.dsh/rewind-snapshots/` 仅清除文件备份（对话回退不受影响），插件会自动重建。完整安全模型：[SECURITY.md](SECURITY.md)。
 
 ## 开发
 
@@ -157,6 +157,8 @@ node scripts/verify-host.mjs   # 端到端验证构建产物
 `prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的 `lib/` 与 `LICENSE`。
 
 维护者：模块地图与 harness 接口参考见 [docs/harness-reference.md](docs/harness-reference.md)
+
+贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## 发布
 

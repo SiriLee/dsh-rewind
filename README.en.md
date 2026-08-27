@@ -145,7 +145,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 ## Security
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically.
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `~/.dsh/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. Full security model: [SECURITY.md](SECURITY.md).
 
 ## Development
 
@@ -160,6 +160,8 @@ node scripts/verify-host.mjs   # end-to-end verification of the built artifact
 `prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
 
 Maintainers: the module map and harness interface reference live in [docs/harness-reference.md](docs/harness-reference.md).
+
+Contributing guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Release
 
