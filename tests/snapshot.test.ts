@@ -488,4 +488,45 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     expect(outcome.restored).toEqual([])
     expect(outcome.deleted).toEqual([])
   })
+
+  it('applies a good action AND reports a dangling link in the same restore', async () => {
+    const good = await touch('good.txt', 'v')
+    const broken = await touch('broken.txt', 'v')
+    await store.recordEntry(session, { callId: 'g', anchorSeq: 5, path: good, before: 'before' })
+    await writeFile(good, 'after', 'utf8')
+    // A corrupt link for a second path at the same target.
+    await writeFile(join(store.anchorDir(session, 5), 'broken.json'), JSON.stringify({ callId: 'broken', anchorSeq: 5, path: broken, ref: '99/missing.json', time: 2 }))
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([good])          // the good path is still restored
+    expect(await readFile(good, 'utf8')).toBe('before')
+    expect(outcome.failed).toHaveLength(1)            // the dangling link is reported, not silent
+    expect(outcome.failed[0]!.path).toBe(broken)
+  })
+
+  it('dedups two created (before null) states for the same file into a link', async () => {
+    const file = await touch('a.txt', 'v')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: null })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: null })
+    const entries = await store.entriesAfter(session, 5)
+    expect(entries.filter(isLinkEntry)).toHaveLength(1)   // c2 links to c1
+    expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1)
+  })
+
+  it('collapses a long identical run into one real plus links', async () => {
+    const file = await touch('a.txt', 'v')
+    for (let seq = 1; seq <= 5; seq++) {
+      await store.recordEntry(session, { callId: `c${seq}`, anchorSeq: seq, path: file, before: 'same' })
+    }
+    const entries = await store.entriesAfter(session, 1)
+    expect(entries.filter(isLinkEntry)).toHaveLength(4)          // c2..c5 link to c1
+    expect(entries.filter(e => !isLinkEntry(e))).toHaveLength(1) // c1 real
+  })
+
+  it('reports the correct impact when the earliest entry at the target is a link', async () => {
+    const file = await touch('a.txt', 'v')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'X' })
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file, before: 'X' }) // link
+    await writeFile(file, 'Y', 'utf8')
+    expect(await store.impactsAfter(session, 6)).toEqual([{ path: file, action: 'restore' }])
+  })
 })
