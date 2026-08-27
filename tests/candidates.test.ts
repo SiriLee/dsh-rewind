@@ -66,12 +66,12 @@ describe('rewindCandidatesOf', () => {
     expect(rewindCandidatesOf(chat, new Set()).map(candidate => candidate.seq)).toEqual([1, 0])
   })
 
-  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (50) by default', () => {
-    const nodes = Array.from({ length: 55 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
+  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (100) by default', () => {
+    const nodes = Array.from({ length: 105 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
     const candidates = rewindCandidatesOf(snap(nodes), new Set())
-    expect(candidates).toHaveLength(50)
-    expect(candidates[0]!.seq).toBe(54)
-    expect(candidates[49]!.seq).toBe(5)
+    expect(candidates).toHaveLength(100)
+    expect(candidates[0]!.seq).toBe(104)
+    expect(candidates[99]!.seq).toBe(5)
   })
 
   it('respects an explicit limit', () => {

@@ -23,11 +23,12 @@ export const PREVIEW_CHARS = 80
 /**
  * Default cap on how many user messages the rewind picker lists (newest kept).
  *
- * A fixed 10 made long sessions look "incomplete" (only the newest 10 shown).
- * 50 keeps the picker scrollable/searchable via the popupSelect shell while
- * covering far longer sessions; callers can still pass an explicit `limit`.
+ * Matches the snapshot store's MAX_ANCHOR_GROUPS (100), so the picker shows
+ * every anchor group that can still restore file backups; 100 stays
+ * scrollable/searchable via the popupSelect shell, and callers can still
+ * pass an explicit `limit`.
  */
-export const DEFAULT_CANDIDATE_LIMIT = 50
+export const DEFAULT_CANDIDATE_LIMIT = 100
 
 /** One selectable rewind target. */
 export interface RewindCandidate {

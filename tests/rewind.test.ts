@@ -188,13 +188,13 @@ describe('listRewindCandidates', () => {
     expect(candidates.map(c => c.seq)).toEqual([2, 0])
   })
 
-  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (50) by default', () => {
-    const events: readonly SessionEvent[] = Array.from({ length: 55 }, (_, i) => userEvent(i, `msg ${i}`))
+  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (100) by default', () => {
+    const events: readonly SessionEvent[] = Array.from({ length: 105 }, (_, i) => userEvent(i, `msg ${i}`))
     const surface = events.map(e => e.seq)
     const candidates = listRewindCandidates(events, surface)
-    expect(candidates).toHaveLength(50)
-    expect(candidates[0]!.seq).toBe(54)
-    expect(candidates[49]!.seq).toBe(5)
+    expect(candidates).toHaveLength(100)
+    expect(candidates[0]!.seq).toBe(104)
+    expect(candidates[99]!.seq).toBe(5)
   })
 
   it('renders candidates with a time + preview line', () => {
