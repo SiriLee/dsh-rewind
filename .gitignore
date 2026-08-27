@@ -1,5 +1,6 @@
 node_modules/
 lib/
+AGENTS.override.md
 *.tsbuildinfo
 .DS_Store
 *.log
