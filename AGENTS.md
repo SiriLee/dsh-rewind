@@ -19,7 +19,7 @@
 | `npm run build` | esbuild → `lib/` (`index.js` host ESM, `client.js` client closure, `types/` declarations) |
 | `npm run typecheck` | tsc --noEmit (host / client / client-test configs) |
 | `npm test` | vitest |
-| `npm run verify:host` | end-to-end host verification (18 checks) |
+| `npm run verify:host` | end-to-end host verification (full check suite) |
 
 `@deepseek-ai/*` dependencies stay external at build time — the DSH host resolves
 them at runtime, so the published tarball does not carry them.

@@ -100,7 +100,7 @@ prune                keeps the newest 100 anchor groups per session and
 - **Test-driven investigation**: `tests/compat-invariants.ts` /
   `compat-interop` / `compat-gaps` probe harness behavior and pin findings in
   `docs/compat/audit.md`; `scripts/verify-host.mjs` runs a real end-to-end
-  rewind + `/compact` chain (18 checks).
+  rewind + `/compact` chain (the full check suite).
 - **Stable machine channels for third parties**: `dsh-rewind-plugin/client`
   exports the pure hidden-span computation; withdrawn rows carry
   `data-dsh-rewind-hidden`; both are semver-protected

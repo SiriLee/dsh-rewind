@@ -23,7 +23,7 @@ npm install            # devDeps from the npm registry
 npm run build          # esbuild → lib/ (host ESM + client closure + types)
 npm run typecheck      # tsc --noEmit (host / client / client-test)
 npm test               # vitest: unit + compatibility suites
-npm run verify:host    # end-to-end host verification (18 checks)
+npm run verify:host    # end-to-end host verification (full check suite)
 ```
 
 `prepare` runs the build, so `npm pack` / `npm publish` always carry a fresh

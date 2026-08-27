@@ -109,8 +109,9 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
 - This plugin does **not** sandbox other processes or stop them from changing
   files concurrently.
 - It does **not** provide confidentiality or tamper resistance against the
-  same operating-system user (store files are owner-only by default, but the
-  host user remains trusted).
+  same operating-system user: state files are created with the process
+  default permissions (no special modes are set — a standard umask applies),
+  and the host user remains trusted.
 - It does **not** touch git (no refs, index, or worktree operations), makes
   **no network requests**, and does **not** access credentials.
 - It does **not** roll back whole-log state: telemetry, search, and `/export`

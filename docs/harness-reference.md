@@ -60,7 +60,7 @@ src/client/hidden.ts    withdrawn-span computation (hiddenSeqsOf), pure
 src/client/locales.ts   zh / en copy (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
 scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-scripts/verify-host.mjs end-to-end host verification (18 checks)
+scripts/verify-host.mjs end-to-end host verification (full check suite)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration)
 docs/                   maintainer docs: contract/, compat/, release/ subdirectories
 assets/screenshots/     UI screenshots
