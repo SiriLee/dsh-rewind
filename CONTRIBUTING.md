@@ -21,6 +21,7 @@ first), and the docs live under `docs/` with an index in `docs/README.md`.
 ```sh
 npm install            # devDeps from the npm registry
 npm run build          # esbuild → lib/ (host ESM + client closure + types)
+npm run check          # one-shot full gate: typecheck + test + build + verify:host + pack --dry-run
 npm run typecheck      # tsc --noEmit (host / client / client-test)
 npm test               # vitest: unit + compatibility suites
 npm run verify:host    # end-to-end host verification (full check suite)
@@ -31,7 +32,7 @@ npm run verify:host    # end-to-end host verification (full check suite)
 
 ## Before you open a PR
 
-- **Every change must pass** `typecheck` + `test` + `verify:host`.
+- **Every change must pass** `npm run check`.
 - Commit messages use conventional commits with **English** subjects
   (`feat` / `fix` / `docs` / `test` / `refactor` / `chore` / …). Code comments
   are written in English.

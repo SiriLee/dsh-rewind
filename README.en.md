@@ -151,6 +151,7 @@ This plugin only appends rewind-marker events to the session log; it never delet
 
 ```sh
 npm install            # devDeps from the npm registry
+npm run check          # one-shot full gate: typecheck + test + build + verify:host + pack --dry-run
 npm run typecheck      # tsc on all three surfaces (host + client + client-test)
 npm test               # vitest: all unit and compatibility suites
 npm run build          # esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts

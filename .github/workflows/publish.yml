@@ -72,10 +72,7 @@ jobs:
           fi
           echo "Tag and package.json version both = $PKG"
 
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run build
-      - run: node scripts/verify-host.mjs
+      - run: npm run check
 
       # Idempotency guard: makes workflow_dispatch re-runs (and tag pushes of
       # an already-published version) safe.

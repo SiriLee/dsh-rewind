@@ -16,6 +16,7 @@
 ## Common commands
 | Command | Purpose |
 | --- | --- |
+| `npm run check` | one-shot full gate: typecheck + test + build + verify:host + `npm pack --dry-run` |
 | `npm run build` | esbuild → `lib/` (`index.js` host ESM, `client.js` client closure, `types/` declarations) |
 | `npm run typecheck` | tsc --noEmit (host / client / client-test configs) |
 | `npm test` | vitest |
@@ -38,7 +39,7 @@ them at runtime, so the published tarball does not carry them.
 ## Conventions
 - Code comments are written in English; git history uses conventional commits with
   English subjects (`feat`/`fix`/`docs`/`test`/`chore`/...).
-- Every change must pass `typecheck` + `test` + `verify:host`.
+- Every change must pass `npm run check`.
 - When DSH interfaces change, maintain the peer version ranges (see `docs/release/release.md`).
 
 ## Further reading

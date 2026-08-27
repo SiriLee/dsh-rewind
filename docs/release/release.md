@@ -42,9 +42,10 @@ git push origin main --tags   # triggers .github/workflows/publish.yml
   a full build + artifact verification, publishes with `--provenance`
   (Sigstore), and creates a GitHub Release. It is **idempotent** — an already
   published version is skipped.
-- CI (`.github/workflows/ci.yml`) runs the same checks on every push / PR, plus
-  a `npm pack --dry-run` sanity check that the tarball carries `lib/` and
-  `LICENSE`.
+- CI (`.github/workflows/ci.yml`) runs `npm run check` — typecheck + tests +
+  build + artifact verification + a `npm pack --dry-run` — on every push / PR
+  across both Node engines boundary versions; the tarball layout is guarded by
+  `tests/package-layout.test.ts`.
 
 ## DSH version alignment (peer range maintenance)
 
@@ -62,8 +63,7 @@ uses an OR-union covering every published rc tuple series
   extension is needed (exit 0 = nothing to do, exit 1 = update).
 - **Update steps**: append `|| ^<new-tuple>-rc.<n>` to every
   `@deepseek-ai/dsh-*` peer → bump devDependencies to the latest → `npm
-  install` → `npm run typecheck` / `npm test` / `npm run verify:host` →
-  release.
+  install` → `npm run check` → release.
 - **After DSH goes final**: final releases are not bound by the prerelease
   tuple rule, so the peers can converge to a single stable range (e.g.
   `^0.1.x`); this section can then be deleted.

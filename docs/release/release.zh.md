@@ -40,8 +40,9 @@ git push origin main --tags   # 触发 .github/workflows/publish.yml
 - workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整
   构建 + 产物验证，以 `--provenance`（Sigstore）发布并创建 GitHub Release。
   **幂等**——已发布的版本会跳过。
-- CI（`.github/workflows/ci.yml`）在每次 push / PR 跑相同检查，外加
-  `npm pack --dry-run` 校验 tarball 含 `lib/` 与 `LICENSE`。
+- CI（`.github/workflows/ci.yml`）在每次 push / PR 跑 `npm run check`——
+  typecheck + 测试 + 构建 + 产物验证 + `npm pack --dry-run`，且覆盖
+  engines 两个边界版本；tarball 布局由 `tests/package-layout.test.ts` 守护。
 
 ## DSH 版本适配（peer 范围维护）
 
@@ -56,7 +57,6 @@ OR 并集覆盖 DSH 已发布的每个 rc 元组系列（如 `^0.1.0-rc.6 || ^0.
 - **自动检测**：`node scripts/check-dsh-version.mjs` 对比 npm 最新版本与
   peer 覆盖的元组，输出是否需追加（exit 0 无需动作，exit 1 需要）。
 - **更新步骤**：给每个 `@deepseek-ai/dsh-*` peer 追加 `|| ^<新元组>-rc.<n>`
-  → devDependencies 同步升到最新 → `npm install` → `npm run typecheck` /
-  `npm test` / `npm run verify:host` → 发版。
+  → devDependencies 同步升到最新 → `npm install` → `npm run check` → 发版。
 - **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则
   限制，peer 可收敛为稳定的 `^0.1.x` 单范围，此节即可删除。

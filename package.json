@@ -64,6 +64,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.client-test.json",
     "test": "vitest run",
     "verify:host": "node scripts/verify-host.mjs",
+    "check": "npm run typecheck && npm test && npm run build && node scripts/verify-host.mjs && npm pack --dry-run",
     "prepare": "npm run build"
   },
   "publishConfig": {

@@ -148,6 +148,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ```sh
 npm install            # devDeps 来自 npm registry
+npm run check          # 一键全检：typecheck + test + build + verify:host + pack --dry-run
 npm run typecheck      # tsc 三面编译（host + client + client-test）
 npm test               # vitest：全部单元与兼容性测试套件
 npm run build          # esbuild：lib/index.js（host ESM）+ lib/client.js（loader 闭包）+ .d.ts
