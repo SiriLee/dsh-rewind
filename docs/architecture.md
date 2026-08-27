@@ -87,8 +87,10 @@ session/event        user/message boundary: reconcileTracked re-reads every
   (user/message)     tracked file and records a new before-backup for any
                      whose disk state changed since last seen — external
                      edits/deletions enter the record this way.
-prune                keeps the newest 100 anchor groups per session and
-                     recycles terminal restore journals.
+prune                keeps the newest 100 anchor groups per session, storing
+                     identical before-content as in-place links that are
+                     materialized before their group is dropped, and recycles
+                     terminal restore journals.
 ```
 
 ## Compatibility strategy

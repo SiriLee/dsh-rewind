@@ -56,6 +56,20 @@ Semantics:
 - Synthetic re-check entries (external edits/deletions seen at a user-message
   boundary) use `callId = recheck-<anchorSeq>-<sha256(path) first 8 hex>`.
 
+### Dedup link entry
+
+A tracked file that records the same `before` content as its immediately-prior
+entry for that path is stored as a **link** instead of a full copy: the entry
+carries a `ref` (the `<anchorSeq>/<callId>.json` of that prior entry) and omits
+`before`, so identical content is never duplicated across entries. A reader
+resolves the `ref` back to the terminal real snapshot; `before: null` still
+means "the file was created". Because links reference prior entries, `prune`
+materializes a surviving link whose `ref` lands on a group it is about to drop
+before deleting that group, so no kept link is left dangling.
+
+Real entries (with `before`) are unchanged and read identically before and
+after this addition; a link entry is a distinct kind that lacks `before`.
+
 ## Restore journal
 
 One JSON file per restore operation, written **before any mutation** and
@@ -104,9 +118,10 @@ a rollback could not complete). `completed` / `rolled-back` are terminal.
   rescue state for `rollback-running` / `recovery-required` ones). A path
   whose disk already matches is marked done without being touched.
 - **Bounded storage**: `prune` keeps the newest 100 anchor groups per session
-  (`MAX_ANCHOR_GROUPS`), deleting whole anchor directories; it also recycles
-  terminal journals (`completed` / `rolled-back`). Non-terminal and corrupt
-  journals are always kept.
+  (`MAX_ANCHOR_GROUPS`), materializing any surviving dedup link that references
+  a group being dropped before deleting whole anchor directories; it also
+  recycles terminal journals (`completed` / `rolled-back`). Non-terminal and
+  corrupt journals are always kept.
 
 ## Validation and failure policy
 
