@@ -14,7 +14,10 @@
  *  - rollbackRestore() (回滚) returns the workspace to the exact pre-restore
  *    state, idempotently across repeated crashes;
  *  - journal corruption is reported fail-loud, journal IO failure is
- *    non-fatal, and journal files never disturb the existing store paths.
+ *    non-fatal, and journal files never disturb the existing store paths;
+ *  - storage stays bounded: terminal journals are recycled by the same
+ *    per-commit prune pass that enforces the 100-anchor-group cap, while
+ *    crashed (running) and corrupt journals are never destroyed.
  */
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -354,7 +357,7 @@ describe('reconciliation auto-heal and failure reporting', () => {
     }
   })
 
-  it('journal files never disturb entriesAfter/prune and survive them', async () => {
+  it('journal files never disturb entriesAfter/prune; terminal ones are recycled', async () => {
     const a = await touch('a.txt', 'A0')
     for (let seq = 1; seq <= 3; seq++) {
       await store.recordEntry(session, { callId: `c${seq}`, anchorSeq: seq, path: a, before: 'A0' })
@@ -364,13 +367,62 @@ describe('reconciliation auto-heal and failure reporting', () => {
     await store.prune(session, 1) // drops anchor groups 1..2
 
     expect(await store.entriesAfter(session, 1)).toHaveLength(1) // seq 3 kept
-    expect(await store.reconcileRestores(session)).toEqual([]) // completed journals skipped
-    expect((await readdir(store.sessionDir(session))).some(n => n.startsWith('restore-journal-'))).toBe(true)
+    expect(await store.reconcileRestores(session)).toEqual([])
+    // The completed journal was recycled by the prune pass: journal files
+    // never confuse planning, and the storage cap now bounds them too.
+    expect((await readdir(store.sessionDir(session))).some(n => n.startsWith('restore-journal-'))).toBe(false)
 
-    // A second restore still works: journal files never confuse planning.
+    // A second restore still works.
     await writeFile(a, 'A2', 'utf8')
     const outcome = await store.restoreAfter(session, 1, unlink)
     expect(outcome.restored).toEqual([a])
     expect(await readFile(a, 'utf8')).toBe('A0')
+  })
+
+  it('repeated restores recycle terminal journals (bounded storage)', async () => {
+    const a = await touch('a.txt', 'A0')
+    await store.recordEntry(session, { callId: 'ca', anchorSeq: 5, path: a, before: 'A0' })
+    for (let round = 1; round <= 4; round++) {
+      await writeFile(a, `A${round}`, 'utf8')
+      await store.restoreAfter(session, 5, unlink) // one completed journal each
+      expect(await readFile(a, 'utf8')).toBe('A0')
+    }
+    // Every pass recycled the earlier terminal journals: at most the newest
+    // one survives, never one journal per rewind.
+    expect((await readdir(store.sessionDir(session))).filter(n => n.startsWith('restore-journal-'))).toHaveLength(1)
+    expect(await store.reconcileRestores(session)).toEqual([])
+  })
+
+  it('prune recycles completed journals but keeps crashed (running) ones', async () => {
+    const a = await touch('a.txt', 'A0')
+    await store.recordEntry(session, { callId: 'ca', anchorSeq: 5, path: a, before: 'A0' })
+    await writeFile(a, 'A1', 'utf8')
+    // A crashed restore leaves a running journal…
+    await expect(store.restoreAfter(session, 5, unlink, undefined, crashAt('before-action', 0))).rejects.toThrow('simulated host crash')
+    // …then a normal restore completes a second one (beginRestore keeps the
+    // running journal — only terminal journals are recycled).
+    await store.restoreAfter(session, 5, unlink)
+
+    const journalNames = async () => (await readdir(store.sessionDir(session))).filter(n => n.startsWith('restore-journal-'))
+    expect(await journalNames()).toHaveLength(2)
+    await store.prune(session, 1)
+    expect(await journalNames()).toHaveLength(1) // completed recycled, running kept
+    const kept = (await readJournals(store, session))[0]!
+    expect(kept.state).toBe('running')
+    // The surviving crashed op is still reconcilable; since the later normal
+    // restore already reached the same target on disk, reconcile auto-heals
+    // it to 'completed' instead of reporting a false interruption.
+    expect(await store.reconcileRestores(session)).toEqual([])
+    expect((await readJournals(store, session))[0]!.state).toBe('completed')
+  })
+
+  it('corrupt journals are never recycled', async () => {
+    const sessionDir = store.sessionDir(session)
+    await mkdir(sessionDir, { recursive: true })
+    await writeFile(join(sessionDir, 'restore-journal-op-broken.json'), '{"version":1,"id":"op-broken","sessionId":"x",', 'utf8')
+    await store.prune(session, 1)
+    // An unclassifiable journal is kept: destroying it could erase the only
+    // recovery record of an interrupted restore.
+    expect(await store.reconcileRestores(session)).toHaveLength(1)
   })
 })

@@ -592,6 +592,17 @@ export class SnapshotStore {
     actions: PlannedAction[],
     probe: DiskProbe,
   ): Promise<RestoreJournal> {
+    // Recycle terminal journals from earlier restores before persisting the
+    // new intent: a restore-only session never runs recordEntry's prune
+    // pass, so this is what bounds the journal accumulation there.
+    const sessionDir = this.sessionDir(sessionId)
+    try {
+      await this.pruneTerminalJournals(sessionDir, await readdir(sessionDir))
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      // Session dir does not exist yet (no entries ever recorded): nothing
+      // to recycle.
+    }
     const journalActions: RestoreJournalAction[] = []
     for (const action of actions) {
       let rescue: string | null = null
@@ -965,7 +976,10 @@ export class SnapshotStore {
 
   /**
    * Drop the session's oldest anchor groups beyond `keep` (default
-   * {@link MAX_ANCHOR_GROUPS}), deleting their whole directories.
+   * {@link MAX_ANCHOR_GROUPS}), deleting their whole directories. Also
+   * recycles terminal restore journals (see {@link pruneTerminalJournals}),
+   * so the per-commit cap bounds BOTH the checkpoint entries and the journal
+   * accumulation.
    */
   async prune(sessionId: string, keep = MAX_ANCHOR_GROUPS): Promise<void> {
     const sessionDir = this.sessionDir(sessionId)
@@ -976,11 +990,38 @@ export class SnapshotStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw error
     }
+    // Journal recycling must run even when no anchor group is over the cap
+    // (a restore-only session never overflows the 100 groups).
+    await this.pruneTerminalJournals(sessionDir, names)
     const seqs = names.map(Number).filter(seq => Number.isSafeInteger(seq)).sort((a, b) => a - b)
     const excess = seqs.length - keep
     if (excess <= 0) return
     for (const seq of seqs.slice(0, excess)) {
       await rm(this.anchorDir(sessionId, seq), { recursive: true, force: true })
+    }
+  }
+
+  /**
+   * Recycle terminal restore journals (`completed` / `rolled-back`): once an
+   * op finished, its journal's before + rescue content is dead weight that
+   * would otherwise accumulate without bound (one journal per both-mode
+   * rewind). Non-terminal journals (crashed ops awaiting reconcile /
+   * continue / rollback) and unclassifiable (corrupt) ones are ALWAYS kept —
+   * a recovery record that cannot be classified is never destroyed.
+   */
+  private async pruneTerminalJournals(sessionDir: string, names: readonly string[]): Promise<void> {
+    for (const name of names) {
+      if (!name.startsWith(SnapshotStore.JOURNAL_PREFIX) || !name.endsWith('.json')) continue
+      const file = join(sessionDir, name)
+      try {
+        const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<RestoreJournal>
+        if (parsed.state === 'completed' || parsed.state === 'rolled-back') {
+          await rm(file, { force: true })
+        }
+      } catch {
+        // Corrupt or unreadable: keep — never destroy a recovery record we
+        // cannot classify.
+      }
     }
   }
 
