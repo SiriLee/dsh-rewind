@@ -22,7 +22,7 @@ It only rewrites the marker events' `data.turn` (seqs, order, and zstd frame str
 ## Known compatibility boundaries
 
 Behavioral notes verified by the compatibility probe suites
-([compat-audit.md](compat-audit.md)) — none of these is a crash:
+([audit.md](audit.md)) — none of these is a crash:
 
 - **Session stats / telemetry do not roll back**: whole-log folds count the
   withdrawn turns, and telemetry records the rewind's marker and ghost-step

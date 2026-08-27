@@ -90,7 +90,7 @@ for (const needle of ['name', 'inject', 'apply']) {
 for (const needle of ['window.__ModuleLoader__.load', `id: ${JSON.stringify(pkg.name)}`]) {
   if (!bundle.includes(needle)) throw new Error(`client bundle missing ${needle}`)
 }
-// Public contract exports (docs/client-contract.md) must stay reachable.
+// Public contract exports (docs/contract/client-contract.md) must stay reachable.
 const exportStart = clientSource.indexOf('__export(index_exports')
 if (exportStart === -1) throw new Error('client bundle lost its export block (esbuild format changed?)')
 const clientExports = clientSource.slice(exportStart)

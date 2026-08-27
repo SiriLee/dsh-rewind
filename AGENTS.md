@@ -32,15 +32,15 @@ them at runtime, so the published tarball does not carry them.
 - `src/session-cwd.ts` — session working-directory resolution (fs-tools rule)
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation
 - `scripts/` — `build.mjs` (artifacts), `verify-host.mjs` (host verification)
-- `docs/` — client contract, harness interface reference, compatibility audit, release
+- `docs/` — organized: `contract/` (client contract), `compat/` (audit + troubleshooting), `release/`, plus `harness-reference.md`
 - `tests/` — vitest suites (rewind / snapshot / hidden / session-cwd / integration)
 
 ## Conventions
 - Code comments are written in English; git history uses conventional commits with
   English subjects (`feat`/`fix`/`docs`/`test`/`chore`/...).
 - Every change must pass `typecheck` + `test` + `verify:host`.
-- When DSH interfaces change, maintain the peer version ranges (see `docs/release.md`).
+- When DSH interfaces change, maintain the peer version ranges (see `docs/release/release.md`).
 
 ## Further reading
-- Interfaces / compatibility: `docs/harness-reference.md`, `docs/compat-audit.md`
-- Release & DSH version alignment: `docs/release.md`
+- Interfaces / compatibility: `docs/harness-reference.md`, `docs/compat/audit.md`
+- Release & DSH version alignment: `docs/release/release.md`

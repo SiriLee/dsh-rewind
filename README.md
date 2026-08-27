@@ -132,12 +132,12 @@ dsh plugin --profile web add dsh-rewind-plugin
 ## 客户端契约
 
 需要获知哪些转录行被回退撤回的第三方 DOM 插件，应使用 `dsh-rewind-plugin/client` 导出的稳定、与本地化无关的纯函数，切勿解析 `outcome.text`。`data-dsh-rewind-hidden` 属性标记被撤回的行（仅观测性）。
-详见：[docs/client-contract.zh.md](docs/client-contract.zh.md)。
+详见：[docs/contract/client-contract.zh.md](docs/contract/client-contract.zh.md)。
 
 ## 已知问题
 
 1. **导出的日志是完整内容**——回退只是把消息从模型上下文和视图中移除，`/export` 导出的会话日志包含**已撤回的消息**。本插件无法改动导出。
-2. **v0.2.4 及更早版本**回退过的会话，继续对话后可能加载历史失败。可安装 v0.3.3 及之前版本的随附修复工具处理（[完整步骤](docs/troubleshooting.zh.md)）。
+2. **v0.2.4 及更早版本**回退过的会话，继续对话后可能加载历史失败。可安装 v0.3.3 及之前版本的随附修复工具处理（[完整步骤](docs/compat/troubleshooting.zh.md)）。
 3. **v0.3.3 及更早版本**回退过的会话，压缩对话（compact）不可用。新版本已兼容；受影响的旧会话建议新建会话。
 
 ## 安全
@@ -166,7 +166,7 @@ node scripts/verify-host.mjs   # 端到端验证构建产物
 npm version patch && git push origin main --tags
 ```
 
-一次性 npm 侧配置与完整流程：见 [docs/release.md](docs/release.md)。
+一次性 npm 侧配置与完整流程：见 [docs/release/release.md](docs/release/release.md)。
 
 ## 许可
 

@@ -270,6 +270,6 @@ export function apply(ctx: ClientContext): void {
 
 /**
  * Public contract — rewind visibility. Stable, semver-protected; the rest of
- * this module is internal. See `docs/client-contract.md`.
+ * this module is internal. See `docs/contract/client-contract.md`.
  */
 export { hiddenSeqsOf, targetSeqOfArgs, type HiddenChat } from './hidden.ts'

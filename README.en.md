@@ -135,12 +135,12 @@ Third-party DOM plugins that need to know which transcript rows a rewind
 withdrew should consume the stable, locale-independent helpers exported from
 `dsh-rewind-plugin/client` — never parse
 `outcome.text`. The `data-dsh-rewind-hidden` attribute marks withdrawn rows
-(observational only). Details: [docs/client-contract.md](docs/client-contract.md).
+(observational only). Details: [docs/contract/client-contract.md](docs/contract/client-contract.md).
 
 ## Known issues
 
 1. **Exported logs are complete** — a rewind only removes messages from the model context and the view; the exported session log (`/export`) still contains **withdrawn messages**. This plugin cannot alter exports.
-2. **Rewinds from `≤ v0.2.4`** — sessions rewound with these versions may **fail to load history** after more conversation. Install a v0.3.3-or-earlier release and use its bundled repair tool ([docs/troubleshooting.md](docs/troubleshooting.md)).
+2. **Rewinds from `≤ v0.2.4`** — sessions rewound with these versions may **fail to load history** after more conversation. Install a v0.3.3-or-earlier release and use its bundled repair tool ([docs/compat/troubleshooting.md](docs/compat/troubleshooting.md)).
 3. **Rewinds from `≤ v0.3.3`** — compaction (`/compact`) is unavailable for those sessions. Newer versions are compatible; for affected old sessions, start a new session.
 
 ## Security
@@ -169,7 +169,7 @@ Releases go out through GitHub Actions Trusted Publishing (OIDC, no stored `NPM_
 npm version patch && git push origin main --tags
 ```
 
-One-time npm-side setup and the full workflow details: [docs/release.md](docs/release.md).
+One-time npm-side setup and the full workflow details: [docs/release/release.md](docs/release/release.md).
 
 ## License
 

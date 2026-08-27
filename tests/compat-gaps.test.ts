@@ -125,7 +125,7 @@ describe('G3 token-meter usage anchor (probe: baseline behavior around rewind)',
     applyRewind(session, firstUserSeq(session))
     // The rewind marker is the last assistant/message and carries no usage:
     // it resets the anchor to a heuristic estimate. Recorded behavior
-    // difference (docs/compat-audit.md) — the provider usage anchor returns
+    // difference (docs/compat/audit.md) — the provider usage anchor returns
     // on the next real usage-carrying call.
     expect(meter.measure(session).baseline.kind).toBe('estimated')
 

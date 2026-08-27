@@ -1,5 +1,5 @@
 /**
- * Entry-surface test for the public contract (docs/client-contract.md): the
+ * Entry-surface test for the public contract (docs/contract/client-contract.md): the
  * `./client` entry must re-export the canonical implementation — a re-derived
  * copy is how regressions escape (cf. dsh-chat-timeline#6). Behavior is
  * covered by hidden.test.ts; this file locks the entry.

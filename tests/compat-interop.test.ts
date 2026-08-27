@@ -148,7 +148,7 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
     // automatic compaction stay broken for the session.
     //
     // This test PINS the current incompatible behavior as a recorded finding
-    // (docs/compat-audit.md, R-OPENSTEP). The intended fix — reject the
+    // (docs/compat/audit.md, R-OPENSTEP). The intended fix — reject the
     // rewind up front when the log holds an open step — will invert this
     // assertion into "planRewind throws RewindError('open-step')".
     const session = Session.create(SessionId('interop-openstep'))

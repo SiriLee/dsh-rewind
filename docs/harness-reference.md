@@ -21,7 +21,7 @@
 
 Compatibility probes against these subsystems (test-driven investigation, the
 `compat-invariants` / `compat-interop` vitest suites + the `verify-host` real
-`/compact` chain): [compat-audit.md](compat-audit.md).
+`/compact` chain): [compat/audit.md](compat/audit.md).
 
 Also under `docs/` at the repo root: `persistence-catalog.md` (full
 `SessionEventMap`), `tool-catalog.md` (tool inventory), `config-catalog.md`
@@ -58,7 +58,7 @@ src/client/styles.ts    injected styles (dsh design tokens)
 scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
 scripts/verify-host.mjs end-to-end host verification (18 checks)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration)
-docs/                   maintainer docs: harness reference, troubleshooting, release steps
+docs/                   maintainer docs: contract/, compat/, release/ subdirectories
 assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
 package.json            dsh.bundle + dsh.client manifests, optional peerDependencies
