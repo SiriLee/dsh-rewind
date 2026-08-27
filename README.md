@@ -10,9 +10,9 @@ DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消�
 
 刻意聚焦、保持极简，只做一件事：**就地回退到任意远的用户消息**，还能**顺手还原改过的文件**。
 
-- **回退 = 时间回溯**——目标消息及其之后的全部内容（agent 回复、工具调用）同时从**模型上下文**和**渲染对话**中撤回，不新建会话、不切换窗口；目标消息文本会回填输入框，改完可重发。
-- **轻量工作区备份**——行为对齐 Claude Code：只跟踪写文件的工具，写前做轻量备份并**落盘持久化**，不依赖、也不触碰 git 仓库。
-- **信息安全优先**——插件从不删改会话日志（append-only），从不真正删除你的任何内容。
+- **回退 = 时间回溯**——目标消息及其之后的全部内容（agent 回复、工具调用）同时从**模型上下文**和**渲染对话**中撤回，不新建会话、不切换窗口；目标消息文本会回填输入框，改完可重发。**在原理上就真正无感、便捷**。
+- **轻量工作区备份**——行为对齐 Claude Code：只跟踪写文件的工具，写前做轻量备份并**落盘持久化**，不依赖、也不触碰 git 仓库。一个轻型插件，即拥有**完备的智能体回退能力**。
+- **信息安全优先**——插件从不删改会话日志（append-only），从不真正删除你的任何对话。
 
 ## 效果预览
 
@@ -35,16 +35,7 @@ DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消�
 dsh plugin --profile web add dsh-rewind-plugin
 ```
 
-装完重启 `dsh web`（`--profile web`）。
-
 > ⚠️ npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
-
-<details>
-<summary><b>给贡献者：本地 / pin commit 安装</b></summary>
-
-可从本地 checkout 或 pin 的 commit 安装——`dsh plugin --profile web add /path/to/dsh-rewind` 或 `dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>`。git 安装首次会失败：pnpm 默认禁止 git 依赖执行构建脚本，需先在 profile 的 `pnpm-workspace.yaml` 加 `allowBuilds`；之后 pnpm 会执行插件的 `prepare`（完整构建）并装入 profile。
-
-</details>
 
 ## 使用
 
@@ -54,13 +45,11 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 **键盘操作**：候选列表与模式浮层均支持 ↑↓ 移动、Enter 确认、Esc 取消/返回。
 
-回退可以反复进行——可以一步步退到更早的消息；但回退本身**无法撤销**，被撤回的内容仍保留在会话日志中，可手动编辑日志恢复。
-
 <details>
 <summary><b>边界说明</b></summary>
 
-- 「回退对话和代码」的文件还原动作不会再记录新备份。
-- 每次回退都会在日志中追加一条标记事件（详见[原理](#原理)）。
+- 回退可以反复进行——没有阶段或次数限制。
+- 回退本身**无法撤销**，但被撤回的内容仍保留在会话日志中，可手动编辑日志恢复。
 - **插话也能回退**——模型尚未读取的 `steering` 插话消息，同样可作为回退目标。
 - **回退会打断当前正在运行的回合**——确保回退安全执行。
 
@@ -73,7 +62,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 | 维度 | 常见做法 | 本插件 |
 | --- | --- | --- |
 | 对话回退 | Fork 分支新建对话 | **就地回退**——不新建会话、不切窗口，便捷回退 |
-| 文件还原 | 无、git 管理、完整快照 | **写前轻量备份**——写文件前自动存原内容，一键还原（对齐 Claude Code） |
+| 文件还原 | 无还原功能 / git 管理或完整快照 | **写前轻量备份**——写文件前自动存原内容，一键还原（对齐 Claude Code） |
 | 依赖 | 常依赖 Git 仓库或完整快照引擎 | **无依赖**——不依赖 git，普通目录即可用 |
 | 存储开销 | 整树快照占空间大 | **轻量**——只存被写工具改动过的文件，落盘持久化 |
 
@@ -141,17 +130,14 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## 客户端契约
 
-需要获知哪些转录行被回退撤回的第三方 DOM 插件，应使用
-`dsh-rewind-plugin/client` 导出的稳定、与本地化无关的纯函数
-（`hiddenSeqsOf`、`targetSeqOfArgs`），切勿解析 `outcome.text`。
-`data-dsh-rewind-hidden` 属性标记被撤回的行（仅观测性）。
+需要获知哪些转录行被回退撤回的第三方 DOM 插件，应使用 `dsh-rewind-plugin/client` 导出的稳定、与本地化无关的纯函数，切勿解析 `outcome.text`。`data-dsh-rewind-hidden` 属性标记被撤回的行（仅观测性）。
 详见：[docs/client-contract.zh.md](docs/client-contract.zh.md)。
 
 ## 已知问题
 
 1. **导出的日志是完整内容**——回退只是把消息从模型上下文和视图中移除，`/export` 导出的会话日志包含**已撤回的消息**。本插件无法改动导出。
-2. **v0.2.4 及更早版本**回退过的会话，继续对话后可能**加载历史失败**。可安装 v0.4.0 之前的版本，用随附的修复工具处理（[完整步骤](docs/troubleshooting.zh.md)）。
-3. **v0.3.3 及更早版本**回退过的会话，压缩对话（compact）可能不可用。新版本已兼容；受影响的旧会话建议新建会话。
+2. **v0.2.4 及更早版本**回退过的会话，继续对话后可能加载历史失败。可安装 v0.3.3 及之前版本的随附修复工具处理（[完整步骤](docs/troubleshooting.zh.md)）。
+3. **v0.3.3 及更早版本**回退过的会话，压缩对话（compact）不可用。新版本已兼容；受影响的旧会话建议新建会话。
 
 ## 安全
 
@@ -169,7 +155,7 @@ node scripts/verify-host.mjs   # 端到端验证构建产物
 
 `prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的 `lib/` 与 `LICENSE`。
 
-维护者：模块地图与 harness 接口参考见 [docs/harness-reference.md](docs/harness-reference.md)；发布步骤见 [docs/release.md](docs/release.md)。
+维护者：模块地图与 harness 接口参考见 [docs/harness-reference.md](docs/harness-reference.md)
 
 ## 发布
 

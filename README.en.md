@@ -10,9 +10,9 @@ Conversation rewind for DeepSeek Harness: **rewind the conversation to any earli
 
 A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 
-- **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it.
-- **Lightweight workspace backup** — Claude Code-aligned behavior: only file-writing tools are tracked, a lightweight before-backup is **persisted on disk**, and your git repository is never touched or relied on.
-- **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your content.
+- **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it — **truly seamless and convenient by design**.
+- **Lightweight workspace backup** — Claude Code-aligned behavior: only file-writing tools are tracked, a lightweight before-backup is **persisted on disk**, and your git repository is never touched or relied on. One lightweight plugin gives you a **complete** agentic rewind capability.
+- **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your conversation.
 
 ## Preview
 
@@ -35,16 +35,7 @@ Every user message carries a **↶ rewind** button in its action row. Clicking i
 dsh plugin --profile web add dsh-rewind-plugin
 ```
 
-Restart `dsh web` (`--profile web`) after installing.
-
 > ⚠️ The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
-
-<details>
-<summary><b>For contributors: local / pinned-commit install</b></summary>
-
-Install from a local checkout or a pinned commit — `dsh plugin --profile web add /path/to/dsh-rewind` or `dsh plugin --profile web add github:SiriLee/dsh-rewind#<sha>`. A git install fails on first run until you add an `allowBuilds` key to the profile's `pnpm-workspace.yaml` (pnpm blocks git dependencies from running build scripts); after that it runs the plugin's `prepare` (a full build) and installs it.
-
-</details>
 
 ## Usage
 
@@ -54,13 +45,11 @@ Install from a local checkout or a pinned commit — `dsh plugin --profile web a
 
 **Keyboard**: both the candidate picker and the mode popover support ↑↓ to move, Enter to confirm, Esc to cancel/back.
 
-Rewinds can be repeated — step back to earlier messages one at a time; but a rewind itself **cannot be undone**. The withdrawn content stays in the session log and can be recovered by manually editing the log.
-
 <details>
 <summary><b>Edge notes</b></summary>
 
-- The file-restore action of "conversation and code" is not re-backed up.
-- Every rewind appends one marker event to the log (see [How it works](#how-it-works)).
+- Rewinds can be repeated — with no limit on stage or count.
+- A rewind itself **cannot be undone**, but the withdrawn content stays in the session log and can be recovered by manually editing it.
 - **Interruptions rewind too** — a `steering` interruption message the model hasn't read yet is also a valid rewind target.
 - **A rewind interrupts the running turn** — to execute the rewind safely.
 
@@ -73,7 +62,7 @@ Compared with the common approaches, here is the trade-off this plugin makes on 
 | Dimension | Common approach | This plugin |
 | --- | --- | --- |
 | Conversation rewind | Fork / branch a new conversation | **In-place rewind** — no new session, no window switch |
-| File restore | None / git-managed / whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore (aligned with Claude Code) |
+| File restore | No restore feature / git-managed or whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore (aligned with Claude Code) |
 | Dependencies | Often needs a Git repo or a full snapshot engine | **None** — no git required, works on any directory |
 | Storage footprint | Whole-tree snapshots take space | **Lightweight** — only files touched by write tools are stored, persisted on disk |
 
@@ -143,15 +132,15 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 
 Third-party DOM plugins that need to know which transcript rows a rewind
 withdrew should consume the stable, locale-independent helpers exported from
-`dsh-rewind-plugin/client` (`hiddenSeqsOf`, `targetSeqOfArgs`) — never parse
+`dsh-rewind-plugin/client` — never parse
 `outcome.text`. The `data-dsh-rewind-hidden` attribute marks withdrawn rows
 (observational only). Details: [docs/client-contract.md](docs/client-contract.md).
 
 ## Known issues
 
 1. **Exported logs are complete** — a rewind only removes messages from the model context and the view; the exported session log (`/export`) still contains **withdrawn messages**. This plugin cannot alter exports.
-2. **Rewinds from `≤ v0.2.4`** — sessions rewound with these versions may **fail to load history** after more conversation. Install a pre-v0.4.0 release and use its bundled repair tool ([docs/troubleshooting.md](docs/troubleshooting.md)).
-3. **Rewinds from `≤ v0.3.3`** — compaction (`/compact`) may be unavailable for those sessions. Newer versions are compatible; for affected old sessions, start a new session.
+2. **Rewinds from `≤ v0.2.4`** — sessions rewound with these versions may **fail to load history** after more conversation. Install a v0.3.3-or-earlier release and use its bundled repair tool ([docs/troubleshooting.md](docs/troubleshooting.md)).
+3. **Rewinds from `≤ v0.3.3`** — compaction (`/compact`) is unavailable for those sessions. Newer versions are compatible; for affected old sessions, start a new session.
 
 ## Security
 
@@ -164,26 +153,12 @@ npm install            # devDeps from the npm registry
 npm run typecheck      # tsc on all three surfaces (host + client + client-test)
 npm test               # vitest: all unit and compatibility suites
 npm run build          # esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-node scripts/verify-host.mjs   # boot the BUILT host artifact end-to-end (incl. real /compact after rewind)
+node scripts/verify-host.mjs   # end-to-end verification of the built artifact
 ```
-
-`npm test` and `verify-host` include the **compatibility probe suites**
-([docs/compat-audit.md](docs/compat-audit.md)): scenario-generated logs drive the
-real harness packages (token-meter, compaction, session-stats/title/goal folds,
-resume preflight) through rewind markers and assert the compatibility
-invariants. A failing probe is a discovered incompatibility, not a mock
-artifact. One finding is recorded: **R-OPENSTEP** — a log carrying an
-unclosed `step/start` (crash leftover) makes any later step activity,
-including a rewind's ghost-step frame, break token-meter replay (and
-/compact). Harness `0.1.1-rc.2` fixes the crash path (`interruptedTurnClosers`
-closes leftover step/turn boundaries on load). A plugin-side guard was tried
-and reverted: it produced false positives on real session logs (rewind
-feature broken), so the plugin deliberately ships no guard — the residual
-risk (runtime-produced unclosed steps) is accepted.
 
 `prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
 
-Maintainers: the module map and harness interface reference live in [docs/harness-reference.md](docs/harness-reference.md); publishing steps in [docs/release.md](docs/release.md).
+Maintainers: the module map and harness interface reference live in [docs/harness-reference.md](docs/harness-reference.md).
 
 ## Release
 
