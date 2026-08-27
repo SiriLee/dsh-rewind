@@ -529,4 +529,18 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     await writeFile(file, 'Y', 'utf8')
     expect(await store.impactsAfter(session, 6)).toEqual([{ path: file, action: 'restore' }])
   })
+
+  it('treats a traversal (unsafe) ref as an invalid link, never reading outside the store', async () => {
+    const file = await touch('a.txt', 'v')
+    await mkdir(store.anchorDir(session, 6), { recursive: true })
+    // A tampered/corrupt link whose ref tries to escape the session dir.
+    await writeFile(join(store.anchorDir(session, 6), 'c2.json'), JSON.stringify({ callId: 'c2', anchorSeq: 6, path: file, ref: '../outside.json', time: 1 }))
+    // A decoy one level up: it is never read if the ref is not followed.
+    await writeFile(join(root, 'outside.json'), 'decoy', 'utf8')
+    const outcome = await store.restoreAfter(session, 6, unlink)
+    expect(outcome.failed).toHaveLength(1)          // reported, not silent
+    expect(outcome.restored).toEqual([])
+    expect(outcome.deleted).toEqual([])
+    expect(await readFile(join(root, 'outside.json'), 'utf8')).toBe('decoy')
+  })
 })

@@ -63,9 +63,12 @@ entry for that path is stored as a **link** instead of a full copy: the entry
 carries a `ref` (the `<anchorSeq>/<callId>.json` of that prior entry) and omits
 `before`, so identical content is never duplicated across entries. A reader
 resolves the `ref` back to the terminal real snapshot; `before: null` still
-means "the file was created". Because links reference prior entries, `prune`
-materializes a surviving link whose `ref` lands on a group it is about to drop
-before deleting that group, so no kept link is left dangling.
+means "the file was created". A `ref` is validated as a single-level,
+`<digits>/<callId>.json` relative reference (no traversal) so a corrupt or
+hostile ref cannot escape the store root when followed. Because links reference
+prior entries, `prune` materializes a surviving link whose `ref` lands on a
+group it is about to drop before deleting that group, so no kept link is left
+dangling.
 
 Real entries (with `before`) are unchanged and read identically before and
 after this addition; a link entry is a distinct kind that lacks `before`.

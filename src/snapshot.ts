@@ -351,6 +351,19 @@ async function isLinkPath(path: string): Promise<boolean> {
 }
 
 /**
+ * True when a dedup-link `ref` is a SAFE relative reference to a checkpoint
+ * entry — `<digits>/<callId>.json`, a single level below the session dir, with
+ * no traversal or absolute segment. The plugin always writes refs this way
+ * ({@link SnapshotStore.entryRefOf}); this validates a `ref` read back from
+ * disk so a hostile or corrupt ref can never escape the store root when a
+ * restore resolution or prune materialization follows it (mirrors the
+ * `safeSessionId` / `safeFileId` containment guarantee).
+ */
+function isSafeLinkRef(ref: string): boolean {
+  return /^[0-9]+\/[a-zA-Z0-9._-]+\.json$/.test(ref)
+}
+
+/**
  * On-disk checkpoint store. Every write goes straight through `node:fs`, so a
  * restore reliably lands on the real file system.
  */
@@ -452,6 +465,7 @@ export class SnapshotStore {
     const key = `${entry.anchorSeq}:${entry.callId}`
     if (seen.has(key)) throw new Error(`link cycle at ${entry.path} (${key})`)
     seen.add(key)
+    if (!isSafeLinkRef(entry.ref)) throw new Error(`unsafe link ref ${entry.ref} for ${entry.path}`)
     const referenced = await readEntry(join(this.sessionDir(sessionId), entry.ref))
     if (referenced === undefined) throw new Error(`dangling link ${entry.ref} for ${entry.path}`)
     return this.resolveBefore(sessionId, referenced, seen)
@@ -1181,6 +1195,7 @@ export class SnapshotStore {
         if (!file.endsWith('.json')) continue
         const entry = await readEntry(join(this.anchorDir(sessionId, seq), file))
         if (entry === undefined || !isLinkEntry(entry)) continue
+        if (!isSafeLinkRef(entry.ref)) continue // unsafe/corrupt ref: never follow it
         const slash = entry.ref.indexOf('/')
         const refAnchor = slash === -1 ? Number.NaN : Number(entry.ref.slice(0, slash))
         if (!Number.isSafeInteger(refAnchor) || !doomed.has(refAnchor)) continue
