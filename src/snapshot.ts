@@ -1436,12 +1436,16 @@ export class SnapshotStore {
     const paths = new Set<string>()
     for (const anchor of anchors) {
       const files = await readdir(this.anchorDir(sessionId, anchor)).catch(() => [] as string[])
-      if (files.length === 0) continue
+      const here = new Set<string>()
       for (const file of files) {
         if (!file.endsWith('.json')) continue
         const entry = await readEntry(join(this.anchorDir(sessionId, anchor), file))
-        if (entry !== undefined) paths.add(entry.path)
+        if (entry !== undefined) here.add(entry.path)
       }
+      // Skip a group that holds only temp/crash leftovers (no valid entry);
+      // otherwise adopt the newest POPULATED group as the complete snapshot.
+      if (here.size === 0) continue
+      for (const path of here) paths.add(path)
       break
     }
     return paths

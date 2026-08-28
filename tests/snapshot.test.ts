@@ -413,6 +413,17 @@ describe('trackedPathsFromLatestAnchor (newest-group snapshot)', () => {
     expect(await store.trackedPathsFromLatestAnchor(session)).toEqual(new Set([a]))
   })
 
+  it('skips a newer group holding only crash leftovers and uses the prior populated one', async () => {
+    const a = await touch('a.txt', 'A')
+    // Populated group at seq 7.
+    await store.recordEntry(session, { callId: 'a7', anchorSeq: 7, path: a, before: 'A' })
+    // A NEWER group (seq 9) holds only a leftover temp file (no valid .json).
+    const anchor9 = store.anchorDir(session, 9)
+    await mkdir(anchor9, { recursive: true })
+    await writeFile(join(anchor9, '.a9.tmp'), 'partial', 'utf8')
+    expect(await store.trackedPathsFromLatestAnchor(session)).toEqual(new Set([a]))
+  })
+
   it('returns empty when the session has no entries', async () => {
     expect(await store.trackedPathsFromLatestAnchor(session)).toEqual(new Set())
   })
