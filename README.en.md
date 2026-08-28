@@ -69,48 +69,44 @@ Compared with the common approaches, here is the trade-off this plugin makes on 
 
 ## How it works
 
-The mechanism is the same lineage as Claude Code's checkpointing (Claude Code's file history is also per-file records plus a re-scan of tracked files at each message — not a whole-tree snapshot). This plugin implements the same semantics on dsh:
+The whole design rests on two principles, simple but deliberate: **the conversation half "masks, never deletes", and the file half "backs up before the write, reconciles against the real disk before restoring."** It shares lineage with Claude Code's checkpointing — Claude Code's file history is also per-file records plus a re-scan of tracked files at every message, not a whole-tree snapshot. This plugin brings the same semantics to dsh, and makes them lighter and more robust.
 
-### 1. Conversation rewind: in place, without losing the log
+### 1. Conversation rewind: a single "mask", not a delete
 
-The session log is **append-only** — the plugin never rewrites history. A rewind appends an **empty-content marker** that "shadows out" everything after the target message, so both the model and the UI only see the part before it:
+`append-only` is a hard rule: the session log only grows and is never rewritten — the foundation of auditability and privacy. A rewind never touches history; it makes a single move: append **one empty-content message marker** to the end of the log and use it to "mask out" everything after the target message, so the model and the UI see only the part before it.
 
-- The marker is **empty** — it never enters the model context and never renders as conversation content; what you and the agent see is exactly how the conversation looked at the target;
-- Because this is "shadowing" rather than "deleting", **every withdrawn event stays in the log**, fully auditable;
-- The marker reuses the number of the last-started turn and carries its own step frame — so dsh's own machinery (log replay, `/compact`, resume preflight) recognizes it correctly and never mistakes it for a real message (these compatibility details are pinned by dedicated probe tests, see [Development](#development)).
+- The marker is **empty** — it never enters the model context and never renders as conversation content; what you and the model see is exactly how the conversation looked at the target. True "in place".
+- Because this is **masking, not deleting**, every withdrawn event stays in the log — auditable, traceable, and in principle manually recoverable.
+- The marker is deeply **aware of dsh internals**: it reuses the **last-started turn** number (never "last turn + 1") and carries its own **ghost step frame**. So the harness's own log replay, `/compact`, and resume preflight all recognize it and never mistake it for a real message.
 
-<details>
-<summary><b>Implementation details (for maintainers)</b></summary>
+> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with the harness (ghost step frame, reused turn number) are where this plugin is genuinely professional — each is pinned by a dedicated probe test.
 
-The plugin appends an **empty-content marker** `assistant/message` into the session log whose `surfaceOp: { op: 'replace', start, end }` replaces every surface node after the target message with the marker:
+If the agent is running (LLM thinking / streaming), it's force-stopped and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
 
-- The marker carries `sourceEventSeqs` covering every shadowed node, and `Session.append`'s surface rules validate the cut (a contiguous range on the current surface).
-- Because the marker is **empty**, the harness derives it to `null` — it never enters the model context and never renders as conversation content.
-- The marker's **turn number reuses the last started turn** (`markerTurnOf`), never `lastTurn + 1`: the harness numbers its next real turn exactly `last turn/start + 1`, so a `maxTurn + 1` marker would sit *before* that `turn/start` — the client conversation builder rejects the ordering (`…turn-tail… received an update before its start Match`) and history load fails. Reusing an already-consumed turn makes the marker a harmless trailing update on the previous completed turn's tail — it can never collide with a future turn.
-- The marker rides a **ghost step frame** — its own `step/start` … `step/end` with a fresh step number (`markerStepOf`) — because the harness token-meter requires every `assistant/message` to sit inside an open step of the same turn/step; a bare idle-time marker would fail its replay and break `/compact` for the session.
+### 2. File restore: lightweight checkpointing, "back up before the change"
 
-</details>
+The file half follows Claude Code's checkpoint semantics — **per-file before-backups plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
 
-A running turn (LLM thinking / streaming) is force-stopped first and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
+- **Before-backup**: tracks the write-class tools (`write`, `edit`, `str_replace_editor`) and stores the original content **before** each write. Timing is the key — it captures after any approval gate lets the call through: an approval short-circuit can't skip the backup, and a denied call never records; a read failure only warns, never blocks the write. Backups are grouped by conversation turn and **persist on disk** across restarts.
+- **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — edits or deletions made outside the write tools are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
+- **Reconcile against the real disk before restoring**: the most interesting decision. At rewind time the plugin reads each file's current content and compares it to the target state — **only files that actually differ are touched**: modified files are written back to their earliest backup, files created after the target are deleted, files already matching are skipped. Repeated rewinds are therefore **idempotent with zero side effects** and never produce "ghost impact".
+- **Safety boundary**: symlinks / hard links are skipped so one restore can't clobber another name of the same file; paths are sanitized so nothing ever escapes the backup root; a per-file failure never aborts the pass.
 
-### 2. File restore: before-backup + external-change tracking + disk reconciliation
+> **Design highlight**: **"reconcile against the real disk before acting"** is the most insightful decision in this checkpoint design — it never assumes blindly; it trusts the disk, doing what must be done and skipping what must not.
 
-The plugin tracks the write-class tools — `write`, `edit`, `str_replace_editor`:
+### Design highlights
 
-1. **Before-backup**: the original content of every file is stored **before** it is written (captured after any approval gate lets the call through — an approval short-circuit cannot skip the backup, and a denied call never records; a read failure only warns, never blocks the write). Backups are grouped by conversation turn and **persist across restarts** (100 most recent groups per session).
-2. **External changes are tracked too**: at every user-message boundary the plugin re-checks all tracked files — edits or deletions made outside the write tools are recorded as well and restored by a later rewind.
-3. **Real disk reconciliation before restoring**: at rewind time the plugin reads each file's current content and compares it with the target state — **only files that actually differ are touched**: modified files are written back to their earliest backup, files created after the target are deleted, files already matching are skipped (repeated rewinds have zero side effects). Symlinks / hard links are skipped to avoid collateral damage.
-
-<details>
-<summary><b>Implementation details (for maintainers)</b></summary>
-
-1. **Before-capture** at `tools/execute` (the around-dispatch stage): the target file is read; the resolved path + content are held in a pending map. This stage runs only after any pre-execute approval gate let the call through — an `ask` short-circuit (dsh-edit-approval) **cannot skip** the backup, and a denied call never records. If the read fails (e.g. a permission error), the change is simply not backed up — the plugin warns in the log but **does not block the write**.
-2. **Disk commit** at `tools/post-execute`: the before-backup is written under the turn's anchor message seq (`~/.dsh/rewind-snapshots/<session>/<anchor seq>/<callId>.json`).
-3. **External-change tracking** (`reconcileTracked`): at each message boundary the plugin re-scans tracked files and records a `recheck-<anchor>-<hash>` entry anchored to the boundary message whenever the on-disk state differs from the last seen state; the first sighting of a path always records (the first boundary after a restart unconditionally records the current state — redundant but correct, mirroring Claude Code's resume-then-re-stat behavior).
-4. **Restore** (`/rewind @<seq> both`): `planRestore` probes the disk per record — `before === null` (the file did not exist at the target) plans a delete only when the file currently exists (an absent file already matches); `before === 'X'` plans a restore only when the current content differs from X (identical content is a no-op, idempotent); a probe failure is treated conservatively as differing (never silently skipped). Execution: restore = create parent dir + write back content; delete = remove the file (an already-absent file is tolerated as a no-op); symlinks / hard links are skipped (they share an inode with another name; restoring through one would clobber both); failures are recorded per file and never abort the pass.
-5. A tool body that **throws** skips `tools/post-execute`; a `tools/result` safety net clears the pending capture so nothing leaks in memory. Backups persist across host restarts; `prune` keeps the newest 100 anchor groups per session.
-
-</details>
+| Design | Why it matters |
+| --- | --- |
+| A single append is a whole rewind | Minimal action, maximal semantics; the log is never mutated |
+| Mask, never delete | History is always auditable and in principle recoverable |
+| Before-backup, grouped by turn, persisted on disk | Space-efficient, survives restarts, Claude Code-aligned |
+| Identical content stored as a link (dedup) | Hundreds of repeated writes cost almost nothing; links are materialized before their group is evicted, never left dangling |
+| Session-level auto-cleanup | Removes only long-inactive sessions' snapshots; the active session and the chat log are never touched |
+| Reconcile against the real disk before restoring | Idempotent, zero side effects, no collateral damage |
+| Ghost step frame + reused turn number | Deeply compatible with the host, pinned by probe tests |
+| Crash safety (atomic writes + restore journal) | Continue or roll back cleanly after a crash |
+| Pure-function planning + probed store | Fully unit-testable without a host; test-driven |
 
 ## What it deliberately does NOT do
 
