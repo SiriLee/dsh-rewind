@@ -91,9 +91,9 @@ prune                keeps the newest 100 anchor groups per session, storing
                      identical before-content as in-place links that are
                      materialized before their group is dropped, and recycles
                      terminal restore journals.
-pruneStale            cross-session auto-cleanup (default off): whole finished
-                     session dirs idle past the cutoff are removed; the
-                     active session is never targeted.
+pruneStale            cross-session auto-cleanup (default off): whole
+                     long-inactive session dirs past the cutoff are removed;
+                     the active session is never targeted.
 ```
 
 ## Compatibility strategy

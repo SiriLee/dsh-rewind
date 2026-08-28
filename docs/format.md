@@ -125,7 +125,7 @@ a rollback could not complete). `completed` / `rolled-back` are terminal.
   a group being dropped before deleting whole anchor directories; it also
   recycles terminal journals (`completed` / `rolled-back`). Non-terminal and
   corrupt journals are always kept. Across sessions, `pruneStale` removes whole
-  finished-session directories whose newest member stamp is older than a
+  long-inactive session directories whose newest member stamp is older than a
   configurable idle cutoff (default off), so the store root does not grow
   without bound either.
 

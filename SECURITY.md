@@ -59,6 +59,14 @@ than hidden.
 A failed gate fails closed: an invalid target, a missing store, an absent
 backup, or a cancelled invocation aborts the rewind with an error.
 
+**Automatic store deletion (opt-in)**: unrelated to restores, an enabled
+`snapshot-auto-cleanup` background sweep deletes whole session directories of
+**long-inactive** sessions (default off — the store is otherwise only mutated by
+an explicit rewind apply). It is confined to the store root, uses `lstat` (so it
+never follows a symlink out of the root), skips the active session, and never
+touches the conversation log. When disabled (the default), no automatic deletion
+runs.
+
 ## Conversation integrity
 
 The session log is **append-only** — the plugin never deletes or rewrites
@@ -91,7 +99,11 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
   workspace cwd, mirroring the fs tools' own rule (`src/session-cwd.ts`).
 - **Bounded backups**: `prune` keeps the newest 100 anchor groups per session
   (`MAX_ANCHOR_GROUPS`), so backup accumulation cannot grow the store without
-  bound (the exact cap is pinned in `docs/format.md`).
+  bound (the exact cap is pinned in `docs/format.md`). Across sessions, the
+  opt-in `pruneStale` sweep removes whole **long-inactive** session directories
+  (measured by the newest member being idle past `maxAgeDays`); it uses `lstat`
+  (no symlink following), skips dot-prefixed temp files, and never targets the
+  active session (`keepActiveId`).
 
 ## Crash safety
 
