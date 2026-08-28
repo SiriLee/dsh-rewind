@@ -124,7 +124,10 @@ a rollback could not complete). `completed` / `rolled-back` are terminal.
   (`MAX_ANCHOR_GROUPS`), materializing any surviving dedup link that references
   a group being dropped before deleting whole anchor directories; it also
   recycles terminal journals (`completed` / `rolled-back`). Non-terminal and
-  corrupt journals are always kept.
+  corrupt journals are always kept. Across sessions, `pruneStale` removes whole
+  finished-session directories whose newest member stamp is older than a
+  configurable idle cutoff (default off), so the store root does not grow
+  without bound either.
 
 ## Validation and failure policy
 
