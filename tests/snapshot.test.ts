@@ -650,12 +650,13 @@ describe('pruneStale', () => {
   })
 
   it('counts mixed sessions and reports sizes correctly', async () => {
-    await seedSession('a', '1', 'x', '{}', now() - 40 * day) // old -> delete
-    await seedSession('b', '1', 'x', '{}', now() - 1 * day)  // fresh -> keep
-    await seedSession('c', '1', 'x', '{}', now() - 40 * day) // old but active -> skip
+    await seedSession('a', '1', 'x', '{}', now() - 40 * day) // old -> delete (2 bytes)
+    await seedSession('b', '1', 'x', '{}', now() - 1 * day)  // fresh -> keep (2 bytes)
+    await seedSession('c', '1', 'x', '{}', now() - 40 * day) // old but active -> skip (2 bytes)
     const rep = await store.pruneStale({ maxAgeDays: 30, keepActiveId: 'c' })
     expect(rep).toMatchObject({ scanned: 3, deleted: 1, kept: 1, skippedActive: 1 })
-    expect(rep.remainingBytes).toBeGreaterThan(0)
+    expect(rep.freedBytes).toBe(2)      // 'a' (one 2-byte file)
+    expect(rep.remainingBytes).toBe(4)  // 'b' + 'c' (one 2-byte file each)
     await expect(store.exists(join(root, 'a'))).resolves.toBe(false)
     await expect(store.exists(join(root, 'b'))).resolves.toBe(true)
     await expect(store.exists(join(root, 'c'))).resolves.toBe(true)
