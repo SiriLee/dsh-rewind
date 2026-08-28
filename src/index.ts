@@ -788,10 +788,6 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // path joins as soon as a write-class tool commits an entry for it). Used
   // by the user-message boundary re-check below.
   const trackedBySession = new Map<string, Set<string>>()
-  // Per-session last-seen file states (path → content, null = absent) for
-  // the boundary re-check. Empty after a restart: the first boundary then
-  // unconditionally records the current state (redundant but correct).
-  const statesBySession = new Map<string, Map<string, string | null>>()
   // The fs service, captured from the dynamic `ctx.inject(['fs'])` scope and
   // handed to the command path for the post-restore observation sync.
   // Undefined until the service mounts (or in fs-less deployments): the sync
@@ -829,13 +825,16 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
   // analog): every time a user/message lands in a session log, re-read every
   // tracked file of that session and record a before-backup for any whose
-  // on-disk state changed since it was last seen (including EXTERNAL edits
-  // and deletions the write-class capture never saw). The entry is anchored
-  // at the boundary message, so a later rewind to this message restores the
-  // file to this exact state — and a rewind to an earlier message restores
-  // an earlier entry. Subagent sessions are skipped (their edits are not
-  // tracked, matching captureBefore). Runs async off the append hot path;
-  // failures are logged, never blocking the message.
+  // on-disk state changed since it was last recorded (including EXTERNAL
+  // edits and deletions the write-class capture never saw). The change test
+  // uses the store's single last-known-state source, so only CHANGED files
+  // are recorded (a full snapshot; unchanged ones stay in memory, no per-
+  // message dedup file). The entry is anchored at the boundary message, so a
+  // later rewind to this message restores the file to this exact state — and
+  // a rewind to an earlier message restores an earlier entry. Subagent
+  // sessions are skipped (their edits are not tracked, matching captureBefore).
+  // Runs async off the append hot path; failures are logged, never blocking
+  // the message.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     if (event.type !== 'user/message') return
     const header = session.header
@@ -852,12 +851,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
           trackedBySession.set(sessionId, tracked)
         }
         if (tracked.size === 0) return
-        let states = statesBySession.get(sessionId)
-        if (states === undefined) {
-          states = new Map()
-          statesBySession.set(sessionId, states)
-        }
-        await reconcileTracked(store, sessionId, event.seq, tracked, states)
+        await reconcileTracked(store, sessionId, event.seq, tracked)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] boundary re-check failed: ${error instanceof Error ? error.message : String(error)}`)
       }

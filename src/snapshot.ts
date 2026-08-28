@@ -542,7 +542,7 @@ export class SnapshotStore {
   async recordEntry(
     sessionId: string,
     entry: Omit<CheckpointEntry, 'time'>,
-    opts?: { readonly crash?: (point: CrashPoint) => void },
+    opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
   ): Promise<void> {
     // Monotonic time (see lastEntryTime): strictly increasing per store
     // instance, so same-millisecond commits stay capture-ordered.
@@ -556,9 +556,11 @@ export class SnapshotStore {
     // Content dedup: when the new `before` equals the path's most recent
     // recorded content, store a LINK to that prior entry instead of dup content.
     // The prior entry is the immediately-preceding one, giving a linear chain.
+    // `dedup: false` skips the comparison and always writes a full copy — used
+    // by the boundary, which only records CHANGED files and so never links.
     const key = `${sessionId}\0${entry.path}`
     const prior = this.lastEntry.get(key)
-    if (this.dedup && prior !== undefined && prior.content === entry.before) {
+    if (this.dedup && opts?.dedup !== false && prior !== undefined && prior.content === entry.before) {
       const committed: LinkEntry = {
         callId: entry.callId,
         anchorSeq: entry.anchorSeq,
@@ -582,6 +584,19 @@ export class SnapshotStore {
       this.lastPruneAt = now
       await this.prune(sessionId)
     }
+  }
+
+  /**
+   * The effective content recorded by the path's MOST RECENT entry, or
+   * undefined when the path has never been recorded (a fresh tracking sight).
+   * This is the single in-memory "last known state" the boundary uses to
+   * decide whether a tracked file changed — the same source `recordEntry`
+   * dedups against, so there is one content copy and one comparison per
+   * decision, not two. Seeding is idempotent (once per session from disk).
+   */
+  async lastKnownContent(sessionId: string, path: string): Promise<string | null | undefined> {
+    await this.ensureDedupSeeded(sessionId)
+    return this.lastEntry.get(`${sessionId}\0${path}`)?.content
   }
 
   /**
@@ -1430,10 +1445,13 @@ function hashPath(path: string): string {
  * Semantics: the recorded `before` is the file's state at the boundary —
  * the state the boundary message's turn starts from, exactly like the
  * tool-captured entries. An entry is written only when the state differs
- * from the last-seen state (`states`); the FIRST sighting of a path always
- * records (a restart leaves `states` empty, so the first boundary after a
- * restart unconditionally records the current state — redundant but correct,
- * mirroring Claude's resume-then-re-stat behavior).
+ * from the path's most-recent recorded content (`lastKnownContent`); a fresh
+ * sighting (never recorded) always records. The state is compared against the
+ * SAME single in-memory source `recordEntry` dedups against, so there is one
+ * content copy and one comparison — not the two (a boundary map plus the
+ * dedup map) the previous model held. Only CHANGED files are recorded, and
+ * each is a full snapshot (`dedup: false`): a changed state always differs
+ * from the recent record, so the link decision would never apply there.
  *
  * Symlinked / hard-linked paths are never re-checked (restores skip them).
  * A probe failure skips the file with a warning-level no-op; it never
@@ -1443,7 +1461,6 @@ function hashPath(path: string): string {
  * @param sessionId - session whose tracked files to re-check.
  * @param anchorSeq - the boundary user-message seq (entry anchor).
  * @param tracked - the session's tracked path set (read-only here).
- * @param states - per-path last-seen state (path → content, null = absent).
  * @param probe - current-disk state probe (defaults to the real FS).
  * @returns the number of entries recorded.
  */
@@ -1452,7 +1469,6 @@ export async function reconcileTracked(
   sessionId: string,
   anchorSeq: number,
   tracked: ReadonlySet<string>,
-  states: Map<string, string | null>,
   probe: DiskProbe = defaultProbe,
 ): Promise<number> {
   let recorded = 0
@@ -1461,15 +1477,14 @@ export async function reconcileTracked(
       if (await probe.isLink(path)) continue
       const current = await probe.readText(path)
       const state: string | null = current ?? null
-      const prev = states.get(path)
-      if (prev === undefined || prev !== state) {
+      const last = await store.lastKnownContent(sessionId, path)
+      if (last === undefined || last !== state) {
         await store.recordEntry(sessionId, {
           callId: `recheck-${anchorSeq}-${hashPath(path)}`,
           anchorSeq,
           path,
           before: state,
-        })
-        states.set(path, state)
+        }, { dedup: false })
         recorded++
       }
     } catch {

@@ -281,9 +281,8 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
     await writeFile(file, 'externally edited', 'utf8') // external change
     const tracked = await store.trackedPaths(session)
-    const states = new Map<string, string | null>()
 
-    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(1)
     // The recheck entry anchors the external state at the boundary message.
     // Rewinding to it restores the external edit…
     await writeFile(file, 'something else', 'utf8')
@@ -302,9 +301,8 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
     await rm(file, { force: true }) // external delete
     const tracked = await store.trackedPaths(session)
-    const states = new Map<string, string | null>()
 
-    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(1)
     // At the boundary the deletion is already applied: rewinding to 7 is a
     // no-op; rewinding before it recreates the file from the earlier entry.
     expect(await store.impactsAfter(session, 7)).toEqual([])
@@ -318,15 +316,14 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
     await writeFile(file, 'edited by turn', 'utf8')
     const tracked = await store.trackedPaths(session)
-    const states = new Map<string, string | null>()
 
     // First sighting of the path: unconditionally record the current state.
-    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(1)
     // Next boundary: state unchanged → nothing new recorded.
-    expect(await reconcileTracked(store, session, 8, tracked, states)).toBe(0)
+    expect(await reconcileTracked(store, session, 8, tracked)).toBe(0)
     // External change → recorded again.
     await writeFile(file, 'externally edited', 'utf8')
-    expect(await reconcileTracked(store, session, 9, tracked, states)).toBe(1)
+    expect(await reconcileTracked(store, session, 9, tracked)).toBe(1)
   })
 
   it('skips symlinked paths', async () => {
@@ -340,8 +337,7 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     }
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: link, before: 'x' })
     const tracked = await store.trackedPaths(session)
-    const states = new Map<string, string | null>()
-    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(0)
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(0)
   })
 })
 
@@ -397,8 +393,7 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     // Turn 2 boundary: reconcileTracked re-reads the tracked file; the state
     // changed to X, so it records a before=X entry at the boundary.
     const tracked = await store.trackedPaths(session)
-    const states = new Map<string, string | null>()
-    expect(await reconcileTracked(store, session, 7, tracked, states)).toBe(1)
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(1)
     // Turn 2 tool: edits X→Y; the capture before is ALSO X — dedup turns this
     // into a link to the boundary's X entry instead of a second full copy.
     await store.recordEntry(session, { callId: 'tool2', anchorSeq: 7, path: file, before: 'X' })
