@@ -723,12 +723,16 @@ async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandIn
     case 'run-apply': {
       const loaded = await loadCleanupConfig(configPath)
       if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
-      const report = await store.pruneStale({
-        keepActiveId: invocation.agent.session.id,
-        maxAgeDays: loaded.config.maxAgeDays,
-        dryRun: parsed.action === 'run',
-      })
-      return { kind: 'success', text: formatCleanupReport(report) }
+      try {
+        const report = await store.pruneStale({
+          keepActiveId: invocation.agent.session.id,
+          maxAgeDays: loaded.config.maxAgeDays,
+          dryRun: parsed.action === 'run',
+        })
+        return { kind: 'success', text: formatCleanupReport(report) }
+      } catch (error) {
+        return { kind: 'error', text: t('cleanup.runFailed', { detail: error instanceof Error ? error.message : String(error) }) }
+      }
     }
   }
 }
