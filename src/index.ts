@@ -805,6 +805,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     yield ctx.commands.register({
       name: 'snapshot-auto-cleanup',
       description: t('cleanup.description'),
+      input: { hint: t('cleanup.inputHint') },
       handler: invocation => handleSnapshotCleanup(store, invocation),
     })
   }, 'dsh-rewind command')

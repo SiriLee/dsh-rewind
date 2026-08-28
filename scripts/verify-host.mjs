@@ -489,6 +489,10 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   }
 
   check('snapshot-auto-cleanup command registered', typeof cleanupDef?.handler === 'function', JSON.stringify(cleanupDef))
+  // The client only forwards free-form args (on/off/max-age/run) as rawInput
+  // when the command declares `input`; without it, an argued line degrades to
+  // a plain message. Guard that the descriptor keeps it.
+  check('snapshot-auto-cleanup declares input', cleanupDef?.input !== undefined, JSON.stringify(cleanupDef))
 
   // Default: disabled, no config file yet.
   const status0 = await callCleanup('')
