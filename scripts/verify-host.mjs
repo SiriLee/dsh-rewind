@@ -44,7 +44,7 @@ import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
@@ -54,6 +54,11 @@ const aborted = () => new AbortController().signal
 const tmpRoot = await mkdtemp(join(tmpdir(), 'dsh-rewind-verify-'))
 const wsDir = join(tmpRoot, 'ws')
 const snapRoot = join(tmpRoot, 'snapshots')
+// Isolate the cleanup config to a temp sibling (NOT inside snapRoot, which a
+// later check wipes) so the auto-sweep reads an empty/default file during the
+// rewind checks and never touches the developer's real policy.
+const cleanupConfig = join(tmpRoot, 'snapshot-cleanup.json')
+process.env.DSH_SNAPSHOT_CLEANUP_CONFIG = cleanupConfig
 await mkdir(wsDir, { recursive: true })
 
 /** Real-filesystem fs double: resolve returns the real display path. */
@@ -468,7 +473,69 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
 }
 
-// 15. deleting the plugin data directory wipes ONLY file backups: chat
+// 15. /snapshot-auto-cleanup: view/configure, persist to disk, run (dry then
+//     apply), and fail-closed on a corrupt config file.
+{
+  const cleanupDef = commands.get('snapshot-auto-cleanup')
+  const callCleanup = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent, rawInput, signal: aborted() })
+  const exists = async (path) => { try { await stat(path); return true } catch { return false } }
+  const seedDir = async (sessionId, mtime) => {
+    const anchor = join(snapRoot, sessionId, '1')
+    await mkdir(anchor, { recursive: true })
+    await writeFile(join(anchor, 'call.json'), JSON.stringify({ callId: 'call', anchorSeq: 1, path: 'x', before: 'v', time: 1 }), 'utf8')
+    await utimes(join(anchor, 'call.json'), mtime, mtime)
+    await utimes(anchor, mtime, mtime)
+    await utimes(join(snapRoot, sessionId), mtime, mtime)
+  }
+
+  check('snapshot-auto-cleanup command registered', typeof cleanupDef?.handler === 'function', JSON.stringify(cleanupDef))
+
+  // Default: disabled, no config file yet.
+  const status0 = await callCleanup('')
+  check('cleanup default status is disabled', status0.kind === 'success' && /disabled/.test(status0.text), status0.text)
+
+  // Enable persists a config file with enabled:true.
+  const onResult = await callCleanup('on')
+  check('cleanup on succeeds', onResult.kind === 'success', onResult.text)
+  const cfgOn = JSON.parse(await readFile(cleanupConfig, 'utf8'))
+  check('cleanup config persisted (enabled)', cfgOn.enabled === true, JSON.stringify(cfgOn))
+  const statusOn = await callCleanup('')
+  check('cleanup status reflects enabled', statusOn.kind === 'success' && /enabled/.test(statusOn.text), statusOn.text)
+
+  // max-age persists; an invalid value is rejected without writing.
+  const maxAgeResult = await callCleanup('max-age 5')
+  check('cleanup max-age set', maxAgeResult.kind === 'success', maxAgeResult.text)
+  const cfgAge = JSON.parse(await readFile(cleanupConfig, 'utf8'))
+  check('cleanup config persisted (maxAgeDays)', cfgAge.maxAgeDays === 5, JSON.stringify(cfgAge))
+  const badAge = await callCleanup('max-age 0')
+  check('cleanup rejects max-age 0', badAge.kind === 'error', badAge.text)
+
+  // Seed one stale and one fresh session dir, then run (dry, then apply).
+  await seedDir('staleCleanup', new Date(Date.now() - 40 * 86_400_000))
+  await seedDir('freshCleanup', new Date())
+
+  const dry = await callCleanup('run')
+  check('cleanup run dry-run succeeds', dry.kind === 'success', dry.text)
+  check('cleanup dry-run leaves the stale dir', await exists(join(snapRoot, 'staleCleanup')))
+
+  const applied = await callCleanup('run --apply')
+  check('cleanup run --apply succeeds', applied.kind === 'success', applied.text)
+  check('cleanup apply removes the stale dir', !(await exists(join(snapRoot, 'staleCleanup'))))
+  check('cleanup apply keeps the fresh dir', await exists(join(snapRoot, 'freshCleanup')))
+
+  // Disable; status reflects it.
+  const offResult = await callCleanup('off')
+  check('cleanup off succeeds', offResult.kind === 'success', offResult.text)
+  const statusOff = await callCleanup('')
+  check('cleanup status reflects disabled', statusOff.kind === 'success' && /disabled/.test(statusOff.text), statusOff.text)
+
+  // A corrupt config file fail-closes: `run` reports an error, deletes nothing.
+  await writeFile(cleanupConfig, '{broken', 'utf8')
+  const badRun = await callCleanup('run')
+  check('cleanup run fail-closes on corrupt config', badRun.kind === 'error', badRun.text)
+}
+
+// 16. deleting the plugin data directory wipes ONLY file backups: chat
 //     rewinds keep working and both-mode preview reports nothing left to
 //     restore (the store rebuilds from scratch on the next capture).
 {
