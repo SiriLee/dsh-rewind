@@ -2,7 +2,8 @@
 
 The rewind store writes one on-disk `before` backup per tracked file change,
 grouped by its anchor message. Snapshots are deduped within a session and capped
-at the newest 100 anchor groups, but across **finished** sessions the store can
+at the newest 100 anchor groups, but across sessions that are no longer active
+the store can
 still grow without bound. `snapshot-auto-cleanup` is an OPTIONAL global policy
 (off by default) that removes the whole snapshot directory of a session that has
 been **long-inactive** — untouched past a configurable idle cutoff.
@@ -33,7 +34,7 @@ The policy is persisted to `~/.dsh/snapshot-cleanup.json`:
 ```
 
 - `enabled` — whether the automatic sweeps run (default `false`).
-- `maxAgeDays` — how many idle days before a finished session's snapshot dir is
+- `maxAgeDays` — how many idle days before a long-inactive session's snapshot dir is
   removed (default `30`; `0`/negative are rejected, so a broken config can never
   delete everything).
 
