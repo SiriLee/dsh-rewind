@@ -1,9 +1,29 @@
+# Node
 node_modules/
+
+# Build output
 lib/
-AGENTS.override.md
+
+# TypeScript
 *.tsbuildinfo
-.DS_Store
-*.log
+
+# Test / tooling scratch (CI writes vitest JSON reporter output here)
+.tmp/
 tmp/
+
+# Local overrides (git-ignored by design)
+AGENTS.override.md
 hello-dsh.txt
 internal/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

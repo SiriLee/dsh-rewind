@@ -25,3 +25,16 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
       - run: npm run check
+
+      - name: Update tests badge
+        # always() keeps the badge in sync even when tests fail (the color
+        # still reflects the result). The repository/ref gates keep the step in
+        # the canonical repo's main branch only: forks lack the GIST_TOKEN
+        # secret, and the node matrix would otherwise write the badge twice.
+        if: ${{ always() && github.repository == 'SiriLee/dsh-rewind' && github.ref == 'refs/heads/main' && matrix.node == '22.19.0' }}
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: db3b9260351c2b26eb3d201c2ed29df1
+        run: |
+          npx vitest run --reporter=json --outputFile=.tmp/vitest-results.json || true
+          node scripts/update-badge.mjs .tmp/vitest-results.json
