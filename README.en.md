@@ -81,8 +81,6 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 
 > **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with the harness (ghost step frame, reused turn number) are where this plugin is genuinely professional — each is pinned by a dedicated probe test.
 
-If the agent is running (LLM thinking / streaming), it's force-stopped and the rewind waits for quiescence; if it can't stop, the rewind is aborted with an error.
-
 ### 2. File restore: lightweight checkpointing, "back up before the change"
 
 The file half follows Claude Code's checkpoint semantics — **per-file before-backups plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
