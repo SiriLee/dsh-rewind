@@ -48,6 +48,74 @@ export function resolveCleanupConfigPath(): string {
   return process.env[CLEANUP_CONFIG_ENV] ?? join(homedir(), '.dsh', CLEANUP_CONFIG_FILENAME)
 }
 
+/** The state file that records the last automatic-sweep wall-clock time. */
+export const STATE_FILENAME = 'snapshot-cleanup-last-sweep.json'
+
+/**
+ * Resolve the last-sweep state path. It sits beside the config file so the
+ * 24h cadence SURVIVES a host restart (a real deployment is rarely up 24/7,
+ * so an in-memory timestamp would reset on every boot and re-sweep too often).
+ */
+export function resolveCleanupStatePath(): string {
+  return join(dirname(resolveCleanupConfigPath()), STATE_FILENAME)
+}
+
+/**
+ * Read the persisted last-sweep time (epoch ms). A missing or corrupt file
+ * reads as `0` ("never swept"), so the next activity runs the sweep — which is
+ * safe because the sweep is idempotent and never deletes the active session.
+ */
+export async function loadLastSweepAt(path: string): Promise<number> {
+  try {
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { lastSweepAt?: unknown }
+    const value = raw['lastSweepAt']
+    return typeof value === 'number' && Number.isFinite(value) ? value : 0
+  } catch {
+    return 0 // missing / unreadable / corrupt: treat as never swept
+  }
+}
+
+/** Persist the last-sweep time, atomically (temp + rename). */
+export async function saveLastSweepAt(path: string, ms: number): Promise<void> {
+  const tmp = `${path}.tmp`
+  await mkdir(dirname(path), { recursive: true })
+  await writeFile(tmp, JSON.stringify({ lastSweepAt: ms }), 'utf8')
+  await rename(tmp, path)
+}
+
+/** The slice of a store `runAutoCleanupCheck` needs (pruneStale). */
+export interface AutoCleanupPruner {
+  pruneStale(opts: { keepActiveId?: string; maxAgeDays: number; dryRun?: boolean }): Promise<unknown>
+}
+
+/**
+ * The one-shot auto-cleanup check. Loads the policy + persisted last-sweep time
+ * and, only when enabled AND >=24h since the last sweep, runs the sweep and
+ * re-anchors the window on disk. Dependencies (store, paths, logger) are
+ * injected so the composition is unit-testable without a host. Never rejects:
+ * a corrupt config fail-closes (no deletion) and logs, a prune failure logs.
+ *
+ * `sessionId` is the active session directory that must never be pruned.
+ */
+export async function runAutoCleanupCheck(
+  deps: { pruner: AutoCleanupPruner; configPath: string; statePath: string; log: (msg: string) => void },
+  sessionId: string | undefined,
+): Promise<void> {
+  try {
+    const loaded = await loadCleanupConfig(deps.configPath)
+    if (!loaded.ok) {
+      deps.log(`[dsh-rewind] snapshot cleanup config invalid; auto-cleanup skipped: ${loaded.error}`)
+      return
+    }
+    if (!loaded.config.enabled) return
+    if (!shouldRunAutoSweep(await loadLastSweepAt(deps.statePath), Date.now())) return
+    await deps.pruner.pruneStale({ keepActiveId: sessionId, maxAgeDays: loaded.config.maxAgeDays })
+    await saveLastSweepAt(deps.statePath, Date.now())
+  } catch (error) {
+    deps.log(`[dsh-rewind] snapshot auto-cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
 /**
  * Validate one parsed JSON value into a {@link CleanupConfig}. Tolerates
  * unknown extra keys; rejects a present-but-wrong-typed known key. Missing

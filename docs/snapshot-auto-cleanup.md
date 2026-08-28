@@ -46,9 +46,15 @@ the command again.
 
 ## When it runs
 
-At most once per 24 hours (the cadence is not user-configurable), in the
-background, on the first session activity of a day (a user message or a
-completed tool call). It never blocks the activity that triggered it.
+The 24h window is anchored on a **persisted** last-sweep time
+(`~/.dsh/snapshot-cleanup-last-sweep.json`), so a host restart does not reset
+it: the auto-sweep checks **once per process run**, on the first session
+activity of a window (a user message or a completed tool call), and cleans only
+when enabled **and** >=24h since the last sweep. It runs in the background and
+never blocks the activity that triggered it. Because the check happens once per
+run, a change that takes effect immediately is best applied with
+`/snapshot-auto-cleanup run`; editing the config file by hand (or enabling after
+the run's first activity) takes effect on the next run.
 
 ## Safety and boundaries
 

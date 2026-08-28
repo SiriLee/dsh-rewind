@@ -526,6 +526,7 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('cleanup run --apply succeeds', applied.kind === 'success', applied.text)
   check('cleanup apply removes the stale dir', !(await exists(join(snapRoot, 'staleCleanup'))))
   check('cleanup apply keeps the fresh dir', await exists(join(snapRoot, 'freshCleanup')))
+  check('cleanup apply persisted the last-sweep time', await exists(join(tmpRoot, 'snapshot-cleanup-last-sweep.json')))
 
   // Disable; status reflects it.
   const offResult = await callCleanup('off')

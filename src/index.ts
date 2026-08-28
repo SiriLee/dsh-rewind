@@ -43,8 +43,10 @@ import {
   loadCleanupConfig,
   parseCleanupCommand,
   resolveCleanupConfigPath,
+  resolveCleanupStatePath,
+  runAutoCleanupCheck,
   saveCleanupConfig,
-  shouldRunAutoSweep,
+  saveLastSweepAt,
   type CleanupConfig,
 } from './snapshot-cleanup.ts'
 
@@ -70,9 +72,6 @@ const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
-
-/** Last wall-clock time an automatic snapshot-cleanup sweep ran. Module-scoped so every window of one host process shares the 24h throttle. */
-let lastAutoSweepAt = 0
 
 /** Render one host dictionary key in the active locale. */
 function t(key: HostKey, params?: Record<string, string | number>): string {
@@ -638,28 +637,42 @@ async function handleRewind(
 
 /**
  * Lazy 24h auto-cleanup gate. Called on the first session activity of a
- * window (a user message or a tool result); the module-level timestamp makes
- * it at most once per 24h per host process. Runs in the background (voided by
- * callers) and NEVER rejects: a config error fail-closes (deletes nothing)
- * and logs, and a prune failure logs — neither blocks the activity that
- * triggered it. The active `sessionId` is the one directory that must never be
- * pruned; an undefined value (no session in scope) still honors the throttle
- * and just skips no directory.
+ * window (a user message or a tool result). The 24h window is anchored on a
+ * PERSISTED last-sweep timestamp (read from `~/.dsh/snapshot-cleanup-last-sweep.json`
+ * and written back on each run), so a host restart does NOT reset it — a real
+ * deployment is rarely up 24/7, so an in-memory timestamp would re-sweep on
+ * every boot. Runs in the background (voided by callers) and NEVER rejects: a
+ * config error fail-closes (deletes nothing) and logs, and a prune failure
+ * logs — neither blocks the activity that triggered it. The active
+ * `sessionId` is the one directory that must never be pruned; an undefined
+ * value (no session in scope) still honors the throttle and just skips no
+ * directory.
+ */
+/** Whether this process already ran its one-shot auto-cleanup check. */
+let autoSweepChecked = false
+
+/**
+ * One-shot lazy auto-cleanup gate. The FIRST session activity of a run (a user
+ * message or a tool result) performs a single check: it reads the policy and the
+ * persisted last-sweep time and, only when enabled AND >=24h since the last
+ * sweep, runs the sweep and re-anchors the 24h window on disk. After that one
+ * check the process stops considering auto-cleanup (a short-lived run reads the
+ * policy at most once), while the 24h cadence survives a restart because the
+ * last-sweep time is persisted rather than kept in memory. Runs in the
+ * background (voided by callers) and NEVER rejects: an invalid config
+ * fail-closes (deletes nothing) and logs, and a prune failure logs — neither
+ * blocks the activity that triggered it. The active `sessionId` is the one
+ * directory that must never be pruned.
  */
 async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId: string | undefined): Promise<void> {
-  try {
-    if (!shouldRunAutoSweep(lastAutoSweepAt, Date.now())) return
-    lastAutoSweepAt = Date.now()
-    const loaded = await loadCleanupConfig(resolveCleanupConfigPath())
-    if (!loaded.ok) {
-      ctx.logger.warn(`[dsh-rewind] snapshot cleanup config invalid; auto-cleanup skipped: ${loaded.error}`)
-      return
-    }
-    if (!loaded.config.enabled) return
-    await store.pruneStale({ keepActiveId: sessionId, maxAgeDays: loaded.config.maxAgeDays })
-  } catch (error) {
-    ctx.logger.warn(`[dsh-rewind] snapshot auto-cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
-  }
+  if (autoSweepChecked) return
+  autoSweepChecked = true
+  await runAutoCleanupCheck({
+    pruner: store,
+    configPath: resolveCleanupConfigPath(),
+    statePath: resolveCleanupStatePath(),
+    log: msg => ctx.logger.warn(msg),
+  }, sessionId)
 }
 
 /** Render a {@link PruneStaleReport} for the `run` sub-command (dry vs apply). */
@@ -729,6 +742,9 @@ async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandIn
           maxAgeDays: loaded.config.maxAgeDays,
           dryRun: parsed.action === 'run',
         })
+        // A real (non dry-run) sweep also re-anchors the 24h window, so the
+        // automatic sweep does not immediately re-run after a manual one.
+        if (!report.dryRun) await saveLastSweepAt(resolveCleanupStatePath(), Date.now())
         return { kind: 'success', text: formatCleanupReport(report) }
       } catch (error) {
         return { kind: 'error', text: t('cleanup.runFailed', { detail: error instanceof Error ? error.message : String(error) }) }
