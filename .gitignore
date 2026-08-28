@@ -11,8 +11,8 @@ lib/
 .tmp/
 tmp/
 
-# Local overrides (git-ignored by design)
-AGENTS.override.md
+# Local overrides (git-ignored by design; DSH loads the local overlay as AGENTS.local.md)
+AGENTS.local.md
 hello-dsh.txt
 internal/
 
