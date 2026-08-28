@@ -47,7 +47,7 @@ import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { apply as applyRewind } from '../lib/index.js'
+import { apply as applyRewind, SnapshotStore } from '../lib/index.js'
 
 const aborted = () => new AbortController().signal
 
@@ -310,6 +310,27 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('relative path resolved via session cwd', preview.kind === 'success' && preview.text.includes(relPath), preview.text)
   const both = await call(cwdAgent, '@4 both')
   check('both restores cwd-resolved file', both.kind === 'success' && await readFile(relPath, 'utf8') === 'relative original', both.text)
+}
+
+// 6b. Option A narrowing: a second write to an ALREADY-tracked file must not
+//     create a duplicate before-entry — the boundary path records it instead,
+//     so the write-class path only registers NEW files (one full snapshot).
+{
+  const trackSession = buildSession('verify-track')
+  const trackAgent = makeAgent(trackSession.id, trackSession)
+  trackSession.append('user/message', user('tracking question'), { surfaceOp: 'append' })
+  const anchor = trackSession.events.findLast(event => event.type === 'user/message').seq
+  const p = join(wsDir, 'tracked.txt')
+  await writeFile(p, 'v0', 'utf8')
+  await runWrite(trackAgent, 't1', p, 'v1') // first write: registers + before='v0'
+  await runWrite(trackAgent, 't2', p, 'v2') // second write: already tracked → no new entry
+  const trackStore = new SnapshotStore(snapRoot)
+  const forPath = (await trackStore.entriesAfter(trackSession.id, anchor)).filter(e => e.path === p)
+  check('second write to a tracked file adds no duplicate entry', forPath.length === 1, JSON.stringify(forPath))
+  // The single entry holds the pre-edit content, so a rewind still restores it.
+  await writeFile(p, 'v3', 'utf8')
+  const both = await call(trackAgent, `@${anchor} both`)
+  check('rewind both after a tracked re-write restores the original', both.kind === 'success' && await readFile(p, 'utf8') === 'v0', both.text)
 }
 
 // 7. preview on a message with no recorded changes reports none

@@ -1410,6 +1410,42 @@ export class SnapshotStore {
     }
     return paths
   }
+
+  /**
+   * Distinct paths in the NEWEST non-empty anchor group — the complete
+   * tracking snapshot under the always-record boundary model (every message
+   * records every tracked file, so the latest group enumerates exactly the
+   * currently-tracked set). NOT yet used as the seeding source: union
+   * {@link trackedPaths} stays active for backward-compat with pre-always-
+   * record stores, whose newest group would be an incomplete (change-only)
+   * set. Available for the future switch once old stores are gone.
+   */
+  async trackedPathsFromLatestAnchor(sessionId: string): Promise<Set<string>> {
+    const sessionDir = this.sessionDir(sessionId)
+    let names: string[]
+    try {
+      names = await readdir(sessionDir)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return new Set()
+      throw error
+    }
+    const anchors = names
+      .map((name) => Number(name))
+      .filter((seq) => Number.isSafeInteger(seq))
+      .sort((a, b) => b - a)
+    const paths = new Set<string>()
+    for (const anchor of anchors) {
+      const files = await readdir(this.anchorDir(sessionId, anchor)).catch(() => [] as string[])
+      if (files.length === 0) continue
+      for (const file of files) {
+        if (!file.endsWith('.json')) continue
+        const entry = await readEntry(join(this.anchorDir(sessionId, anchor), file))
+        if (entry !== undefined) paths.add(entry.path)
+      }
+      break
+    }
+    return paths
+  }
 }
 
 /** Short content hash used to key synthetic recheck entries. */
@@ -1418,22 +1454,22 @@ function hashPath(path: string): string {
 }
 
 /**
- * Re-check every tracked file at a user-message boundary and record the
- * current on-disk state for any file whose state changed since it was last
- * seen — Claude Code's `fileHistoryMakeSnapshot` re-stats every tracked file
- * at each user message and snapshots the new state (changed files get a new
- * backup version, deleted files a null marker). Here the "new version" is a
- * plain before-backup entry anchored at the boundary message, so an EXTERNAL
- * edit or deletion (never seen by the write-class tool capture) enters the
- * record and can be restored by a later rewind.
+ * Record every tracked file at a user-message boundary — a complete snapshot
+ * of the session's tracked files as-of that boundary message. Each path's
+ * current on-disk state becomes a before-backup entry anchored at the
+ * boundary, so a later rewind to ANY message can restore the file to its
+ * exact state at that message (including EXTERNAL edits and deletions the
+ * write-class capture never saw). Semantics: the recorded `before` is the
+ * file's state at the boundary — the state the boundary message's turn starts
+ * from, exactly like the tool-captured entries.
  *
- * Semantics: the recorded `before` is the file's state at the boundary —
- * the state the boundary message's turn starts from, exactly like the
- * tool-captured entries. An entry is written only when the state differs
- * from the last-seen state (`states`); the FIRST sighting of a path always
- * records (a restart leaves `states` empty, so the first boundary after a
- * restart unconditionally records the current state — redundant but correct,
- * mirroring Claude's resume-then-re-stat behavior).
+ * Every boundary records every tracked file (not just changed ones): an
+ * unchanged file's entry is an in-place content LINK to the most recent
+ * entry for that path (`recordEntry` dedup), so the boundary is always a
+ * recording point yet never duplicates content. A complete recording point
+ * per message is what makes rewind exact — if a boundary were skipped, the
+ * file's state at that message would be indistinguishable from the next
+ * recorded state (e.g. an external edit between two messages would be lost).
  *
  * Symlinked / hard-linked paths are never re-checked (restores skip them).
  * A probe failure skips the file with a warning-level no-op; it never
@@ -1443,7 +1479,6 @@ function hashPath(path: string): string {
  * @param sessionId - session whose tracked files to re-check.
  * @param anchorSeq - the boundary user-message seq (entry anchor).
  * @param tracked - the session's tracked path set (read-only here).
- * @param states - per-path last-seen state (path → content, null = absent).
  * @param probe - current-disk state probe (defaults to the real FS).
  * @returns the number of entries recorded.
  */
@@ -1452,7 +1487,6 @@ export async function reconcileTracked(
   sessionId: string,
   anchorSeq: number,
   tracked: ReadonlySet<string>,
-  states: Map<string, string | null>,
   probe: DiskProbe = defaultProbe,
 ): Promise<number> {
   let recorded = 0
@@ -1461,17 +1495,13 @@ export async function reconcileTracked(
       if (await probe.isLink(path)) continue
       const current = await probe.readText(path)
       const state: string | null = current ?? null
-      const prev = states.get(path)
-      if (prev === undefined || prev !== state) {
-        await store.recordEntry(sessionId, {
-          callId: `recheck-${anchorSeq}-${hashPath(path)}`,
-          anchorSeq,
-          path,
-          before: state,
-        })
-        states.set(path, state)
-        recorded++
-      }
+      await store.recordEntry(sessionId, {
+        callId: `recheck-${anchorSeq}-${hashPath(path)}`,
+        anchorSeq,
+        path,
+        before: state,
+      })
+      recorded++
     } catch {
       // Probe failure: skip this file; the boundary pass never aborts.
     }

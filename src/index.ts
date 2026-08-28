@@ -226,19 +226,35 @@ async function commitEntry(
   if (agent === undefined) return
   const anchorSeq = anchorSeqOf(agent.session, anchorCache)
   if (anchorSeq === undefined) return
-  await store.recordEntry(agent.session.id, {
+  const sessionId = agent.session.id
+  // Seed the tracked set from disk once (like the boundary path) so a first
+  // write after a restart does not mis-classify an on-disk-tracked file.
+  // Concurrent commits for the same session could both find it unset; the
+  // disk read is async, so re-check after the await and MERGE rather than
+  // overwrite, or two writers would clobber each other's path.
+  let tracked = trackedBySession.get(sessionId)
+  if (tracked === undefined) {
+    const fromDisk = await store.trackedPaths(sessionId)
+    tracked = trackedBySession.get(sessionId)
+    if (tracked === undefined) {
+      tracked = fromDisk
+      trackedBySession.set(sessionId, tracked)
+    } else {
+      for (const path of fromDisk) tracked.add(path)
+    }
+  }
+  // Register NEW files only (Option A): the boundary path records every
+  // tracked file at each message (dedup to link), so a per-write record for
+  // an already-tracked file is redundant work + a redundant dedup decision.
+  // A first-time path gets a full before-snapshot (`before` is the state at
+  // the start of this turn — necessarily a real entry, never a link).
+  if (tracked.has(capture.path)) return
+  await store.recordEntry(sessionId, {
     callId: exec.callId,
     anchorSeq,
     path: capture.path,
     before: capture.before ?? null,
   })
-  // The path is now a tracked file: remember it for the boundary re-check
-  // (the per-session set may not have been loaded yet — seed it lazily).
-  let tracked = trackedBySession.get(agent.session.id)
-  if (tracked === undefined) {
-    tracked = new Set()
-    trackedBySession.set(agent.session.id, tracked)
-  }
   tracked.add(capture.path)
 }
 
@@ -788,10 +804,6 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // path joins as soon as a write-class tool commits an entry for it). Used
   // by the user-message boundary re-check below.
   const trackedBySession = new Map<string, Set<string>>()
-  // Per-session last-seen file states (path → content, null = absent) for
-  // the boundary re-check. Empty after a restart: the first boundary then
-  // unconditionally records the current state (redundant but correct).
-  const statesBySession = new Map<string, Map<string, string | null>>()
   // The fs service, captured from the dynamic `ctx.inject(['fs'])` scope and
   // handed to the command path for the post-restore observation sync.
   // Undefined until the service mounts (or in fs-less deployments): the sync
@@ -826,16 +838,19 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     })
   }, 'dsh-rewind command')
 
-  // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
-  // analog): every time a user/message lands in a session log, re-read every
-  // tracked file of that session and record a before-backup for any whose
-  // on-disk state changed since it was last seen (including EXTERNAL edits
-  // and deletions the write-class capture never saw). The entry is anchored
-  // at the boundary message, so a later rewind to this message restores the
-  // file to this exact state — and a rewind to an earlier message restores
-  // an earlier entry. Subagent sessions are skipped (their edits are not
-  // tracked, matching captureBefore). Runs async off the append hot path;
-  // failures are logged, never blocking the message.
+  // User-message boundary snapshot (Claude Code's fileHistoryMakeSnapshot
+  // analog): every time a user/message lands in a session log, record EVERY
+  // tracked file's current on-disk state as a before-backup anchored at the
+  // boundary — so a later rewind to ANY message restores the file to exactly
+  // that state, and an EXTERNAL edit or deletion (never seen by the write-
+  // class capture) enters the record. An unchanged file's entry dedups to a
+  // content LINK to the most recent record for that path (`recordEntry`), so
+  // the boundary is always a full recording point yet duplicates no content.
+  // This is the completeness the write-class capture lacks: files modified by
+  // a non-edit tool between two messages keep their pre-modification state
+  // recoverable at the earlier boundary. Subagent sessions are skipped (their
+  // edits are not tracked, matching captureBefore). Runs async off the append
+  // hot path; failures are logged, never blocking the message.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     if (event.type !== 'user/message') return
     const header = session.header
@@ -852,12 +867,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
           trackedBySession.set(sessionId, tracked)
         }
         if (tracked.size === 0) return
-        let states = statesBySession.get(sessionId)
-        if (states === undefined) {
-          states = new Map()
-          statesBySession.set(sessionId, states)
-        }
-        await reconcileTracked(store, sessionId, event.seq, tracked, states)
+        await reconcileTracked(store, sessionId, event.seq, tracked)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] boundary re-check failed: ${error instanceof Error ? error.message : String(error)}`)
       }
