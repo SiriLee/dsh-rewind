@@ -37,7 +37,16 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import {
+  DEFAULT_CLEANUP_CONFIG,
+  loadCleanupConfig,
+  parseCleanupCommand,
+  resolveCleanupConfigPath,
+  saveCleanupConfig,
+  shouldRunAutoSweep,
+  type CleanupConfig,
+} from './snapshot-cleanup.ts'
 
 export { SnapshotStore } from './snapshot.ts'
 export type { CheckpointEntry, FileImpact, PruneStaleReport, RestoreOutcome, RestoreJournal, RestoreJournalState, RestoreReconcileReport } from './snapshot.ts'
@@ -61,6 +70,9 @@ const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
+
+/** Last wall-clock time an automatic snapshot-cleanup sweep ran. Module-scoped so every window of one host process shares the 24h throttle. */
+let lastAutoSweepAt = 0
 
 /** Render one host dictionary key in the active locale. */
 function t(key: HostKey, params?: Record<string, string | number>): string {
@@ -625,6 +637,103 @@ async function handleRewind(
 }
 
 /**
+ * Lazy 24h auto-cleanup gate. Called on the first session activity of a
+ * window (a user message or a tool result); the module-level timestamp makes
+ * it at most once per 24h per host process. Runs in the background (voided by
+ * callers) and NEVER rejects: a config error fail-closes (deletes nothing)
+ * and logs, and a prune failure logs — neither blocks the activity that
+ * triggered it. The active `sessionId` is the one directory that must never be
+ * pruned; an undefined value (no session in scope) still honors the throttle
+ * and just skips no directory.
+ */
+async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId: string | undefined): Promise<void> {
+  try {
+    if (!shouldRunAutoSweep(lastAutoSweepAt, Date.now())) return
+    lastAutoSweepAt = Date.now()
+    const loaded = await loadCleanupConfig(resolveCleanupConfigPath())
+    if (!loaded.ok) {
+      ctx.logger.warn(`[dsh-rewind] snapshot cleanup config invalid; auto-cleanup skipped: ${loaded.error}`)
+      return
+    }
+    if (!loaded.config.enabled) return
+    await store.pruneStale({ keepActiveId: sessionId, maxAgeDays: loaded.config.maxAgeDays })
+  } catch (error) {
+    ctx.logger.warn(`[dsh-rewind] snapshot auto-cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** Render a {@link PruneStaleReport} for the `run` sub-command (dry vs apply). */
+function formatCleanupReport(report: PruneStaleReport): string {
+  const key: HostKey = report.dryRun ? 'cleanup.runDry' : 'cleanup.runApply'
+  const text = t(key, {
+    deleted: report.deleted,
+    freed: report.freedBytes,
+    kept: report.kept,
+    remaining: report.remainingBytes,
+  })
+  return report.skippedActive > 0 ? `${text}\n${t('cleanup.skipped', { skipped: report.skippedActive })}` : text
+}
+
+/**
+ * Handle one `/snapshot-auto-cleanup` invocation: view or configure the
+ * persistent cleanup policy, or run the sweep now. All writes go through the
+ * validated save, so the config file is never left invalid; a read of an
+ * invalid file fail-closes the sweep (and reports on `status`/`run`).
+ */
+async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandInvocation): Promise<CommandResult> {
+  const parsed = parseCleanupCommand(invocation.rawInput)
+  if ('error' in parsed) return { kind: 'error', text: t('cleanup.usage') }
+  const configPath = resolveCleanupConfigPath()
+  switch (parsed.action) {
+    case 'status': {
+      const loaded = await loadCleanupConfig(configPath)
+      if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
+      return {
+        kind: 'success',
+        text: t('cleanup.status', {
+          state: t(loaded.config.enabled ? 'cleanup.enabled' : 'cleanup.disabled'),
+          days: loaded.config.maxAgeDays,
+          path: configPath,
+          present: t(loaded.fromFile ? 'cleanup.present' : 'cleanup.absent'),
+        }),
+      }
+    }
+    case 'on':
+    case 'off': {
+      const loaded = await loadCleanupConfig(configPath)
+      const next: CleanupConfig = { ...(loaded.ok ? loaded.config : DEFAULT_CLEANUP_CONFIG), enabled: parsed.action === 'on' }
+      try {
+        await saveCleanupConfig(configPath, next)
+      } catch (error) {
+        return { kind: 'error', text: t('cleanup.saveFailed', { detail: error instanceof Error ? error.message : String(error) }) }
+      }
+      return { kind: 'success', text: t(parsed.action === 'on' ? 'cleanup.onOk' : 'cleanup.offOk') }
+    }
+    case 'max-age': {
+      const loaded = await loadCleanupConfig(configPath)
+      const next: CleanupConfig = { ...(loaded.ok ? loaded.config : DEFAULT_CLEANUP_CONFIG), maxAgeDays: parsed.value! }
+      try {
+        await saveCleanupConfig(configPath, next)
+      } catch (error) {
+        return { kind: 'error', text: t('cleanup.saveFailed', { detail: error instanceof Error ? error.message : String(error) }) }
+      }
+      return { kind: 'success', text: t('cleanup.maxAgeOk', { days: parsed.value! }) }
+    }
+    case 'run':
+    case 'run-apply': {
+      const loaded = await loadCleanupConfig(configPath)
+      if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
+      const report = await store.pruneStale({
+        keepActiveId: invocation.agent.session.id,
+        maxAgeDays: loaded.config.maxAgeDays,
+        dryRun: parsed.action === 'run',
+      })
+      return { kind: 'success', text: formatCleanupReport(report) }
+    }
+  }
+}
+
+/**
  * Register the `/rewind` command and the checkpoint pipeline (before-capture
  * at `tools/execute`, disk commit at `tools/post-execute`).
  *
@@ -689,6 +798,11 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       description: t('command.description'),
       handler: invocation => handleRewind(ctx, store, fsService, invocation, inflight),
     })
+    yield ctx.commands.register({
+      name: 'snapshot-auto-cleanup',
+      description: t('cleanup.description'),
+      handler: invocation => handleSnapshotCleanup(store, invocation),
+    })
   }, 'dsh-rewind command')
 
   // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
@@ -708,6 +822,9 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     void (async () => {
       try {
         const sessionId = session.id
+        // Lazy 24h auto-cleanup: a user message is the practical first trigger
+        // of a day; it runs in the background and fail-closes on config error.
+        void maybeRunAutoCleanup(ctx, store, sessionId)
         let tracked = trackedBySession.get(sessionId)
         if (tracked === undefined) {
           tracked = await store.trackedPaths(sessionId)
@@ -742,6 +859,10 @@ export function apply(ctx: Context, config?: RewindConfig): void {
 
     scope.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
       try {
+        // Lazy 24h auto-cleanup: a tool result is the fallback trigger (covers
+        // LLM work that never landed a user/message); the session id is the
+        // directory that must never be pruned.
+        void maybeRunAutoCleanup(ctx, store, exec.agent?.session?.id)
         await commitEntry(store, pending, anchorCache, trackedBySession, exec, result)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
