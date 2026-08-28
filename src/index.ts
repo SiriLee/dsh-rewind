@@ -40,7 +40,7 @@ import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type RestoreOutcome } from './snapshot.ts'
 
 export { SnapshotStore } from './snapshot.ts'
-export type { CheckpointEntry, FileImpact, RestoreOutcome, RestoreJournal, RestoreJournalState, RestoreReconcileReport } from './snapshot.ts'
+export type { CheckpointEntry, FileImpact, PruneStaleReport, RestoreOutcome, RestoreJournal, RestoreJournalState, RestoreReconcileReport } from './snapshot.ts'
 
 export const name = 'dsh-rewind'
 export const inject = ['commands', 'tools']

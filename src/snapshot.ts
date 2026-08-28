@@ -50,6 +50,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import type { Stats } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
@@ -361,6 +362,72 @@ async function isLinkPath(path: string): Promise<boolean> {
  */
 function isSafeLinkRef(ref: string): boolean {
   return /^[0-9]+\/[a-zA-Z0-9._-]+\.json$/.test(ref)
+}
+
+/**
+ * Result of a stale-session cleanup sweep ({@link SnapshotStore.pruneStale}).
+ *
+ * The sweep is ANTI-DELETE: it only ever removes WHOLE session directories
+ * that have been idle past `maxAgeDays`. `scanned` counts every session dir
+ * evaluated; `kept` + `skippedActive` + `deleted` sum to it. `remainingBytes`
+ * is the total of directories that SURVIVE the policy (when `dryRun` it is the
+ * would-be total, not the current on-disk total), so it is comparable across
+ * dry and real runs.
+ */
+export interface PruneStaleReport {
+  /** Number of session directories evaluated. */
+  readonly scanned: number
+  /** Session directories removed (would-be count when `dryRun`). */
+  readonly deleted: number
+  /** Bytes reclaimed (would-be bytes when `dryRun`). */
+  readonly freedBytes: number
+  /** Session directories retained (not past the cutoff, not the active one). */
+  readonly kept: number
+  /** Bytes across the retained + skipped-active directories. */
+  readonly remainingBytes: number
+  /** Directories skipped because they are the active session. */
+  readonly skippedActive: number
+  /** Whether nothing was really removed (the sweep only reported). */
+  readonly dryRun: boolean
+}
+
+/**
+ * Walk one directory tree and compute the total size (regular files only) and
+ * the newest stamp (max `lstat.mtimeMs` over every member, directories
+ * included). `lstat` never follows a symlink, so a hostile symlink inside the
+ * store cannot escape the root or inflate the measurement; a symlink is
+ * counted as one file's own metadata and not descended into. Directory members
+ * beginning with `.` (atomic-write temp leftovers, editor droppings) are
+ * skipped — they are never checkpoint entries.
+ */
+async function dirSizeAndLastActive(dir: string): Promise<{ size: number; lastActiveMs: number }> {
+  let size = 0
+  let lastActiveMs = 0
+  const visit = async (current: string): Promise<void> => {
+    let st: Stats
+    try {
+      st = await lstat(current)
+    } catch {
+      return // already gone or unreadable: skip
+    }
+    if (st.mtimeMs > lastActiveMs) lastActiveMs = st.mtimeMs
+    if (!st.isDirectory()) {
+      size += st.size
+      return
+    }
+    let names: string[]
+    try {
+      names = await readdir(current)
+    } catch {
+      return
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue
+      await visit(join(current, name))
+    }
+  }
+  await visit(dir)
+  return { size, lastActiveMs }
 }
 
 /**
@@ -1253,6 +1320,81 @@ export class SnapshotStore {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
       throw error
     }
+  }
+
+  /**
+   * Cross-session retention sweep: remove WHOLE session directories whose
+   * newest member stamp is older than `maxAgeDays` days of idle, keeping the
+   * active session (`keepActiveId`) untouched. This is the anti-growth policy
+   * for finished sessions (rewind only ever reads the active session, so a
+   * finished session's backups are provably dead weight).
+   *
+   * SAFETY:
+   *  - Only whole session directories are removed (dedup refs are
+   *    session-relative, so there is no cross-session dangling to materialize);
+   *  - the active session is never targeted (`keepActiveId`), and everything
+   *    else is protected by its own mtime — a session that is still written to
+   *    keeps scrolling its newest member stamp forward, so it is never old
+   *    enough to be pruned;
+   *  - a non-positive `maxAgeDays` throws instead of degenerating into a
+   *    mass-destructive `cutoff` in the far future;
+   *  - the walk uses `lstat` (no symlink following) and skips dot-prefixed
+   *    temp left overs, so measurement stays inside the store root.
+   *
+   * `dryRun` computes and reports exactly what would be removed without
+   * deleting anything — the `/snapshot-auto-cleanup run` preview.
+   */
+  async pruneStale(opts: { readonly keepActiveId?: string; readonly maxAgeDays: number; readonly dryRun?: boolean }): Promise<PruneStaleReport> {
+    const { keepActiveId, dryRun = false } = opts
+    const maxAgeDays = opts.maxAgeDays
+    if (!Number.isFinite(maxAgeDays) || maxAgeDays <= 0) {
+      throw new RangeError('pruneStale: maxAgeDays must be a positive finite number')
+    }
+    const cutoffMs = Date.now() - maxAgeDays * 86_400_000
+    let scanned = 0
+    let deleted = 0
+    let freedBytes = 0
+    let kept = 0
+    let skippedActive = 0
+    let remainingBytes = 0
+    const report = (): PruneStaleReport => ({ scanned, deleted, freedBytes, kept, remainingBytes, skippedActive, dryRun })
+
+    let names: string[]
+    try {
+      names = await readdir(this.root)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return report()
+      throw error
+    }
+    for (const name of names) {
+      if (name.startsWith('.')) continue
+      const full = join(this.root, name)
+      let st: Stats
+      try {
+        st = await lstat(full)
+      } catch {
+        continue // raced away or unreadable: skip
+      }
+      if (!st.isDirectory()) continue
+      scanned++
+
+      // Active-session guard: never delete the session the caller is driving.
+      if (keepActiveId !== undefined && safeSessionId(keepActiveId) === name) {
+        skippedActive++
+        remainingBytes += (await dirSizeAndLastActive(full)).size
+        continue
+      }
+      const { size, lastActiveMs } = await dirSizeAndLastActive(full)
+      if (lastActiveMs < cutoffMs) {
+        deleted++
+        freedBytes += size
+        if (!dryRun) await rm(full, { recursive: true, force: true })
+      } else {
+        kept++
+        remainingBytes += size
+      }
+    }
+    return report()
   }
 
   /**

@@ -3,10 +3,10 @@
  * before-backups grouped by anchor message seq, with real files under a
  * temporary directory — exactly the production restore path.
  */
-import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
@@ -548,5 +548,165 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     expect(outcome.restored).toEqual([])
     expect(outcome.deleted).toEqual([])
     expect(await readFile(join(root, 'outside.json'), 'utf8')).toBe('decoy')
+  })
+})
+
+describe('pruneStale', () => {
+  const day = 86_400_000
+  const now = () => Date.now()
+
+  /** Seed one anchor group with an entry file and pin every ancestor mtime. */
+  async function seedSession(sessionId: string, anchor: string, callId: string, body: string, mtimeMs: number): Promise<void> {
+    const anchorDir = join(root, sessionId, anchor)
+    await mkdir(anchorDir, { recursive: true })
+    const file = join(anchorDir, `${callId}.json`)
+    await writeFile(file, body, 'utf8')
+    const t = new Date(mtimeMs)
+    await utimes(file, t, t)
+    await utimes(anchorDir, t, t)
+    await utimes(join(root, sessionId), t, t)
+  }
+
+  /** Seed a journal-only session (an entry directly in the session dir). */
+  async function seedJournal(sessionId: string, name: string, body: string, mtimeMs: number): Promise<void> {
+    const sessionDir = join(root, sessionId)
+    await mkdir(sessionDir, { recursive: true })
+    const file = join(sessionDir, name)
+    await writeFile(file, body, 'utf8')
+    const t = new Date(mtimeMs)
+    await utimes(file, t, t)
+    await utimes(sessionDir, t, t)
+  }
+
+  it('deletes finished-session dirs idle past maxAgeDays and keeps fresh ones', async () => {
+    await seedSession('old', '1', 'a', '{}', now() - 40 * day)
+    await seedSession('fresh', '1', 'a', '{}', now() - 1 * day)
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep).toMatchObject({ deleted: 1, kept: 1, scanned: 2, skippedActive: 0, dryRun: false })
+    expect(rep.freedBytes).toBeGreaterThan(0)
+    await expect(store.exists(join(root, 'old'))).resolves.toBe(false)
+    await expect(store.exists(join(root, 'fresh'))).resolves.toBe(true)
+  })
+
+  it('measures the newest MEMBER mtime, not the session-dir mtime', async () => {
+    await seedSession('nested', '1', 'a', '{}', now() - 40 * day)
+    // A fresh file inside an otherwise old anchor group: newest member wins.
+    const fresh = join(root, 'nested', '1', 'b.json')
+    await writeFile(fresh, '{}', 'utf8')
+    await utimes(join(root, 'nested', '1'), new Date(now() - 40 * day), new Date(now() - 40 * day))
+    await utimes(join(root, 'nested'), new Date(now() - 40 * day), new Date(now() - 40 * day))
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(0)
+    expect(rep.kept).toBe(1)
+  })
+
+  it('never deletes the active session, even when idle past the cutoff', async () => {
+    await seedSession('active', '1', 'a', '{}', now() - 40 * day)
+    const rep = await store.pruneStale({ maxAgeDays: 30, keepActiveId: 'active' })
+    expect(rep.skippedActive).toBe(1)
+    expect(rep.deleted).toBe(0)
+    await expect(store.exists(join(root, 'active'))).resolves.toBe(true)
+  })
+
+  it('reports without deleting when dryRun', async () => {
+    await seedSession('old', '1', 'a', '{}', now() - 40 * day)
+    const rep = await store.pruneStale({ maxAgeDays: 30, dryRun: true })
+    expect(rep.dryRun).toBe(true)
+    expect(rep.deleted).toBe(1)
+    expect(rep.freedBytes).toBeGreaterThan(0)
+    await expect(store.exists(join(root, 'old'))).resolves.toBe(true) // untouched
+  })
+
+  it('uses a strict older-than cutoff (== maxAgeDays is retained)', async () => {
+    vi.useFakeTimers()
+    try {
+      const t0 = 1_700_000_000_000
+      vi.setSystemTime(t0)
+      await seedSession('exact', '1', 'a', '{}', t0 - 30 * day)
+      // Exactly at the cutoff: not older-than => kept.
+      const rep0 = await store.pruneStale({ maxAgeDays: 30 })
+      expect(rep0.deleted).toBe(0)
+      expect(rep0.kept).toBe(1)
+      // One day later: now strictly older than 30 days => deleted.
+      vi.setSystemTime(t0 + day)
+      const rep1 = await store.pruneStale({ maxAgeDays: 30 })
+      expect(rep1.deleted).toBe(1)
+      expect(rep1.kept).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a non-positive maxAgeDays instead of mass-deleting', async () => {
+    await expect(store.pruneStale({ maxAgeDays: 0 })).rejects.toThrow(RangeError)
+    await expect(store.pruneStale({ maxAgeDays: -5 })).rejects.toThrow(RangeError)
+    await expect(store.pruneStale({ maxAgeDays: Number.NaN })).rejects.toThrow(RangeError)
+  })
+
+  it('returns an empty report when the root does not exist', async () => {
+    const missing = new SnapshotStore(join(root, 'nope'))
+    const rep = await missing.pruneStale({ maxAgeDays: 30 })
+    expect(rep).toMatchObject({ scanned: 0, deleted: 0, kept: 0, skippedActive: 0, freedBytes: 0 })
+  })
+
+  it('counts mixed sessions and reports sizes correctly', async () => {
+    await seedSession('a', '1', 'x', '{}', now() - 40 * day) // old -> delete
+    await seedSession('b', '1', 'x', '{}', now() - 1 * day)  // fresh -> keep
+    await seedSession('c', '1', 'x', '{}', now() - 40 * day) // old but active -> skip
+    const rep = await store.pruneStale({ maxAgeDays: 30, keepActiveId: 'c' })
+    expect(rep).toMatchObject({ scanned: 3, deleted: 1, kept: 1, skippedActive: 1 })
+    expect(rep.remainingBytes).toBeGreaterThan(0)
+    await expect(store.exists(join(root, 'a'))).resolves.toBe(false)
+    await expect(store.exists(join(root, 'b'))).resolves.toBe(true)
+    await expect(store.exists(join(root, 'c'))).resolves.toBe(true)
+  })
+
+  it('measures and prunes a journal-only session (no anchor groups)', async () => {
+    await seedJournal('j', 'restore-journal-x.json', '{}', now() - 40 * day)
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(1)
+    await expect(store.exists(join(root, 'j'))).resolves.toBe(false)
+  })
+
+  it('skips non-directories and dot-prefixed entries in the root', async () => {
+    await writeFile(join(root, 'stray.txt'), 'x', 'utf8')
+    await mkdir(join(root, '.hidden'), { recursive: true })
+    await seedSession('real', '1', 'a', '{}', now() - 40 * day)
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.scanned).toBe(1)
+    expect(rep.deleted).toBe(1)
+    await expect(store.exists(join(root, 'stray.txt'))).resolves.toBe(true)
+    await expect(store.exists(join(root, '.hidden'))).resolves.toBe(true)
+  })
+
+  it('never follows a symlink out of the root (containment)', async () => {
+    const outside = join(root, '..', `outside-${Date.now()}`)
+    await mkdir(outside, { recursive: true })
+    await writeFile(join(outside, 'secret.txt'), 's', 'utf8')
+    try {
+      await symlink(outside, join(root, 'link'), 'dir')
+      await seedSession('real', '1', 'a', '{}', now() - 40 * day)
+      const rep = await store.pruneStale({ maxAgeDays: 30 })
+      expect(rep.scanned).toBe(1) // 'link' is a symlink => not a directory => skipped
+      expect(rep.deleted).toBe(1)
+      await expect(store.exists(join(outside, 'secret.txt'))).resolves.toBe(true)
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('is idempotent: a second sweep removes nothing new', async () => {
+    await seedSession('old', '1', 'a', '{}', now() - 40 * day)
+    await store.pruneStale({ maxAgeDays: 30 })
+    const rep2 = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep2.deleted).toBe(0)
+    expect(rep2.scanned).toBe(0)
+  })
+
+  it('keeps everything when maxAgeDays is large', async () => {
+    await seedSession('old', '1', 'a', '{}', now() - 40 * day)
+    const rep = await store.pruneStale({ maxAgeDays: 365 })
+    expect(rep.deleted).toBe(0)
+    expect(rep.kept).toBe(1)
   })
 })
