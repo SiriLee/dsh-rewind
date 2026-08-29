@@ -56,6 +56,21 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 </details>
 
+## Snapshot management
+
+Snapshots (the before-write backups) are stored under `<dsh home>/rewind-snapshots/`
+(`~/.dsh/rewind-snapshots/` when `$DSH_HOME` is unset). For the **same session**,
+the plugin deduplicates snapshots by content (an unchanged file is stored as a link)
+and keeps the newest 100 anchor groups. **Deleting that directory manually** only
+clears the file backups (chat rewinds are unaffected) and the plugin rebuilds them
+automatically.
+
+A **global auto-cleanup** (off by default) removes the snapshot directories of
+**long-inactive** sessions, leaving the active session and chat log untouched. Use
+`/snapshot-auto-cleanup` to **view, configure, and run** it; the settings live in
+`<dsh home>/snapshot-cleanup.json` and the last-sweep time in
+`<dsh home>/snapshot-cleanup-last-sweep.json`. See: [Snapshot cleanup](docs/snapshot-auto-cleanup.md).
+
 ## Why it stands out
 
 Compared with the common approaches, here is the trade-off this plugin makes on "rewind":
@@ -140,7 +155,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 ## Security
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `<dsh home>/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. Full security model: [SECURITY.md](SECURITY.md).
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `<dsh home>/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
 
 ## Development
 
