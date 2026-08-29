@@ -1002,6 +1002,13 @@ export class SnapshotStore {
    * already absent, i.e. the target state is reached), a restore is a plain
    * writeFile with a recursive mkdir of the parent. Returns how the outcome
    * should record it.
+   *
+   * This is the only place the store writes restored content to the real FS,
+   * and it is deliberately a raw `writeFile`/`unlink` rather than the fs
+   * service: the caller only ever hands it a path from `planRestore` — one the
+   * session's own write-class tool call recorded and resolved (never a
+   * symlink/hard link) and only when it differs from the live disk. So no
+   * arbitrary path, no model input, never automatic.
    */
   private async applyActionToDisk(
     kind: 'restore' | 'delete',

@@ -347,7 +347,9 @@ async function resolveObservationTarget(
 /**
  * Re-sync the harness fs-observation-policy's per-session observation cache
  * after a both-mode restore. The restore writes/deletes through plain
- * `node:fs`, which the policy layer cannot see; without this sync, the same
+ * `node:fs`, which the policy layer cannot see — that is about the
+ * observation cache, not permission enforcement (the restore still touches
+ * only the `planRestore` path set). Without this sync, the same
  * session's next write of a restored or rewind-deleted file is judged against
  * the STALE pre-restore observation (the file still "present" at its old
  * version), so the write tool's intent becomes `replaceIfVersion` and
@@ -533,6 +535,11 @@ async function executeRewind(
 
     let restore = ''
     if (mode === 'both') {
+      // The restore touches the real worktree through raw node:fs (unlink /
+      // writeFile), not the fs service, because it must also reach paths the
+      // service would refuse as stale/absent. That is safe only because the
+      // action set is the closed `planRestore`-derived one: paths the session
+      // recorded, no symlink/hard link, differing from the disk.
       const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
       // The restore wrote through plain node:fs, invisible to the harness
       // observation policy: re-sync it so the session's next write of a
