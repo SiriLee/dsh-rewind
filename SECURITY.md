@@ -136,6 +136,10 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
   same operating-system user: state files are created with the process
   default permissions (no special modes are set — a standard umask applies),
   and the host user remains trusted.
+- It does **not** exclude paths from the store: recording and restore mirror the
+  paths the model's file tools touched, so a sensitive file (e.g. `.env`) the
+  model may read or edit will be backed up and restorable. Keeping one out is
+  a **DSH model-permission** concern (a per-path deny), not a rewind feature.
 - It does **not** touch git (no refs, index, or worktree operations), makes
   **no network requests**, and does **not** access credentials.
 - It does **not** roll back whole-log state: telemetry, search, and `/export`

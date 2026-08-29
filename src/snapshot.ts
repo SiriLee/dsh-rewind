@@ -20,6 +20,11 @@
  *   kept), and restores read/write the real file system with plain `node:fs`
  *   — independent of the fs service.
  *
+ * Security note: this `node:fs` authority is the DSH host authority every host
+ * plugin holds — the model-facing fences constrain the model's tools, not this
+ * code. The store stays bounded to the model-touched paths, so excluding a
+ * file (e.g. `.env`) is a model-permission concern (see `SECURITY.md`).
+ *
  * Crash safety (this module's own engineering asset):
  *  - Checkpoint commits are ATOMIC: the entry JSON is written to a sibling
  *    temp file and renamed over the target, so a host crash mid-write can
