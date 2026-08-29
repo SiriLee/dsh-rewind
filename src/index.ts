@@ -56,10 +56,12 @@ export type { CheckpointEntry, FileImpact, PruneStaleReport, RestoreOutcome, Res
 export const name = 'dsh-rewind'
 export const inject = ['commands', 'tools']
 
-/** Plugin config: optional override of the checkpoint store root. */
+/** Plugin config. */
 export interface RewindConfig {
-  /** Checkpoint store root (defaults to `~/.dsh/rewind-snapshots`). */
+  /** Checkpoint store root (exact path; beats `DSH_REWIND_SNAPSHOT_DIR` and the harness-home default). */
   readonly snapshotDir?: string
+  /** Harness home override (`config.dshHome` > `$DSH_HOME` > `~/.dsh`); feeds the default snapshot/cleanup paths. */
+  readonly dshHome?: string
   /** In-place content dedup (identical before-content → link). Default `true`. */
   readonly dedup?: boolean
 }
@@ -664,13 +666,13 @@ let autoSweepChecked = false
  * blocks the activity that triggered it. The active `sessionId` is the one
  * directory that must never be pruned.
  */
-async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId: string | undefined): Promise<void> {
+async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId: string | undefined, dshHome?: string): Promise<void> {
   if (autoSweepChecked) return
   autoSweepChecked = true
   await runAutoCleanupCheck({
     pruner: store,
-    configPath: resolveCleanupConfigPath(),
-    statePath: resolveCleanupStatePath(),
+    configPath: resolveCleanupConfigPath(dshHome),
+    statePath: resolveCleanupStatePath(dshHome),
     log: msg => ctx.logger.warn(msg),
   }, sessionId)
 }
@@ -693,10 +695,10 @@ function formatCleanupReport(report: PruneStaleReport): string {
  * validated save, so the config file is never left invalid; a read of an
  * invalid file fail-closes the sweep (and reports on `status`/`run`).
  */
-async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandInvocation): Promise<CommandResult> {
+async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandInvocation, dshHome?: string): Promise<CommandResult> {
   const parsed = parseCleanupCommand(invocation.rawInput)
   if ('error' in parsed) return { kind: 'error', text: t('cleanup.usage') }
-  const configPath = resolveCleanupConfigPath()
+  const configPath = resolveCleanupConfigPath(dshHome)
   switch (parsed.action) {
     case 'status': {
       const loaded = await loadCleanupConfig(configPath)
@@ -744,7 +746,7 @@ async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandIn
         })
         // A real (non dry-run) sweep also re-anchors the 24h window, so the
         // automatic sweep does not immediately re-run after a manual one.
-        if (!report.dryRun) await saveLastSweepAt(resolveCleanupStatePath(), Date.now())
+        if (!report.dryRun) await saveLastSweepAt(resolveCleanupStatePath(dshHome), Date.now())
         return { kind: 'success', text: formatCleanupReport(report) }
       } catch (error) {
         return { kind: 'error', text: t('cleanup.runFailed', { detail: error instanceof Error ? error.message : String(error) }) }
@@ -772,10 +774,12 @@ async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandIn
  * disk at `tools/post-execute` under the turn's anchor message seq.
  *
  * @param ctx - context carrying `commands`, `tools`, and an optional `fs`.
- * @param config - optional override of the checkpoint store root.
+ * @param config - optional plugin config: `snapshotDir` (exact store-root override),
+ *  `dshHome` (harness-home override feeding the default paths), `dedup`.
  */
 export function apply(ctx: Context, config?: RewindConfig): void {
-  const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup })
+  const dshHome = config?.dshHome
+  const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup, dshHome })
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
@@ -818,7 +822,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       name: 'snapshot-auto-cleanup',
       description: t('cleanup.description'),
       input: { hint: t('cleanup.inputHint') },
-      handler: invocation => handleSnapshotCleanup(store, invocation),
+      handler: invocation => handleSnapshotCleanup(store, invocation, dshHome),
     })
   }, 'dsh-rewind command')
 
@@ -844,7 +848,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
         const sessionId = session.id
         // Lazy 24h auto-cleanup: a user message is the practical first trigger
         // of a day; it runs in the background and fail-closes on config error.
-        void maybeRunAutoCleanup(ctx, store, sessionId)
+        void maybeRunAutoCleanup(ctx, store, sessionId, dshHome)
         let tracked = trackedBySession.get(sessionId)
         if (tracked === undefined) {
           tracked = await store.trackedPaths(sessionId)
@@ -877,7 +881,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
         // Lazy 24h auto-cleanup: a tool result is the fallback trigger (covers
         // LLM work that never landed a user/message); the session id is the
         // directory that must never be pruned.
-        void maybeRunAutoCleanup(ctx, store, exec.agent?.session?.id)
+        void maybeRunAutoCleanup(ctx, store, exec.agent?.session?.id, dshHome)
         await commitEntry(store, pending, anchorCache, trackedBySession, exec, result)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)

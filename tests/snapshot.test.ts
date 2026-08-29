@@ -5,7 +5,7 @@
  */
 import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
 
@@ -704,5 +704,52 @@ describe('pruneStale', () => {
     const rep = await store.pruneStale({ maxAgeDays: 365 })
     expect(rep.deleted).toBe(0)
     expect(rep.kept).toBe(1)
+  })
+})
+
+describe('store-root default (harness-home resolution)', () => {
+  const prevHome = process.env.DSH_HOME
+  const prevOverride = process.env.DSH_REWIND_SNAPSHOT_DIR
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    if (prevOverride === undefined) delete process.env.DSH_REWIND_SNAPSHOT_DIR
+    else process.env.DSH_REWIND_SNAPSHOT_DIR = prevOverride
+  })
+
+  it('follows $DSH_HOME when set', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'dsh-rewind-home-'))
+    try {
+      process.env.DSH_HOME = home
+      expect(new SnapshotStore().root).toBe(join(home, 'rewind-snapshots'))
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  it('defaults under ~/.dsh when $DSH_HOME is unset', () => {
+    delete process.env.DSH_HOME
+    const s = new SnapshotStore()
+    expect(isAbsolute(s.root)).toBe(true)
+    expect(s.root.endsWith(join('.dsh', 'rewind-snapshots'))).toBe(true)
+  })
+
+  it('DSH_REWIND_SNAPSHOT_DIR env overrides the harness-home default', () => {
+    process.env.DSH_HOME = join(tmpdir(), 'dsh-home-a')
+    const override = join(tmpdir(), 'override')
+    process.env.DSH_REWIND_SNAPSHOT_DIR = override
+    expect(new SnapshotStore().root).toBe(override)
+  })
+
+  it('explicit root (snapshotDir) beats the env override', () => {
+    process.env.DSH_REWIND_SNAPSHOT_DIR = join(tmpdir(), 'override')
+    const explicit = join(tmpdir(), 'explicit')
+    expect(new SnapshotStore(explicit).root).toBe(explicit)
+  })
+
+  it('opts.dshHome (config) beats $DSH_HOME for the default base', () => {
+    process.env.DSH_HOME = join(tmpdir(), 'dsh-home-a')
+    const configHome = join(tmpdir(), 'dsh-config')
+    expect(new SnapshotStore(undefined, { dshHome: configHome }).root).toBe(join(configHome, 'rewind-snapshots'))
   })
 })

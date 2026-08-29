@@ -58,10 +58,18 @@ import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { homedir } from 'node:os'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
-/** Default store root: the dsh data directory. */
-export const DEFAULT_SNAPSHOT_ROOT = join(homedir(), '.dsh', 'rewind-snapshots')
+/** Sub-directory of the harness home holding this plugin's snapshots. */
+const SNAPSHOT_DIR_NAME = 'rewind-snapshots'
+
+/**
+ * Default store root: `<harness home>/rewind-snapshots`. Resolved through
+ * {@link resolveDshHome} so the plugin follows `$DSH_HOME` (or a configured
+ * harness home) rather than hardcoding `~/.dsh` — matching the other
+ * first-party DSH packages. See `SECURITY.md` "Sensitive files".
+ */
+export const DEFAULT_SNAPSHOT_ROOT = join(resolveDshHome(), SNAPSHOT_DIR_NAME)
 
 /** Environment variable overriding the store root (tests, exotic homes). */
 export const SNAPSHOT_ROOT_ENV = 'DSH_REWIND_SNAPSHOT_DIR'
@@ -462,6 +470,9 @@ export class SnapshotStore {
   /** Store options; `dedup` toggles in-place content dedup (default on). */
   private readonly dedup: boolean
 
+  /** Resolved checkpoint store root (absolute); see the constructor's fallback. */
+  readonly root: string
+
   /**
    * In-memory per-path "most recent entry" for content dedup, keyed by
    * `<sessionId>\0<path>`. Each value holds the entry's effective `before`
@@ -475,10 +486,17 @@ export class SnapshotStore {
   private readonly seededSessions = new Set<string>()
 
   constructor(
-    readonly root: string = process.env[SNAPSHOT_ROOT_ENV] ?? DEFAULT_SNAPSHOT_ROOT,
-    opts?: { readonly dedup?: boolean },
+    root?: string,
+    opts?: { readonly dedup?: boolean; readonly dshHome?: string },
   ) {
     this.dedup = opts?.dedup ?? true
+    // Deterministic store-root fallback (highest first): an explicit root
+    // (config `snapshotDir`) → `DSH_REWIND_SNAPSHOT_DIR` env → the harness-home
+    // base derived from `config.dshHome` (via resolveDshHome: config.dshHome >
+    // `$DSH_HOME` > `~/.dsh`) plus `rewind-snapshots`.
+    this.root = root
+      ?? process.env[SNAPSHOT_ROOT_ENV]
+      ?? join(resolveDshHome(opts?.dshHome), SNAPSHOT_DIR_NAME)
   }
 
   /** Absolute path of one session's snapshot directory (id sanitized). */

@@ -21,7 +21,7 @@
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { homedir } from 'node:os'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** The cleanup policy, as persisted under `~/.dsh/snapshot-cleanup.json`. */
 export interface CleanupConfig {
@@ -43,9 +43,14 @@ export const DEFAULT_CLEANUP_CONFIG: CleanupConfig = { enabled: false, maxAgeDay
 /** Auto-sweep cadence (the user's hardcoded 24h rhythm — not user-set). */
 export const AUTO_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000
 
-/** Resolve the config file path: env override, else `~/.dsh/snapshot-cleanup.json`. */
-export function resolveCleanupConfigPath(): string {
-  return process.env[CLEANUP_CONFIG_ENV] ?? join(homedir(), '.dsh', CLEANUP_CONFIG_FILENAME)
+/**
+ * Resolve the config file path (highest first): the `DSH_SNAPSHOT_CLEANUP_CONFIG`
+ * env override, else `<harness home>/snapshot-cleanup.json` — derived from
+ * `dshHome` (config.dshHome > `$DSH_HOME` > `~/.dsh`) so the plugin follows the
+ * harness home instead of hardcoding `~/.dsh`.
+ */
+export function resolveCleanupConfigPath(dshHome?: string): string {
+  return process.env[CLEANUP_CONFIG_ENV] ?? join(resolveDshHome(dshHome), CLEANUP_CONFIG_FILENAME)
 }
 
 /** The state file that records the last automatic-sweep wall-clock time. */
@@ -56,8 +61,8 @@ export const STATE_FILENAME = 'snapshot-cleanup-last-sweep.json'
  * 24h cadence SURVIVES a host restart (a real deployment is rarely up 24/7,
  * so an in-memory timestamp would reset on every boot and re-sweep too often).
  */
-export function resolveCleanupStatePath(): string {
-  return join(dirname(resolveCleanupConfigPath()), STATE_FILENAME)
+export function resolveCleanupStatePath(dshHome?: string): string {
+  return join(dirname(resolveCleanupConfigPath(dshHome)), STATE_FILENAME)
 }
 
 /**
