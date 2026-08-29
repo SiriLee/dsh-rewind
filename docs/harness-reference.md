@@ -54,7 +54,7 @@ src/index.ts            host plugin: /rewind command + checkpoint pipeline (tool
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
 src/snapshot.ts         checkpoint store (disk before-backups, restore/preview, bounded prune)
 src/session-cwd.ts      session-cwd resolution (fs-tools rule)
-src/client/index.ts     client plugin: per-message ↶ button + manual /rewind guard
+src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals
 src/client/popover.ts   mode-selection popover (both-mode impact confirm)
 src/client/hidden.ts    withdrawn-span computation (hiddenSeqsOf), pure
 src/client/locales.ts   zh / en copy (LocaleNamespaceMap)
