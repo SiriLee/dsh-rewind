@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:f
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
+import { reconcileTracked, SnapshotStore, PendingRestoreError, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -704,6 +704,98 @@ describe('pruneStale', () => {
     const rep = await store.pruneStale({ maxAgeDays: 365 })
     expect(rep.deleted).toBe(0)
     expect(rep.kept).toBe(1)
+  })
+})
+
+describe('clearSession', () => {
+  it('reports a zero summary for a session with no data', async () => {
+    const rep = await store.clearSession(session)
+    expect(rep).toEqual({ sessionId: session, anchorGroups: 0, entries: 0, journals: 0, bytes: 0, dryRun: false })
+    // A missing dir is a no-op regardless of the dry/apply switch.
+    const dry = await store.clearSession('nope', { dryRun: true })
+    expect(dry.dryRun).toBe(true)
+    expect(dry.entries).toBe(0)
+    expect(dry.anchorGroups).toBe(0)
+  })
+
+  it('summarizes anchor groups, entries, journals and bytes', async () => {
+    const a = await touch('a.txt', 'one')
+    const b = await touch('b.txt', 'two')
+    const c = await touch('c.txt', 'three')
+    await store.recordEntry(session, { callId: 'a1', anchorSeq: 5, path: a, before: 'one' })
+    await store.recordEntry(session, { callId: 'b1', anchorSeq: 5, path: b, before: 'two' })
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 7, path: c, before: 'three' })
+    // Fabricate a journal file directly in the session dir (named by prefix).
+    const sessionDir = store.sessionDir(session)
+    await writeFile(join(sessionDir, 'restore-journal-op1.json'), JSON.stringify({ v: 1 }), 'utf8')
+    const rep = await store.clearSession(session, { dryRun: true })
+    expect(rep.anchorGroups).toBe(2)
+    expect(rep.entries).toBe(3)
+    expect(rep.journals).toBe(1)
+    expect(rep.bytes).toBeGreaterThan(0)
+    expect(rep.dryRun).toBe(true)
+  })
+
+  it('dry-run leaves disk and dedup memory untouched', async () => {
+    const file = await touch('a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    await store.lastKnownContent(session, file) // seed dedup state
+    const rep = await store.clearSession(session, { dryRun: true })
+    expect(rep.dryRun).toBe(true)
+    expect(rep.entries).toBe(1)
+    expect(await store.exists(store.sessionDir(session))).toBe(true)
+    expect(await store.trackedPaths(session)).toEqual(new Set([file]))
+    expect(await store.lastKnownContent(session, file)).toBe('original')
+  })
+
+  it('apply clears the session dir and resets dedup memory (no dangling link)', async () => {
+    const file = await touch('a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    const rep = await store.clearSession(session)
+    expect(rep.dryRun).toBe(false)
+    expect(rep.entries).toBe(1)
+    expect(await store.exists(store.sessionDir(session))).toBe(false)
+    expect(await store.trackedPaths(session)).toEqual(new Set())
+    expect(await store.lastKnownContent(session, file)).toBeUndefined()
+    // A fresh record for the same path/content must be a real entry, NOT a link
+    // to the just-deleted prior entry (the dedup chain was reset).
+    const file2 = await touch('a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file2, before: 'original' })
+    const entries = await store.entriesAfter(session, 0)
+    expect(entries).toHaveLength(1)
+    expect(isLinkEntry(entries[0]!)).toBe(false)
+    expect(entries[0]!.path).toBe(file2)
+  })
+
+  it('refuses to clear a session that holds a pending (non-terminal) restore journal', async () => {
+    const file = await touch('a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    await writeFile(file, 'rewritten', 'utf8')
+    // Crash BEFORE the first restore action so a `running` journal stays on disk.
+    await expect(store.restoreAfter(session, 5, unlink, undefined, { crash: () => { throw new Error('crash') } })).rejects.toThrow()
+    await expect(store.clearSession(session)).rejects.toThrow(PendingRestoreError)
+    // The session dir is still present (nothing was removed).
+    expect(await store.exists(store.sessionDir(session))).toBe(true)
+  })
+
+  it('does not interfere with the age-based retention sweep', async () => {
+    // Seed a stale session past the 30-day cutoff directly on disk.
+    const staleDir = join(root, 'stale')
+    const staleAnchor = join(staleDir, '1')
+    await mkdir(staleAnchor, { recursive: true })
+    const staleFile = join(staleAnchor, 'a.json')
+    await writeFile(staleFile, '{}', 'utf8')
+    const t = new Date(Date.now() - 40 * 86_400_000)
+    await utimes(staleFile, t, t)
+    await utimes(staleAnchor, t, t)
+    await utimes(staleDir, t, t)
+    // Clear the active session, then verify the stale sweep still removes `stale`.
+    const file = await touch('a.txt', 'x')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    await store.clearSession(session)
+    const rep = await store.pruneStale({ keepActiveId: session, maxAgeDays: 30 })
+    expect(rep.deleted).toBe(1)
+    expect(await store.exists(join(root, 'stale'))).toBe(false)
   })
 })
 

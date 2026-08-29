@@ -191,16 +191,27 @@ export async function saveCleanupConfig(path: string, config: CleanupConfig): Pr
 }
 
 /** The `/snapshot-auto-cleanup` sub-command the parser can resolve to. */
-export type CleanupCommandAction = 'status' | 'on' | 'off' | 'max-age' | 'run' | 'run-apply'
+export type CleanupCommandAction = 'status' | 'on' | 'off' | 'max-age' | 'run'
+
+/** A parsed `/snapshot-auto-cleanup` command (excludes the error branch). */
+export type CleanupCommand =
+  | { action: 'status' | 'on' | 'off' }
+  | { action: 'max-age'; value: number }
+  | { action: 'run'; target: 'rules' | 'current'; apply: boolean }
 
 /**
  * Parse the free-form text after `/snapshot-auto-cleanup`. Pure so it is
  * unit-testable; `src/index.ts` maps the resolved action onto the store / the
  * config file. `max-age` returns the validated positive day count.
+ *
+ * The `run` verb is the single manual-cleanup action. `--apply` is the ONLY
+ * execute-vs-dry-run switch (position-independent): without it the action is a
+ * dry-run preview. `--current` re-targets the action to the ACTIVE session's
+ * snapshots (the manual "clear this session now"); without it, `run` keeps its
+ * age-based stale-session sweep semantics. The old `run-apply` abbreviation is
+ * gone — use `run --apply`.
  */
-export function parseCleanupCommand(
-  rawInput: string,
-): { action: CleanupCommandAction; value?: number } | { error: string } {
+export function parseCleanupCommand(rawInput: string): CleanupCommand | { error: string } {
   const parts = rawInput.trim().split(/\s+/).filter(Boolean)
   if (parts.length === 0) return { action: 'status' }
   switch (parts[0]) {
@@ -216,10 +227,21 @@ export function parseCleanupCommand(
       if (!Number.isInteger(days) || days <= 0) return { error: '"max-age" must be a positive integer (days)' }
       return { action: 'max-age', value: days }
     }
+    case 'run-apply':
+      return { error: 'the "run-apply" abbreviation was removed; use "run --apply"' }
     case 'run': {
-      if (parts.length === 1) return { action: 'run' }
-      if (parts.length === 2 && parts[1] === '--apply') return { action: 'run-apply' }
-      return { error: 'usage: /snapshot-auto-cleanup run [--apply]' }
+      let apply = false
+      let current = false
+      for (const rawFlag of parts.slice(1)) {
+        if (rawFlag === '--apply') {
+          apply = true
+        } else if (rawFlag === '--current') {
+          current = true
+        } else {
+          return { error: `unknown /snapshot-auto-cleanup run flag "${rawFlag}"` }
+        }
+      }
+      return { action: 'run', target: current ? 'current' : 'rules', apply }
     }
     default:
       return { error: `unknown /snapshot-auto-cleanup subcommand "${parts[0]}"` }

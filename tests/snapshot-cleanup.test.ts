@@ -138,8 +138,23 @@ describe('parseCleanupCommand', () => {
     expect(parseCleanupCommand('status')).toEqual({ action: 'status' })
     expect(parseCleanupCommand('on')).toEqual({ action: 'on' })
     expect(parseCleanupCommand('off')).toEqual({ action: 'off' })
-    expect(parseCleanupCommand('run')).toEqual({ action: 'run' })
-    expect(parseCleanupCommand('run --apply')).toEqual({ action: 'run-apply' })
+  })
+
+  it('parses run (age rules) as dry by default and executes with --apply', () => {
+    expect(parseCleanupCommand('run')).toEqual({ action: 'run', target: 'rules', apply: false })
+    expect(parseCleanupCommand('run --apply')).toEqual({ action: 'run', target: 'rules', apply: true })
+  })
+
+  it('parses run --current (the current session clear), dry or --apply', () => {
+    expect(parseCleanupCommand('run --current')).toEqual({ action: 'run', target: 'current', apply: false })
+    expect(parseCleanupCommand('run --current --apply')).toEqual({ action: 'run', target: 'current', apply: true })
+    // --apply is a position-independent flag.
+    expect(parseCleanupCommand('run --apply --current')).toEqual({ action: 'run', target: 'current', apply: true })
+    expect(parseCleanupCommand('run --current --current')).toEqual({ action: 'run', target: 'current', apply: false })
+  })
+
+  it('rejects the removed run-apply abbreviation', () => {
+    expect(parseCleanupCommand('run-apply')).toMatchObject({ error: expect.any(String) })
   })
 
   it('parses max-age with a validated positive integer', () => {
@@ -157,6 +172,7 @@ describe('parseCleanupCommand', () => {
     expect(parseCleanupCommand('bogus')).toMatchObject({ error: expect.any(String) })
     expect(parseCleanupCommand('on extra')).toMatchObject({ error: expect.any(String) })
     expect(parseCleanupCommand('run --x')).toMatchObject({ error: expect.any(String) })
+    expect(parseCleanupCommand('run --current --bogus')).toMatchObject({ error: expect.any(String) })
   })
 })
 

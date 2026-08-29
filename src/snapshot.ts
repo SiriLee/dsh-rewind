@@ -405,6 +405,47 @@ export interface PruneStaleReport {
 }
 
 /**
+ * Result of a manual whole-session clear ({@link SnapshotStore.clearSession}).
+ *
+ * Unlike the age-based sweep, a clear removes EVERY snapshot of ONE session
+ * (all anchor groups, all checkpoint entries, all restore journals) on demand —
+ * the active session the user is driving, to drop the rewind overhead or to
+ * archive a conversation immediately. `dryRun` reports what would be removed
+ * without touching disk or memory.
+ */
+export interface ClearSessionReport {
+  /** The session whose records were (or would be) cleared. */
+  readonly sessionId: string
+  /** Number of anchor-group (user-message) directories present. */
+  readonly anchorGroups: number
+  /** Number of committed checkpoint entries (full backups + dedup links). */
+  readonly entries: number
+  /** Number of restore-journal files (terminal + pending). */
+  readonly journals: number
+  /** Bytes occupied by the session directory (the amount freed). */
+  readonly bytes: number
+  /** Whether nothing was really removed (the clear only reported). */
+  readonly dryRun: boolean
+}
+
+/**
+ * Thrown by {@link SnapshotStore.clearSession} when the session holds a
+ * NON-TERMINAL restore journal (`running` / `rollback-running` /
+ * `recovery-required`). The clear is refused because the journal is the only
+ * record of how to finish or undo that interrupted restore; the caller renders
+ * a human instruction instead of destroying it. There is no override.
+ */
+export class PendingRestoreError extends Error {
+  readonly pending: number
+
+  constructor(pending: number) {
+    super(`session has ${pending} pending restore(s)`)
+    this.name = 'PendingRestoreError'
+    this.pending = pending
+  }
+}
+
+/**
  * Walk one directory tree and compute the total size (regular files only) and
  * the newest stamp (max `lstat.mtimeMs` over every member, directories
  * included). `lstat` never follows a symlink, so a hostile symlink inside the
@@ -1447,6 +1488,108 @@ export class SnapshotStore {
       paths.add(entry.path)
     }
     return paths
+  }
+
+  /**
+   * Summarize a session's on-disk footprint for a clear dry-run: anchor-group
+   * count, committed checkpoint-entry count, restore-journal count, and total
+   * bytes. Walks with `lstat` (never follows a symlink, so a hostile symlink
+   * cannot escape the store root or inflate the measurement) and skips
+   * dot-prefixed temp leftovers and non-`.json` members — they are never
+   * checkpoint entries.
+   */
+  private async sessionStats(sessionId: string): Promise<{ anchorGroups: number; entries: number; journals: number; bytes: number }> {
+    const sessionDir = this.sessionDir(sessionId)
+    let names: string[]
+    try {
+      names = await readdir(sessionDir)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { anchorGroups: 0, entries: 0, journals: 0, bytes: 0 }
+      throw error
+    }
+    let anchorGroups = 0
+    let entries = 0
+    let journals = 0
+    let bytes = 0
+    for (const name of names) {
+      if (name.startsWith('.')) continue
+      const full = join(sessionDir, name)
+      let st: Stats
+      try {
+        st = await lstat(full)
+      } catch {
+        continue // raced away or unreadable: skip
+      }
+      if (st.isDirectory()) {
+        if (!Number.isSafeInteger(Number(name))) continue
+        anchorGroups++
+        let files: string[]
+        try {
+          files = await readdir(full)
+        } catch {
+          continue
+        }
+        for (const file of files) {
+          if (!file.endsWith('.json')) continue
+          entries++
+          const fileSt = await lstat(join(full, file)).catch(() => undefined)
+          if (fileSt !== undefined) bytes += fileSt.size
+        }
+      } else if (name.startsWith(SnapshotStore.JOURNAL_PREFIX) && name.endsWith('.json')) {
+        journals++
+        bytes += st.size
+      }
+    }
+    return { anchorGroups, entries, journals, bytes }
+  }
+
+  /**
+   * Remove a session's ENTIRE snapshot directory — every anchor group, every
+   * checkpoint entry, and every restore journal — and reset the store's
+   * in-memory dedup state so the session starts recording fresh from the
+   * current workspace state. This is the manual "get rid of this session's
+   * records NOW" action on the ACTIVE session the user is driving (it is never
+   * targetable by id; that is a directory-manipulation concern the user can do
+   * directly).
+   *
+   * SAFETY:
+   *  - Only the session dir is removed; dedup refs are session-relative, so
+   *    there is no cross-session dangling to materialize (the same rationale as
+   *    {@link pruneStale}'s whole-dir removal).
+   *  - A NON-TERMINAL restore journal (`running` / `rollback-running` /
+   *    `recovery-required`) REFUSES the clear: discarding it would orphan a
+   *    half-applied restore whose rescue state — the only record of how to
+   *    finish or undo it — lives in that journal. There is deliberately no
+   *    override: finish or roll back the restore first.
+   *  - The in-memory dedup state (`lastEntry` / `seededSessions`) is reset
+   *    ONLY when entries are actually removed, so a dry-run leaves the store
+   *    untouched and a later `recordEntry` never links to a deleted prior
+   *    entry (no dangling ref).
+   *
+   * `dryRun` computes the report without touching disk or memory.
+   */
+  async clearSession(sessionId: string, opts?: { readonly dryRun?: boolean }): Promise<ClearSessionReport> {
+    const dryRun = opts?.dryRun ?? false
+    const stats = await this.sessionStats(sessionId)
+    if (stats.anchorGroups === 0 && stats.journals === 0) {
+      return { sessionId, ...stats, dryRun }
+    }
+    if (!dryRun) {
+      const { journals } = await this.listJournals(sessionId)
+      const pending = journals.filter(journal => journal.state !== 'completed' && journal.state !== 'rolled-back')
+      if (pending.length > 0) {
+        throw new PendingRestoreError(pending.length)
+      }
+      await rm(this.sessionDir(sessionId), { recursive: true, force: true })
+      // Reset the in-memory dedup state for this session: a later recordEntry
+      // must not link to an entry this clear just deleted (no dangling ref),
+      // and the boundary must re-derive an empty tracked set from scratch.
+      this.seededSessions.delete(sessionId)
+      for (const key of this.lastEntry.keys()) {
+        if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
+      }
+    }
+    return { sessionId, ...stats, dryRun }
   }
 }
 

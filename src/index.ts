@@ -37,7 +37,7 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, PendingRestoreError, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
   DEFAULT_CLEANUP_CONFIG,
   loadCleanupConfig,
@@ -696,7 +696,12 @@ function formatCleanupReport(report: PruneStaleReport): string {
  * validated save, so the config file is never left invalid; a read of an
  * invalid file fail-closes the sweep (and reports on `status`/`run`).
  */
-async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandInvocation, dshHome?: string): Promise<CommandResult> {
+async function handleSnapshotCleanup(
+  store: SnapshotStore,
+  invocation: CommandInvocation,
+  dshHome: string | undefined,
+  trackedBySession: Map<string, Set<string>>,
+): Promise<CommandResult> {
   const parsed = parseCleanupCommand(invocation.rawInput)
   if ('error' in parsed) return { kind: 'error', text: t('cleanup.usage') }
   const configPath = resolveCleanupConfigPath(dshHome)
@@ -735,15 +740,21 @@ async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandIn
       }
       return { kind: 'success', text: t('cleanup.maxAgeOk', { days: parsed.value! }) }
     }
-    case 'run':
-    case 'run-apply': {
+    case 'run': {
+      const apply = parsed.apply
+      // `--current` re-targets the manual action to the ACTIVE session's
+      // snapshots (the "clear this session now" path); without it, `run` keeps
+      // its age-based stale-session sweep semantics.
+      if (parsed.target === 'current') {
+        return handleClearCurrent(store, invocation, apply, trackedBySession)
+      }
       const loaded = await loadCleanupConfig(configPath)
       if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
       try {
         const report = await store.pruneStale({
           keepActiveId: invocation.agent.session.id,
           maxAgeDays: loaded.config.maxAgeDays,
-          dryRun: parsed.action === 'run',
+          dryRun: !apply,
         })
         // A real (non dry-run) sweep also re-anchors the 24h window, so the
         // automatic sweep does not immediately re-run after a manual one.
@@ -755,6 +766,48 @@ async function handleSnapshotCleanup(store: SnapshotStore, invocation: CommandIn
     }
   }
 }
+
+/** Render a {@link ClearSessionReport} for the current-session clear (dry vs apply). */
+function formatClearReport(report: ClearSessionReport): string {
+  const key: HostKey = report.dryRun ? 'cleanup.clearDry' : 'cleanup.clearApply'
+  return t(key, {
+    sessionId: report.sessionId,
+    entries: report.entries,
+    anchorGroups: report.anchorGroups,
+    journals: report.journals,
+    bytes: report.bytes,
+  })
+}
+
+/**
+ * Handle the `run --current` manual clear of the ACTIVE session. Without
+ * `--apply` it is a dry-run preview (disk and memory untouched); with it, the
+ * session's entire snapshot directory is deleted and the in-memory tracked set
+ * dropped, so the next user-message boundary re-derives an empty tracked set
+ * instead of re-scanning every formerly-tracked file (the lag relief).
+ *
+ * A session holding a non-terminal restore journal (`PendingRestoreError`) is
+ * refused — the journal is the only record of how to finish/undo that restore.
+ */
+async function handleClearCurrent(
+  store: SnapshotStore,
+  invocation: CommandInvocation,
+  apply: boolean,
+  trackedBySession: Map<string, Set<string>>,
+): Promise<CommandResult> {
+  const sessionId = invocation.agent.session.id
+  try {
+    const report = await store.clearSession(sessionId, { dryRun: !apply })
+    if (!report.dryRun) trackedBySession.delete(sessionId)
+    return { kind: 'success', text: formatClearReport(report) }
+  } catch (error) {
+    if (error instanceof PendingRestoreError) {
+      return { kind: 'error', text: t('cleanup.clearRefuse', { sessionId }) }
+    }
+    return { kind: 'error', text: t('cleanup.clearFailed', { detail: error instanceof Error ? error.message : String(error), sessionId }) }
+  }
+}
+
 
 /**
  * Register the `/rewind` command and the checkpoint pipeline (before-capture
@@ -831,7 +884,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       name: 'snapshot-auto-cleanup',
       description: t('cleanup.description'),
       input: { hint: t('cleanup.inputHint') },
-      handler: invocation => handleSnapshotCleanup(store, invocation, dshHome),
+      handler: invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession),
     })
   }, 'dsh-rewind command')
 
