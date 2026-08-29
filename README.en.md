@@ -11,7 +11,7 @@ Conversation rewind for DeepSeek Harness: **rewind the conversation to any earli
 A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 
 - **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it — **truly seamless and convenient by design**.
-- **Lightweight workspace backup** — Claude Code-aligned behavior: only file-writing tools are tracked, a lightweight before-backup is **persisted on disk**, and your git repository is never touched or relied on. One lightweight plugin gives you a **complete** agentic rewind capability.
+- **Lightweight workspace backup** — Claude Code-aligned behavior: tracks files edited by the write-class tools, and external changes to **already-tracked** files are restorable too. Selective tracking, before-write backup, store only on change. One lightweight plugin gives you a **complete** agentic rewind capability.
 - **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your conversation; file restores stay inside the plugin's own backup directory. Full security model: [SECURITY.md](SECURITY.md).
 - **A complete test system** — unit, probe, and end-to-end host verification, covering compatibility probing, log replay, resume, cross-restart and other scenarios; maintained continuously as the harness evolves to ensure feature stability.
 
