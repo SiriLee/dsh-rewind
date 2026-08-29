@@ -771,7 +771,6 @@ async function handleSnapshotCleanup(
 function formatClearReport(report: ClearSessionReport): string {
   const key: HostKey = report.dryRun ? 'cleanup.clearDry' : 'cleanup.clearApply'
   return t(key, {
-    sessionId: report.sessionId,
     entries: report.entries,
     anchorGroups: report.anchorGroups,
     journals: report.journals,
