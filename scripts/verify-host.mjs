@@ -540,6 +540,23 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   await writeFile(cleanupConfig, '{broken', 'utf8')
   const badRun = await callCleanup('run')
   check('cleanup run fail-closes on corrupt config', badRun.kind === 'error', badRun.text)
+
+  // A manual `run --current` clears the ACTIVE session's snapshots (dry then
+  // apply). Runs with the config left corrupt ({broken) to prove the clear path
+  // is config-independent. Session-scoped so it never collides with the reused
+  // main session or the seeded cleanup dirs.
+  const csSession = buildSession('verify-clearsession', wsDir)
+  const csAgent = makeAgent(csSession.id, csSession)
+  const callClear = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent: csAgent, rawInput, signal: aborted() })
+  csSession.append('user/message', user('clear question'), { surfaceOp: 'append' })
+  const clearFile = join(wsDir, 'clear.txt')
+  await writeFile(clearFile, 'original', 'utf8')
+  await runWrite(csAgent, 'clear-1', clearFile, 'rewritten') // commits a snapshot under this session's dir
+  const clearDir = join(snapRoot, csSession.id)
+  const clearDry = await callClear('run --current')
+  check('run --current dry-run reports the session without deleting', clearDry.kind === 'success' && await exists(clearDir), clearDry.text)
+  const clearApplied = await callClear('run --current --apply')
+  check('run --current --apply clears the active session snapshots', clearApplied.kind === 'success' && !(await exists(clearDir)), clearApplied.text)
 }
 
 // 16. deleting the plugin data directory wipes ONLY file backups: chat

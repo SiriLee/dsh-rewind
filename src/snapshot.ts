@@ -439,7 +439,7 @@ export class PendingRestoreError extends Error {
   readonly pending: number
 
   constructor(pending: number) {
-    super(`session has ${pending} pending restore(s)`)
+    super(`session has ${pending} restore record(s) that are not cleanly complete`)
     this.name = 'PendingRestoreError'
     this.pending = pending
   }
@@ -1571,19 +1571,24 @@ export class SnapshotStore {
   async clearSession(sessionId: string, opts?: { readonly dryRun?: boolean }): Promise<ClearSessionReport> {
     const dryRun = opts?.dryRun ?? false
     const stats = await this.sessionStats(sessionId)
-    if (stats.anchorGroups === 0 && stats.journals === 0) {
-      return { sessionId, ...stats, dryRun }
-    }
     if (!dryRun) {
-      const { journals } = await this.listJournals(sessionId)
-      const pending = journals.filter(journal => journal.state !== 'completed' && journal.state !== 'rolled-back')
-      if (pending.length > 0) {
-        throw new PendingRestoreError(pending.length)
+      // Refuse while the session holds a recovery record that is not a cleanly
+      // terminal restore: a non-terminal journal (an in-progress restore whose
+      // rescue state is the only way to finish or undo it) OR an unclassifiable
+      // (corrupt) journal. Same fail-loud invariant as the store's journaling —
+      // never silently destroy a recovery record we cannot classify.
+      const { journals, corrupt } = await this.listJournals(sessionId)
+      const pending = journals.filter(journal => journal.state !== 'completed' && journal.state !== 'rolled-back').length + corrupt.length
+      if (pending > 0) {
+        throw new PendingRestoreError(pending)
       }
-      await rm(this.sessionDir(sessionId), { recursive: true, force: true })
-      // Reset the in-memory dedup state for this session: a later recordEntry
-      // must not link to an entry this clear just deleted (no dangling ref),
-      // and the boundary must re-derive an empty tracked set from scratch.
+      if (stats.anchorGroups > 0 || stats.journals > 0) {
+        await rm(this.sessionDir(sessionId), { recursive: true, force: true })
+      }
+      // Always reset the in-memory dedup state on an apply — even when the dir
+      // was already empty. A stale in-memory entry (e.g. a session whose dir was
+      // removed out-of-band) would otherwise link a later recordEntry to a
+      // deleted prior entry, leaving a dangling ref.
       this.seededSessions.delete(sessionId)
       for (const key of this.lastEntry.keys()) {
         if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)

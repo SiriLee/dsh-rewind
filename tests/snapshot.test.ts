@@ -778,6 +778,31 @@ describe('clearSession', () => {
     expect(await store.exists(store.sessionDir(session))).toBe(true)
   })
 
+  it('refuses to clear a session holding a corrupt (unclassifiable) restore journal', async () => {
+    const file = await touch('a.txt', 'x')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    // A journal file that fails schema validation — an unclassifiable recovery
+    // record that must never be silently destroyed (fail-loud invariant).
+    await writeFile(join(store.sessionDir(session), 'restore-journal-bad.json'), JSON.stringify({ not: 'a journal' }), 'utf8')
+    await expect(store.clearSession(session)).rejects.toThrow(PendingRestoreError)
+  })
+
+  it('apply on an already-empty session still resets the in-memory dedup state', async () => {
+    const file = await touch('a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
+    // Remove the session dir out-of-band while the in-memory dedup state still
+    // holds this path's content (simulates an external wipe).
+    await rm(store.sessionDir(session), { recursive: true, force: true })
+    await store.clearSession(session) // apply on an empty/nonexistent dir
+    expect(await store.lastKnownContent(session, file)).toBeUndefined()
+    // A fresh record for the same path must be a full entry, not a dangling link.
+    const file2 = await touch('a.txt', 'original')
+    await store.recordEntry(session, { callId: 'c2', anchorSeq: 6, path: file2, before: 'original' })
+    const entries = await store.entriesAfter(session, 0)
+    expect(entries).toHaveLength(1)
+    expect(isLinkEntry(entries[0]!)).toBe(false)
+  })
+
   it('does not interfere with the age-based retention sweep', async () => {
     // Seed a stale session past the 30-day cutoff directly on disk.
     const staleDir = join(root, 'stale')
