@@ -15,9 +15,12 @@
  */
 import { access, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-const root = join(dirname(new URL(import.meta.url).pathname), '..')
+// fileURLToPath: `URL.pathname` keeps a leading `/` on Windows (`/E:/...`),
+// which `join` turns into a bogus `E:\E:\...` root.
+const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg: {
   name: string
   private?: boolean
