@@ -585,12 +585,13 @@ async function handleRewind(
   const input = invocation.rawInput.trim()
 
   if (input === '') {
-    // Manual `/rewind` input is blocked entirely in the client composer guard
-    // (see src/client/index.ts): the command exists as the per-message ↶
-    // button's internal channel, which always drives this host path with an
-    // explicit `@seq` target. The bare form below is a defensive fallback for
-    // non-composer callers: it withdraws the most recent user message
-    // (time-travel back one turn; the text is offered back in the composer).
+    // A bare `/rewind` in the composer is taken by the client's command
+    // decoration (see src/client/index.ts), which opens the candidate picker
+    // instead of running this host path; the button likewise drives this
+    // parameterized path with an explicit `@seq` target. The bare form below
+    // is a defensive fallback for non-composer callers: it withdraws the most
+    // recent user message (time-travel back one turn; the text is offered
+    // back in the composer).
     const candidates = listRewindCandidates(session.events, session.surface.nodes, 1)
     if (candidates.length === 0) {
       return { kind: 'error', text: t('noUserMessages') }

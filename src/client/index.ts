@@ -1,7 +1,7 @@
 /**
- * dsh-rewind client half: the `/rewind` command decoration, the
- * parameterized-input guard, the locale registration, and the session-scoped
- * portal bridge that renders the per-message ↶ rewind button (see
+ * dsh-rewind client half: the `/rewind` command decoration, the locale
+ * registration, and the session-scoped portal bridge that renders the
+ * per-message ↶ rewind button (see
  * `portals.tsx` for the button itself).
  *
  * The button is NOT injected by hand into the DOM anymore: the plugin
@@ -21,8 +21,7 @@
  * the ↶ button: the mode popover, both-impact confirmation, execution, row
  * hiding and the composer refill (`runRewindAndFill`). The parameterized
  * forms (`/rewind @<seq> chat|both`, `/rewind preview …`) stay internal
- * channels the ↶ button and the popover drive through `session.command`; a
- * hand-typed parameterized line is stopped with a hint.
+ * channels the ↶ button and the popover drive through `session.command`.
  *
  * @module dsh-rewind/client
  */
@@ -180,89 +179,10 @@ export function apply(ctx: ClientContext): void {
       },
     })
 
-    // ---- manual parameterized /rewind guard ----
-    // The parameterized forms (`/rewind @<seq> chat|both`, `/rewind preview …`)
-    // are internal channels the ↶ button, the popover and the decoration drive
-    // through `session.command`; a hand-typed parameterized line is stopped
-    // with a hint. The BARE form needs no guard: the command decoration above
-    // turns it into the candidate popup before it can reach the host.
-    const PARAM_REWIND = /^\s*\/rewind\s+\S+/i
-
     const composerTextarea = (): HTMLTextAreaElement | null =>
       document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
 
-    /** True when the composer draft is a manually typed parameterized line. */
-    const hasParamRewindDraft = (): boolean => {
-      const textarea = composerTextarea()
-      return textarea !== null && PARAM_REWIND.test(textarea.value)
-    }
-
-    let guardHintEl: HTMLElement | null = null
-    let guardHintTimer: number | undefined
-
-    /** Transient hint above the composer: manual /rewind takes no parameters. */
-    const showGuardHint = (): void => {
-      if (guardHintEl !== null) guardHintEl.remove()
-      if (guardHintTimer !== undefined) window.clearTimeout(guardHintTimer)
-      const textarea = composerTextarea()
-      if (textarea === null) return
-      const card = textarea.closest('[data-composer-card]')
-      const hint = document.createElement('div')
-      hint.className = 'dsh-rewind-guard-hint'
-      hint.setAttribute('role', 'status')
-      hint.textContent = t('guard.hint')
-      document.body.appendChild(hint)
-      const rect = card instanceof HTMLElement ? card.getBoundingClientRect() : textarea.getBoundingClientRect()
-      // Bottom-anchored above the card: the hint grows upward, never covering
-      // the input.
-      hint.style.left = `${Math.round(rect.left)}px`
-      hint.style.bottom = `${Math.round(window.innerHeight - rect.top + 8)}px`
-      guardHintEl = hint
-      guardHintTimer = window.setTimeout(() => {
-        hint.remove()
-        if (guardHintEl === hint) guardHintEl = null
-        guardHintTimer = undefined
-      }, 3200)
-    }
-
-    const onParamRewindSubmit = (event: KeyboardEvent | MouseEvent): void => {
-      if (!hasParamRewindDraft()) return
-      event.preventDefault()
-      event.stopPropagation()
-      showGuardHint()
-    }
-
-    // Capture phase on document: fires before React's root handlers, so
-    // preventDefault + stopPropagation here stops the submit path entirely.
-    const onKeyDownGuard = (event: KeyboardEvent): void => {
-      if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return
-      onParamRewindSubmit(event)
-    }
-
-    const onClickGuard = (event: MouseEvent): void => {
-      if (event.button !== 0 || !hasParamRewindDraft()) return
-      const target = event.target
-      if (!(target instanceof Element)) return
-      const button = target.closest('button')
-      if (button === null) return
-      const card = button.closest('[data-composer-card]')
-      if (card === null) return
-      // Only the composer's primary submit button is guarded. The stop button
-      // (renders a <rect>) must keep working with a /rewind draft present.
-      const all = card.querySelectorAll<HTMLButtonElement>('button')
-      if (all[all.length - 1] !== button) return
-      if (button.querySelector('rect') !== null) return
-      onParamRewindSubmit(event)
-    }
-
-    document.addEventListener('keydown', onKeyDownGuard, true)
-    document.addEventListener('click', onClickGuard, true)
-
     yield () => {
-      document.removeEventListener('keydown', onKeyDownGuard, true)
-      document.removeEventListener('click', onClickGuard, true)
-      if (guardHintEl !== null) guardHintEl.remove()
-      if (guardHintTimer !== undefined) window.clearTimeout(guardHintTimer)
       style.remove()
     }
   }, 'dsh-rewind client lifecycle')

@@ -26,7 +26,6 @@ export const zh = {
   'popover.impact.delete': '删除 {path}',
   'popover.confirm': '确认回退',
   'popover.back': '返回',
-  'guard.hint': '/rewind 手动输入不接受参数，请直接输入 /rewind 打开回退菜单',
 } satisfies Record<string, string>
 
 /** The rewind namespace key union. */
@@ -65,5 +64,4 @@ export const en = {
   'popover.impact.delete': 'Delete {path}',
   'popover.confirm': 'Confirm rewind',
   'popover.back': 'Back',
-  'guard.hint': '/rewind takes no typed arguments — enter /rewind to open the rewind picker.',
 } satisfies Record<RewindKey, string>

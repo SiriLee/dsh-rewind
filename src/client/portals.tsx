@@ -185,7 +185,7 @@ export async function runRewindAndFill(
   fillComposer(text)
 }
 
-/** Transient status hint above the composer (same styling as the input guard). */
+/** Transient status toast above the composer (rewind-failure notification). */
 function showHint(text: string): void {
   const textarea = document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
   const hint = document.createElement('div')
