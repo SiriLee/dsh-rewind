@@ -27,7 +27,7 @@ log, and leaves snapshot data within the idle cutoff alone.
 
 ## Config file
 
-The policy is persisted to `~/.dsh/snapshot-cleanup.json`:
+The policy is persisted to `<dsh home>/snapshot-cleanup.json`:
 
 ```json
 { "enabled": false, "maxAgeDays": 30 }
@@ -47,7 +47,7 @@ the command again.
 ## When it runs
 
 The 24h window is anchored on a **persisted** last-sweep time
-(`~/.dsh/snapshot-cleanup-last-sweep.json`), so a host restart does not reset
+(`<dsh home>/snapshot-cleanup-last-sweep.json`), so a host restart does not reset
 it: the auto-sweep checks **once per process run**, on the first session
 activity of a window (a user message or a completed tool call), and cleans only
 when enabled **and** >=24h since the last sweep. It runs in the background and
