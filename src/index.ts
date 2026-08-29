@@ -818,11 +818,11 @@ async function handleClearCurrent(
       agent.cancel({ kind: 'user' }, { keepInbox: true })
       const stopped = await waitForAgentIdle(agent, invocation.signal)
       if (!stopped) {
-        return { kind: 'error', text: t('stopFailed') }
+        return { kind: 'error', text: t('cleanup.clearActive', { sessionId }) }
       }
     }
     if (invocation.signal.aborted) {
-      return { kind: 'error', text: t('cancelled') }
+      return { kind: 'error', text: t('cleanup.clearCancelled') }
     }
   }
   try {

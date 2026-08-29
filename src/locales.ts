@@ -69,6 +69,8 @@ export const en = {
   'cleanup.skipped': '({skipped} active session(s) skipped.)',
   'cleanup.clearDry': 'Dry-run: would clear {entries} snapshot(s) across {anchorGroups} anchor group(s) ({journals} journal(s)) of session {sessionId}, freeing {bytes} bytes. Re-run with --apply to delete.',
   'cleanup.clearApply': 'Cleared {entries} snapshot(s) across {anchorGroups} anchor group(s) ({journals} journal(s)) of session {sessionId}, freeing {bytes} bytes. This session now records snapshots fresh from its current state.',
+  'cleanup.clearActive': 'Could not clear session {sessionId}: the session is still running and could not be stopped. Try again once it is idle.',
+  'cleanup.clearCancelled': 'Clear cancelled.',
   'cleanup.clearFailed': 'Could not clear session {sessionId}: {detail}.',
   'cleanup.usage': 'Usage:\n  /snapshot-auto-cleanup                 show status\n  /snapshot-auto-cleanup on|off          enable/disable auto-cleanup\n  /snapshot-auto-cleanup max-age <days>  set the idle cutoff\n  /snapshot-auto-cleanup run [--apply]   dry-run, or execute with --apply\n  /snapshot-auto-cleanup run --current [--apply]   dry-run/clear this session\'s snapshots',
 } satisfies Record<string, string>
@@ -122,6 +124,8 @@ export const zh: Record<HostKey, string> = {
   'cleanup.skipped': '（跳过了 {skipped} 个活动会话。）',
   'cleanup.clearDry': '预演：将清除会话 {sessionId} 的 {entries} 个快照（共 {anchorGroups} 个 anchor 组、{journals} 个日志），释放 {bytes} 字节。加 --apply 正式删除。',
   'cleanup.clearApply': '已清除会话 {sessionId} 的 {entries} 个快照（共 {anchorGroups} 个 anchor 组、{journals} 个日志），释放 {bytes} 字节。该会话已重置为从当前状态重新记录快照。',
+  'cleanup.clearActive': '无法清除会话 {sessionId}：会话仍在运行且未能停止，请待其空闲后重试。',
+  'cleanup.clearCancelled': '清空已取消。',
   'cleanup.clearFailed': '无法清除会话 {sessionId}：{detail}。',
   'cleanup.usage': '用法：\n  /snapshot-auto-cleanup                 查看状态\n  /snapshot-auto-cleanup on|off          开启/关闭自动清理\n  /snapshot-auto-cleanup max-age <天数>  设置失活阈值（天）\n  /snapshot-auto-cleanup run [--apply]   预演，或加 --apply 执行\n  /snapshot-auto-cleanup run --current [--apply]  预演/清除本会话快照',
 }
