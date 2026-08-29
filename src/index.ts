@@ -772,8 +772,6 @@ function formatClearReport(report: ClearSessionReport): string {
   const key: HostKey = report.dryRun ? 'cleanup.clearDry' : 'cleanup.clearApply'
   return t(key, {
     entries: report.entries,
-    anchorGroups: report.anchorGroups,
-    journals: report.journals,
     bytes: report.bytes,
   })
 }
