@@ -114,6 +114,22 @@ export function apply(ctx: ClientContext): void {
 
     /** The named chat view in the alpha.1+ uiConversation registry. */
     const CHAT_VIEW = 'chat'
+    /**
+     * The live chat snapshot of a session, or undefined when unavailable.
+     * Dual channel (see `chatSnapshotOf`): the rc.2 session-face snapshot
+     * first, then the alpha.1+ `uiConversation` "chat" view.
+     * `uiConversation.binding` throws for a session it does not know (a
+     * teardown window) — degrade to "no chat" instead of failing the caller.
+     */
+    const chatOf: ChatOf = (sessionId) => {
+      if (sessionId === undefined) return undefined
+      try {
+        const view = uiConversation()?.binding(sessionId).target(CHAT_VIEW)
+        return chatSnapshotOf(sessionOf(sessionId), view)
+      } catch {
+        return undefined
+      }
+    }
 
     const slots = ctx.slots as unknown as SlotsLike
     yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
@@ -136,22 +152,6 @@ export function apply(ctx: ClientContext): void {
     // the SAME flow as the ↶ button (the mode popover below).
     const commandUi = ctx.get('commandUi') as CommandUiContract
 
-    /**
-     * The live chat snapshot of a session, or undefined when unavailable.
-     * Dual channel (see `chatSnapshotOf`): the rc.2 session-face snapshot
-     * first, then the alpha.1+ `uiConversation` "chat" view.
-     * `uiConversation.binding` throws for a session it does not know (a
-     * teardown window) — degrade to "no chat" instead of failing the caller.
-     */
-    const chatOf: ChatOf = (sessionId) => {
-      if (sessionId === undefined) return undefined
-      try {
-        const view = uiConversation()?.binding(sessionId).target(CHAT_VIEW)
-        return chatSnapshotOf(sessionOf(sessionId), view)
-      } catch {
-        return undefined
-      }
-    }
 
     /** True when the surface has at least one reachable rewind target. */
     const hasCandidates = (sessionId: string | undefined): boolean => {
