@@ -42,14 +42,32 @@ import {
 } from './candidates.ts'
 import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, runRewindAndFill, type SlotsLike } from './portals.tsx'
-import { isCandidateCommand } from './hidden.ts'
+import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 
 export const name = 'dsh-rewind'
+// NOTE: deliberately NOT injecting the alpha.1+ `uiConversation` service here.
+// Cordis inject entries are REQUIRED services; the name does not exist on
+// harness rc.2, so declaring it would stall this plugin forever on DSH
+// Desktop 2.0.3. The service is resolved lazily per read instead (see
+// `uiConversation` in apply), the same optional `ctx.get` pattern the
+// harness's own consumer plugins use on alpha.1+.
 export const inject = ['slots', 'sessions', 'locale', 'commandUi']
 
 const NS = 'rewind'
+
+/**
+ * Structural face of the alpha.1+ `uiConversation` service: per-session
+ * conversation bindings exposing named view targets (the "chat" view carries
+ * the chat snapshot). Typed locally so the plugin never imports the
+ * conversation UI package's types and survives harness version drift.
+ */
+interface UiConversationLike {
+  binding(source: string | { readonly sessionId: string }): {
+    target(name: string): { getSnapshot(): unknown } | undefined
+  }
+}
 
 /** The slot the session-scoped rewind bridge registers into (harness-declared). */
 const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
@@ -82,6 +100,21 @@ export function apply(ctx: ClientContext): void {
     const currentSessionId = (): string | undefined => ctx.sessions.list.getSnapshot().current
     const subscribeLocale = (cb: () => void): (() => void) => ctx.locale.subscribe(cb)
 
+    /**
+     * The alpha.1+ chat channel: the `uiConversation` service (contributed by
+     * dsh-client-ui-conversation; dsh-client-ui-chat registers its named
+     * "chat" view through the uiSession slot hook). Resolved lazily through
+     * `ctx.get` — the harness's own consumer pattern — so the read returns
+     * undefined on rc.2, where the service does not exist (see the `inject`
+     * note above for why it is not a declared dependency). Re-read on every
+     * call: services restart under the live-reload profile patcher.
+     */
+    const uiConversation = (): UiConversationLike | undefined =>
+      (ctx as { get(name: string): unknown }).get('uiConversation') as UiConversationLike | undefined
+
+    /** The named chat view in the alpha.1+ uiConversation registry. */
+    const CHAT_VIEW = 'chat'
+
     const slots = ctx.slots as unknown as SlotsLike
     yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
       {
@@ -91,7 +124,7 @@ export function apply(ctx: ClientContext): void {
         id: 'dsh-rewind-portals',
         order: 1000,
       },
-      createRewindBridge({ sessionOf, currentSessionId, t, subscribeLocale }),
+      createRewindBridge({ sessionOf, chatOf, currentSessionId, t, subscribeLocale }),
     ))
 
     // ---- /rewind command decoration (the standard text-driven flow) ----
@@ -103,17 +136,27 @@ export function apply(ctx: ClientContext): void {
     // the SAME flow as the ↶ button (the mode popover below).
     const commandUi = ctx.get('commandUi') as CommandUiContract
 
-    /** The live chat snapshot of a session, or undefined when unbound. */
-    const chatOf = (sessionId: string | undefined): CandidateChat | undefined => {
+    /**
+     * The live chat snapshot of a session, or undefined when unavailable.
+     * Dual channel (see `chatSnapshotOf`): the rc.2 session-face snapshot
+     * first, then the alpha.1+ `uiConversation` "chat" view.
+     * `uiConversation.binding` throws for a session it does not know (a
+     * teardown window) — degrade to "no chat" instead of failing the caller.
+     */
+    const chatOf: ChatOf = (sessionId) => {
       if (sessionId === undefined) return undefined
-      const face = sessionOf(sessionId)
-      return face === undefined ? undefined : face.getSnapshot().chat as unknown as CandidateChat
+      try {
+        const view = uiConversation()?.binding(sessionId).target(CHAT_VIEW)
+        return chatSnapshotOf(sessionOf(sessionId), view)
+      } catch {
+        return undefined
+      }
     }
 
     /** True when the surface has at least one reachable rewind target. */
     const hasCandidates = (sessionId: string | undefined): boolean => {
       const chat = chatOf(sessionId)
-      return chat !== undefined && rewindCandidatesOfChat(chat).length > 0
+      return chat !== undefined && rewindCandidatesOfChat(chat as unknown as CandidateChat).length > 0
     }
 
     /**
@@ -123,11 +166,11 @@ export function apply(ctx: ClientContext): void {
      * already-loaded history window. Returns undefined when the command was
      * not matched or never settled.
      */
-    const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[] | undefined> => {
-      const known = knownCommandSeqs(face, node => isCandidateCommand(node))
+    const fetchHostCandidates = async (face: SessionFace, chatOf: ChatOf): Promise<readonly RewindCandidate[] | undefined> => {
+      const known = knownCommandSeqs(face, chatOf, node => isCandidateCommand(node))
       const result = await face.command('/rewind __candidates')
       if (!result.ok || result.value?.matched !== true) return undefined
-      const outcome = await waitForCommand(face, node => isCandidateCommand(node) && !known.has(node.seq))
+      const outcome = await waitForCommand(face, chatOf, node => isCandidateCommand(node) && !known.has(node.seq))
       if (outcome === null || outcome.kind !== 'success' || outcome.text === undefined) return undefined
       return rewindCandidatesFromHostText(outcome.text)
     }
@@ -156,7 +199,7 @@ export function apply(ctx: ClientContext): void {
         options: async session => {
           const face = sessionOf(session.sessionId)
           if (face === undefined) return []
-          const candidates = await fetchHostCandidates(face)
+          const candidates = await fetchHostCandidates(face, chatOf)
           if (candidates !== undefined) hostCandidatesCache.set(session.sessionId, candidates)
           return candidates === undefined ? [] : rewindOptionsFromCandidates(candidates, t)
         },
@@ -169,12 +212,13 @@ export function apply(ctx: ClientContext): void {
           if (candidate === undefined) return
           openPopover({
             session: face,
+            chatOf,
             seq: candidate.seq,
             time: candidate.time,
             preview: candidate.preview,
             anchor: composerAnchor(),
             t,
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId) },
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId, chatOf) },
           })
         },
       },

@@ -16,7 +16,7 @@
 
 import type { SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hasFileImpact } from './hidden.ts'
+import { hasFileImpact, type ChatOf, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'
 
@@ -33,6 +33,12 @@ export interface PopoverOptions {
   /** Pending variant: executed after the retract confirm closes the popover. */
   readonly onRetract?: () => void
   readonly preview: string
+  /**
+   * Dual-channel chat reader (rc.2 session face / alpha.1+ uiConversation
+   * view): the durable variant's command probes scan the chat through it.
+   * Unused by the pending-retract variant.
+   */
+  readonly chatOf: ChatOf
   /** The button that opened the popover (outside-click ignore target). */
   readonly anchor: HTMLElement
   readonly t: Translate
@@ -88,10 +94,11 @@ function parseImpactList(text: string): { restores: string[]; deletes: string[] 
 }
 
 /** Find the newest rewind command node matching a predicate. */
-function findCommand(snapshot: ReturnType<SessionFace['getSnapshot']>, match: (node: CommandNode) => boolean): CommandNode | undefined {
+function findCommand(chat: HiddenChat | undefined, match: (node: CommandNode) => boolean): CommandNode | undefined {
+  if (chat === undefined) return undefined
   let found: CommandNode | undefined
-  for (const key of snapshot.chat.order) {
-    const node = snapshot.chat.nodes.get(key)
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
     if (node !== undefined && node.kind === 'command') {
       const command = node.data as CommandNode
       if (match(command)) found = command
@@ -107,11 +114,12 @@ function findCommand(snapshot: ReturnType<SessionFace['getSnapshot']>, match: (n
  * command's stale outcome (e.g. an older preview that found file changes,
  * after those changes were already restored).
  */
-export function knownCommandSeqs(session: SessionFace, match: (node: CommandNode) => boolean): Set<number> {
+export function knownCommandSeqs(session: SessionFace, chatOf: ChatOf, match: (node: CommandNode) => boolean): Set<number> {
   const known = new Set<number>()
-  const snapshot = session.getSnapshot()
-  for (const key of snapshot.chat.order) {
-    const node = snapshot.chat.nodes.get(key)
+  const chat = chatOf(session.sessionId)
+  if (chat === undefined) return known
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
     if (node !== undefined && node.kind === 'command') {
       const command = node.data as CommandNode
       if (match(command)) known.add(command.seq)
@@ -127,6 +135,7 @@ export function knownCommandSeqs(session: SessionFace, match: (node: CommandNode
  */
 export function waitForCommand(
   session: SessionFace,
+  chatOf: ChatOf,
   match: (node: CommandNode) => boolean,
   timeoutMs = 8000,
 ): Promise<{ kind: 'success' | 'error'; text?: string } | null> {
@@ -140,7 +149,7 @@ export function waitForCommand(
       resolve(value)
     }
     const check = (): void => {
-      const node = findCommand(session.getSnapshot(), match)
+      const node = findCommand(chatOf(session.sessionId), match)
       if (node?.outcome !== null && node?.outcome !== undefined) {
         settle({ kind: node.outcome.kind, text: node.outcome.text })
       }
@@ -164,14 +173,14 @@ function isPreviewFor(node: CommandNode, seq: number): boolean {
  * Run `/rewind preview @seq both` and await its outcome. Returns null when the
  * command was not matched or timed out.
  */
-async function previewImpact(session: SessionFace, seq: number): Promise<PreviewOutcome> {
+async function previewImpact(session: SessionFace, chatOf: ChatOf, seq: number): Promise<PreviewOutcome> {
   // Exclude preview nodes that already exist: a second popover on the same
   // message must wait for THIS command's node, not settle on the previous
   // preview's outcome (which may predate a restore).
-  const known = knownCommandSeqs(session, node => isPreviewFor(node, seq))
+  const known = knownCommandSeqs(session, chatOf, node => isPreviewFor(node, seq))
   const result = await session.command(`/rewind preview @${seq} both`)
   if (!result.ok || result.value?.matched !== true) return null
-  return waitForCommand(session, node => isPreviewFor(node, seq) && !known.has(node.seq))
+  return waitForCommand(session, chatOf, node => isPreviewFor(node, seq) && !known.has(node.seq))
 }
 
 /** Element factory helpers (kept local so no framework is involved). */
@@ -226,6 +235,7 @@ interface DurablePopoverOptions {
   readonly preview: string
   readonly anchor: HTMLElement
   readonly t: Translate
+  readonly chatOf: ChatOf
   readonly onRewind: (mode: 'chat' | 'both') => void
 }
 
@@ -258,7 +268,7 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
   focusFirst(root)
 
   void (async () => {
-    const outcome = cached ?? await previewImpact(session, seq)
+    const outcome = cached ?? await previewImpact(session, opts.chatOf, seq)
     if (outcome === null) {
       impact.textContent = t('popover.impact.failed', { message: 'preview command failed or timed out' })
       return
@@ -419,11 +429,11 @@ export function openPopover(opts: PopoverOptions): void {
     openRetractPopover(opts)
     return
   }
-  const { session, seq, time, preview, anchor, t } = opts
+  const { session, seq, time, preview, anchor, t, chatOf } = opts
   const onRewind = opts.onRewind
   if (seq === undefined || time === undefined || onRewind === undefined) return
   // Narrowed durable identity: the pending variant never reaches this flow.
-  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, onRewind }
+  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, chatOf, onRewind }
 
   const root = el('div', CLASS.popover)
   root.setAttribute('role', 'dialog')
@@ -524,7 +534,7 @@ export function openPopover(opts: PopoverOptions): void {
   // keeps "both" enabled — degrade to always-shown rather than hiding a
   // working option.
   void (async () => {
-    const outcome = await previewImpact(session, seq)
+    const outcome = await previewImpact(session, chatOf, seq)
     impactOutcome = outcome
     if (outcome !== null && outcome.kind === 'success') {
       bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
