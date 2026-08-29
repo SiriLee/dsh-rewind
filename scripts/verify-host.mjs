@@ -211,6 +211,8 @@ const check = (name, ok, detail) => {
 
 // 1. command registered
 check('command registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
+// `/undo` is a bare alias of `/rewind`: registered and sharing the same handler.
+check('undo alias registered', typeof commands.get('undo')?.handler === 'function' && commands.get('undo').name === 'undo' && commands.get('undo').handler === commands.get('rewind').handler, JSON.stringify(commands.get('undo')))
 
 // 2. bare /rewind (manual, no parameters) withdraws the most recent user
 //    message (seq 2 "second question") and everything after it

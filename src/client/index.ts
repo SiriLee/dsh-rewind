@@ -14,21 +14,22 @@
  * drift.
  *
  * The text-driven flow is the harness's STANDARD command decoration
- * (`ctx.commandUi.decorate`): a bare `/rewind` — picked from the slash-menu
- * completion, or typed in full and Entered — opens the harness's own
- * popupSelect shell (search, ↑↓/Enter, Esc) listing the rewind candidates
- * instead of executing the command. Picking one continues the SAME flow as
- * the ↶ button: the mode popover, both-impact confirmation, execution, row
- * hiding and the composer refill (`runRewindAndFill`). The parameterized
- * forms (`/rewind @<seq> chat|both`, `/rewind preview …`) stay internal
- * channels the ↶ button and the popover drive through `session.command`.
+ * (`ctx.commandUi.decorate`): a bare `/rewind` (or its alias `/undo`) —
+ * picked from the slash-menu completion, or typed in full and Entered —
+ * opens the harness's own popupSelect shell (search, ↑↓/Enter, Esc) listing
+ * the rewind candidates instead of executing the command. Picking one
+ * continues the SAME flow as the ↶ button: the mode popover, both-impact
+ * confirmation, execution, row hiding and the composer refill
+ * (`runRewindAndFill`). The parameterized forms (`/rewind @<seq> chat|both`,
+ * `/rewind preview …`) stay internal channels the ↶ button and the popover
+ * drive through `session.command`.
  *
  * @module dsh-rewind/client
  */
 
 import type { ClientContext, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
-import type { CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
+import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -143,8 +144,8 @@ export function apply(ctx: ClientContext): void {
       return card ?? textarea ?? document.body
     }
 
-    yield commandUi.decorate({
-      name: 'rewind',
+    // The decoration shared by `/rewind` and its alias `/undo`.
+    const rewindPopupSpec: Omit<CommandDecoration, 'name'> = {
       // The picker exists exactly while the surface has a reachable user
       // message: a fresh session (no candidates) falls through to the host
       // command, which fails with "no user messages" — matching the harness's
@@ -177,7 +178,10 @@ export function apply(ctx: ClientContext): void {
           })
         },
       },
-    })
+    }
+    for (const name of ['rewind', 'undo'] as const) {
+      yield commandUi.decorate({ name, ...rewindPopupSpec })
+    }
 
     const composerTextarea = (): HTMLTextAreaElement | null =>
       document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)

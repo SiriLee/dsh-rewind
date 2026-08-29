@@ -40,7 +40,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 ## Usage
 
-1. Find the user message you want to rewind to in the conversation, or type `/rewind` to open the candidate picker.
+1. Find the user message you want to rewind to in the conversation, or type `/rewind` (or its alias `/undo`) to open the candidate picker.
 2. **Select it.** A small popover offers the two modes ("conversation and code" is only shown when there are restorable changes after the target).
 3. The rewind takes effect immediately: the conversation returns to how it looked at the target message, and the withdrawn message's text is filled back into the composer — edit and re-send.
 

@@ -814,10 +814,18 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   })
 
   ctx.effect(function* () {
+    // One handler serves both `/rewind` and its alias `/undo`.
+    const rewindHandler = (invocation: CommandInvocation): Promise<CommandResult> =>
+      handleRewind(ctx, store, fsService, invocation, inflight)
     yield ctx.commands.register({
       name: 'rewind',
       description: t('command.description'),
-      handler: invocation => handleRewind(ctx, store, fsService, invocation, inflight),
+      handler: rewindHandler,
+    })
+    yield ctx.commands.register({
+      name: 'undo',
+      description: t('command.description'),
+      handler: rewindHandler,
     })
     yield ctx.commands.register({
       name: 'snapshot-auto-cleanup',
