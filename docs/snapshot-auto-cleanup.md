@@ -1,71 +1,90 @@
-# Snapshot auto-cleanup
+# Snapshot cleanup
 
-The rewind store writes one on-disk `before` backup per tracked file change,
-grouped by its anchor message. Snapshots are deduped within a session and capped
-at the newest 100 anchor groups, but across sessions that are no longer active
-the store can
-still grow without bound. `snapshot-auto-cleanup` is an OPTIONAL global policy
-(off by default) that removes the whole snapshot directory of a session that has
-been **long-inactive** — untouched past a configurable idle cutoff.
+The plugin saves a backup of each file before it's edited, so you can rewind your
+code to an earlier point. These backups are called **snapshots**, and they're
+grouped by message and stored per session.
 
-It only ever removes the whole snapshot **directory** of a long-inactive session.
-It never touches the active session's snapshots, never touches the conversation
-log, and leaves snapshot data within the idle cutoff alone.
+`/snapshot-auto-cleanup` helps you manage those snapshots — whether you want to
+reclaim disk space from old sessions or clear the **current** session so its
+rewind history starts fresh.
+
+## What it does
+
+**Automatic cleanup** (off by default): the plugin can remember which sessions
+you've stopped using, and now and then remove their snapshots to keep disk usage
+down. It never touches your active session, and it never touches your
+conversation.
+
+**Manual:** even with automatic cleanup off, you can run the cleanup yourself:
+
+- `/snapshot-auto-cleanup run [--apply]` — preview, then actually remove the
+  snapshots of sessions you haven't used for a while.
+- `/snapshot-auto-cleanup run --current [--apply]` — preview, then actually
+  clear the **current** session's snapshots. This resets its rewind history to
+  "from now on" (your conversation is unaffected). If a turn is currently
+  running, the plugin pauses it first, then clears.
 
 ## Commands
 
 ```
-/snapshot-auto-cleanup                  show status (enabled, max-age, config path)
-/snapshot-auto-cleanup on|off           enable/disable the automatic sweep
-/snapshot-auto-cleanup max-age <days>   set the idle cutoff (positive integer)
-/snapshot-auto-cleanup run              dry-run: list what would be removed
-/snapshot-auto-cleanup run --apply      actually remove those sessions
+/snapshot-auto-cleanup                       show the current settings
+/snapshot-auto-cleanup on|off                turn automatic cleanup on or off
+/snapshot-auto-cleanup max-age <days>        how many idle days before a session's snapshots are removed
+/snapshot-auto-cleanup run                   preview what the automatic cleanup would remove
+/snapshot-auto-cleanup run --apply           actually remove those snapshots
+/snapshot-auto-cleanup run --current         preview clearing this session's snapshots
+/snapshot-auto-cleanup run --current --apply actually clear this session's snapshots
 ```
 
-`run` is a manual escape hatch and works whether or not the automatic cleanup is
-`on`. `run` defaults to a dry-run; add `--apply` to execute.
+`run` always starts as a preview; add `--apply` to make the change. `run` works
+whether or not automatic cleanup is on.
 
-## Config file
+## Settings
 
-The policy is persisted to `<dsh home>/snapshot-cleanup.json`:
+The settings live in `<dsh home>/snapshot-cleanup.json`:
 
 ```json
 { "enabled": false, "maxAgeDays": 30 }
 ```
 
-- `enabled` — whether the automatic sweeps run (default `false`).
-- `maxAgeDays` — how many idle days before a long-inactive session's snapshot dir is
-  removed (default `30`; `0`/negative are rejected, so a broken config can never
-  delete everything).
+- `enabled` — whether automatic cleanup runs (default `false`).
+- `maxAgeDays` — how many idle days before a session's snapshots are removed
+  (default `30`). Only positive numbers are accepted, so a broken setting can
+  never delete everything.
 
-Override the path with the `DSH_SNAPSHOT_CLEANUP_CONFIG` environment variable.
-The file is written only by the `/snapshot-auto-cleanup` command. A missing file
-reads as the safe default (off); a missing or corrupt file makes a sweep
-**fail-closed** (delete nothing) and log a warning, and is surfaced when you run
-the command again.
+You can point the plugin at a different file with the `DSH_SNAPSHOT_CLEANUP_CONFIG`
+environment variable. The file is changed only when you turn cleanup on/off or
+set `max-age`; a missing file reads as the safe default (off).
 
-## When it runs
+## When automatic cleanup runs
 
-The 24h window is anchored on a **persisted** last-sweep time
-(`<dsh home>/snapshot-cleanup-last-sweep.json`), so a host restart does not reset
-it: the auto-sweep checks **once per process run**, on the first session
-activity of a window (a user message or a completed tool call), and cleans only
-when enabled **and** >=24h since the last sweep. It runs in the background and
-never blocks the activity that triggered it. Because the check happens once per
-run, a change that takes effect immediately is best applied with
-`/snapshot-auto-cleanup run`; editing the config file by hand (or enabling after
-the run's first activity) takes effect on the next run.
+Automatic cleanup checks at most **once per run** (a restart lets it check again),
+on the first session activity (a message you send or a tool call that finishes),
+and only when it's enabled and at least 24 hours have passed since the last
+check. The 24-hour clock is saved to `<dsh home>/snapshot-cleanup-last-sweep.json`,
+so restarting doesn't reset it. It runs in the background and never blocks
+what you're doing.
 
-## Safety and boundaries
+If you want a change to take effect right away, use `run`; automatic cleanup
+picks up a fresh setting on the next run.
 
-- Removes only whole **long-inactive** session dirs; the active session and the
-  conversation log are never touched.
-- "Inactive" is judged by mtime: a session still being written to keeps scrolling
-  its newest member stamp forward, so it is never old enough to be pruned.
-- Dedup `ref` links are session-relative, so removing a whole dir cannot dangle a
-  link elsewhere.
-- Trade-off: enabling auto-cleanup means a session resumed after a long idle gap
-  will rewind only from its remaining (newest 100) anchors; its old snapshots are
-  gone. The conversation log is never affected.
-- Deleting the whole store dir manually stays safe (it is recreated on the next
-  capture); auto-cleanup just scopes that removal to long-inactive sessions.
+## Safety
+
+- Only rewind **snapshots** (the file backups) are ever removed. Your
+  conversation is never touched, and the plugin never rewrites or deletes your
+  session history.
+- Automatic cleanup never removes your **active** session's snapshots — only
+  sessions that have been idle past the cutoff.
+- `run --current` clears the current session's snapshots. This is one-way for
+  that session's file-rewind history: you can't rewind code to before the clear,
+  but your conversation stays intact, and the session starts recording fresh
+  snapshots from now on.
+
+## Known limitation
+
+The plugin keeps the most recent **100 messages'** snapshots per session. If you
+rewind or compact a lot in one long session, those 100 slots can be taken up by
+messages that are no longer reachable, so you may find you can't rewind as far
+back as you'd like. (Claude Code behaves the same way.) To get back to a clean
+state, run `/snapshot-auto-cleanup run --current --apply` to clear the current
+session and start fresh.
