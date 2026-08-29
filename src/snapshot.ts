@@ -429,23 +429,6 @@ export interface ClearSessionReport {
 }
 
 /**
- * Thrown by {@link SnapshotStore.clearSession} when the session holds a
- * NON-TERMINAL restore journal (`running` / `rollback-running` /
- * `recovery-required`). The clear is refused because the journal is the only
- * record of how to finish or undo that interrupted restore; the caller renders
- * a human instruction instead of destroying it. There is no override.
- */
-export class PendingRestoreError extends Error {
-  readonly pending: number
-
-  constructor(pending: number) {
-    super(`session has ${pending} restore record(s) that are not cleanly complete`)
-    this.name = 'PendingRestoreError'
-    this.pending = pending
-  }
-}
-
-/**
  * Walk one directory tree and compute the total size (regular files only) and
  * the newest stamp (max `lstat.mtimeMs` over every member, directories
  * included). `lstat` never follows a symlink, so a hostile symlink inside the
@@ -1552,19 +1535,25 @@ export class SnapshotStore {
    * targetable by id; that is a directory-manipulation concern the user can do
    * directly).
    *
-   * SAFETY:
+   * SEMANTICS — clearing is an explicit abandonment: issuing the command means
+   * the user accepts that this session's snapshot archive goes away. It is
+   * therefore NOT gated on the state of any restore journal. A clear and a
+   * restore are both slash commands the host runs to completion for an agent,
+   * so they never interleave — any non-terminal journal present on disk is a
+   * stale orphan from a previous (crashed) process, and discarding it is the
+   * correct, safe resolution of that abandoned restore.
+   *
+   * SAFETY (this module's real concern is the plugin's ongoing BEHAVIOR, not
+   * losing snapshots):
    *  - Only the session dir is removed; dedup refs are session-relative, so
    *    there is no cross-session dangling to materialize (the same rationale as
    *    {@link pruneStale}'s whole-dir removal).
-   *  - A NON-TERMINAL restore journal (`running` / `rollback-running` /
-   *    `recovery-required`) REFUSES the clear: discarding it would orphan a
-   *    half-applied restore whose rescue state — the only record of how to
-   *    finish or undo it — lives in that journal. There is deliberately no
-   *    override: finish or roll back the restore first.
-   *  - The in-memory dedup state (`lastEntry` / `seededSessions`) is reset
-   *    ONLY when entries are actually removed, so a dry-run leaves the store
-   *    untouched and a later `recordEntry` never links to a deleted prior
-   *    entry (no dangling ref).
+   *  - The in-memory dedup state (`lastEntry` / `seededSessions`) is ALWAYS
+   *    reset on an apply — even when the dir was already empty. A stale
+   *    in-memory entry (e.g. a session whose dir was removed out-of-band) would
+   *    otherwise link a later `recordEntry` to a deleted prior entry, leaving a
+   *    dangling ref that breaks restore resolution. This is the primary
+   *    correctness guarantee.
    *
    * `dryRun` computes the report without touching disk or memory.
    */
@@ -1572,16 +1561,6 @@ export class SnapshotStore {
     const dryRun = opts?.dryRun ?? false
     const stats = await this.sessionStats(sessionId)
     if (!dryRun) {
-      // Refuse while the session holds a recovery record that is not a cleanly
-      // terminal restore: a non-terminal journal (an in-progress restore whose
-      // rescue state is the only way to finish or undo it) OR an unclassifiable
-      // (corrupt) journal. Same fail-loud invariant as the store's journaling —
-      // never silently destroy a recovery record we cannot classify.
-      const { journals, corrupt } = await this.listJournals(sessionId)
-      const pending = journals.filter(journal => journal.state !== 'completed' && journal.state !== 'rolled-back').length + corrupt.length
-      if (pending > 0) {
-        throw new PendingRestoreError(pending)
-      }
       if (stats.anchorGroups > 0 || stats.journals > 0) {
         await rm(this.sessionDir(sessionId), { recursive: true, force: true })
       }

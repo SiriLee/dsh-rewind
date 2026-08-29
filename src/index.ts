@@ -37,7 +37,7 @@ import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, PendingRestoreError, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
   DEFAULT_CLEANUP_CONFIG,
   loadCleanupConfig,
@@ -786,8 +786,23 @@ function formatClearReport(report: ClearSessionReport): string {
  * dropped, so the next user-message boundary re-derives an empty tracked set
  * instead of re-scanning every formerly-tracked file (the lag relief).
  *
- * A session holding a non-terminal restore journal (`PendingRestoreError`) is
- * refused — the journal is the only record of how to finish/undo that restore.
+ * The `--apply` mutation must only run once the session is STOPPED: a running
+ * turn (the LLM thinking/outputting/editing, actively driving write tools)
+ * would otherwise let a concurrent `recordEntry` at `tools/post-execute`
+ * interleave with this directory `rm` and the in-memory dedup reset, leaving a
+ * dangling dedup link (restore resolution then fails per-file). Mirroring
+ * `rewind`, we ACTIVELY pause the running turn — cancel it and wait for
+ * quiescence — before clearing; if it cannot stop, we error (`stopFailed`) and
+ * never clear, so the plugin is never left corrupted. `agent.status` reads
+ * `idle` during a maintenance phase and the boundary re-check is fire-and-forget,
+ * so a mere status read is not enough — the `whenIdle` race is required, exactly
+ * as in `executeRewind`.
+ *
+ * Clearing is an explicit abandonment of this session's snapshot archive, so it
+ * is not gated on any restore-journal state (a clear and a restore never
+ * interleave; any non-terminal journal found is a stale orphan from a previous
+ * process). The memory reset is the part that must never be skipped — it is
+ * what keeps restore resolution and the boundary re-check correct afterwards.
  */
 async function handleClearCurrent(
   store: SnapshotStore,
@@ -795,15 +810,26 @@ async function handleClearCurrent(
   apply: boolean,
   trackedBySession: Map<string, Set<string>>,
 ): Promise<CommandResult> {
-  const sessionId = invocation.agent.session.id
+  const { agent } = invocation
+  const sessionId = agent.session.id
+  // Only the apply (mutation) path needs quiescence: a dry-run is a pure read.
+  if (apply) {
+    if (agent.status !== 'idle') {
+      agent.cancel({ kind: 'user' }, { keepInbox: true })
+      const stopped = await waitForAgentIdle(agent, invocation.signal)
+      if (!stopped) {
+        return { kind: 'error', text: t('stopFailed') }
+      }
+    }
+    if (invocation.signal.aborted) {
+      return { kind: 'error', text: t('cancelled') }
+    }
+  }
   try {
     const report = await store.clearSession(sessionId, { dryRun: !apply })
     if (!report.dryRun) trackedBySession.delete(sessionId)
     return { kind: 'success', text: formatClearReport(report) }
   } catch (error) {
-    if (error instanceof PendingRestoreError) {
-      return { kind: 'error', text: t('cleanup.clearRefuse', { sessionId }) }
-    }
     return { kind: 'error', text: t('cleanup.clearFailed', { detail: error instanceof Error ? error.message : String(error), sessionId }) }
   }
 }

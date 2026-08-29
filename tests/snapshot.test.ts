@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:f
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { reconcileTracked, SnapshotStore, PendingRestoreError, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
+import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -767,24 +767,30 @@ describe('clearSession', () => {
     expect(entries[0]!.path).toBe(file2)
   })
 
-  it('refuses to clear a session that holds a pending (non-terminal) restore journal', async () => {
+  it('clears a session even when a stale (orphaned) non-terminal restore journal exists', async () => {
     const file = await touch('a.txt', 'original')
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
     await writeFile(file, 'rewritten', 'utf8')
     // Crash BEFORE the first restore action so a `running` journal stays on disk.
     await expect(store.restoreAfter(session, 5, unlink, undefined, { crash: () => { throw new Error('crash') } })).rejects.toThrow()
-    await expect(store.clearSession(session)).rejects.toThrow(PendingRestoreError)
-    // The session dir is still present (nothing was removed).
-    expect(await store.exists(store.sessionDir(session))).toBe(true)
+    const dir = store.sessionDir(session)
+    expect(await store.exists(dir)).toBe(true)
+    // Clearing is an explicit abandonment of this session's archive, so it must
+    // proceed regardless of the orphaned journal (it is only ever stale — a
+    // clear and a restore never interleave).
+    const rep = await store.clearSession(session)
+    expect(rep.dryRun).toBe(false)
+    expect(await store.exists(dir)).toBe(false)
   })
 
-  it('refuses to clear a session holding a corrupt (unclassifiable) restore journal', async () => {
+  it('clears a session holding a corrupt (unclassifiable) journal', async () => {
     const file = await touch('a.txt', 'x')
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
-    // A journal file that fails schema validation — an unclassifiable recovery
-    // record that must never be silently destroyed (fail-loud invariant).
     await writeFile(join(store.sessionDir(session), 'restore-journal-bad.json'), JSON.stringify({ not: 'a journal' }), 'utf8')
-    await expect(store.clearSession(session)).rejects.toThrow(PendingRestoreError)
+    const rep = await store.clearSession(session)
+    expect(rep.dryRun).toBe(false)
+    expect(rep.journals).toBe(1)
+    expect(await store.exists(store.sessionDir(session))).toBe(false)
   })
 
   it('apply on an already-empty session still resets the in-memory dedup state', async () => {

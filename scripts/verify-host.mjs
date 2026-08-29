@@ -557,6 +557,25 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('run --current dry-run reports the session without deleting', clearDry.kind === 'success' && await exists(clearDir), clearDry.text)
   const clearApplied = await callClear('run --current --apply')
   check('run --current --apply clears the active session snapshots', clearApplied.kind === 'success' && !(await exists(clearDir)), clearApplied.text)
+
+  // A running session's `--apply` must ACTIVELY pause the agent (cancel + wait
+  // for quiescence) before clearing, mirroring `rewind` — never clear while the
+  // tool pipeline could still be writing to the same store. A running agent
+  // that cancels to idle is stopped and the clear proceeds.
+  const busyId = 'verify-clearbusy'
+  const busySession = buildSession(busyId, wsDir)
+  let busyCancelled = false
+  const busyAgent = {
+    ...makeAgent(busySession.id, busySession, 'running'),
+    cancel: () => { busyCancelled = true; busyAgent.status = 'idle' },
+    whenIdle: () => new Promise(resolve => {
+      const poll = () => { if (busyAgent.status === 'idle') resolve(); else setTimeout(poll, 10) }
+      poll()
+    }),
+  }
+  await seedDir(busyId, new Date()) // snapshot data for this session's dir
+  const clearBusy = await cleanupDef.handler({ commandId: CommandId('cid'), agent: busyAgent, rawInput: 'run --current --apply', signal: aborted() })
+  check('run --current --apply pauses a running session and clears it', busyCancelled === true && clearBusy.kind === 'success' && !(await exists(join(snapRoot, busyId))), clearBusy.text)
 }
 
 // 16. deleting the plugin data directory wipes ONLY file backups: chat
