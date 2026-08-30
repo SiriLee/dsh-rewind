@@ -20,7 +20,7 @@
 ```ts
 import { hiddenSeqsOf, type HiddenChat } from 'dsh-rewind-plugin/client'
 
-const chat = session.getSnapshot().chat
+const chat = session.getSnapshot().chat // rc.2 来源；0.1.2-alpha.1+ 用 uiConversation "chat" 视图
 const hidden = hiddenSeqsOf(chat as HiddenChat) // 被隐藏的 anchor seq 集合
 ```
 

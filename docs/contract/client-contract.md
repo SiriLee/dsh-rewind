@@ -21,7 +21,7 @@ the plugin itself uses (it never reads the DOM or host copy):
 ```ts
 import { hiddenSeqsOf, type HiddenChat } from 'dsh-rewind-plugin/client'
 
-const chat = session.getSnapshot().chat
+const chat = session.getSnapshot().chat // rc.2 source; 0.1.2-alpha.1+ uses the uiConversation "chat" view
 const hidden = hiddenSeqsOf(chat as HiddenChat) // Set<number> of anchor seqs
 ```
 

@@ -32,7 +32,11 @@
 > `^0.1.0-rc.6 || ^0.1.1-rc.2` and will gain the `0.1.2` tuple when the harness
 > publishes it. Pinned by `tests/chat-channel.test.ts` (channel precedence + the
 > alpha.1 snapshot shape) and `tests/client-dom.test.ts` (the button-target
-> pairing that consumes the chat).
+> pairing that consumes the chat). The composer refill is dual-channel the same
+> way: on alpha.1 the withdrawn text is written through the `conversation`
+> service's `input` resolver's `setDraft` (the harness's own Lexical editor),
+> else the rc.2 `<textarea>` / alpha.1 `contenteditable` DOM write (`writeComposer`
+> in `src/client/portals.tsx`); pinned by `tests/client-composer.test.ts`.
 
 ## Definition of "fully compatible" (invariants)
 
