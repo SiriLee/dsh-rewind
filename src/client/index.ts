@@ -41,7 +41,7 @@ import {
   type RewindCandidate,
 } from './candidates.ts'
 import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
-import { createRewindBridge, runRewindAndFill, type SlotsLike } from './portals.tsx'
+import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
@@ -69,11 +69,28 @@ interface UiConversationLike {
   }
 }
 
+/**
+ * Structural face of the alpha.1+ `conversation.input` session-input resolver
+ * (`SessionInputResolver`): resolves a per-session input shell whose
+ * `setDraft` replaces the whole composer draft through the harness's Lexical
+ * editor. Typed locally so the plugin never imports the conversation UI
+ * package and survives harness version drift. Absent on rc.2.
+ */
+interface SessionInputResolverLike {
+  for(actx: unknown): { setDraft(text: string): void }
+}
+
 /** The slot the session-scoped rewind bridge registers into (harness-declared). */
 const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
-/** The composer textarea dsh renders for the current session's input. */
-const COMPOSER_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
+/**
+ * The composer's text surface, whichever harness version is running: rc.2 is a
+ * `<textarea>`, 0.1.2-alpha.1+ is a Lexical `contenteditable` div. The
+ * `/rewind` text-flow anchor must point at whichever exists, so the popup
+ * positions correctly on both channels.
+ */
+const COMPOSER_TEXTAREA_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
+const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
 
 /**
  * Client plugin body: command decoration + parameterized guard + locale + the
@@ -131,6 +148,28 @@ export function apply(ctx: ClientContext): void {
       }
     }
 
+    /**
+     * The alpha.1+ composer channel: the `conversation` service's `input`
+     * resolver (`SessionInputResolver`) through which `setDraft` replaces the
+     * whole composer draft (the harness's own Lexical editor — the correct
+     * semantics, not a DOM hack). Resolved lazily through `ctx.get` so the
+     * read is undefined on rc.2, where the service does not exist;
+     * `sessions.scope` is likewise absent on rc.2. Wrapped in the
+     * `writeComposer` dual channel: the alpha.1 facade when reachable, else
+     * the rc.2 textarea / alpha.1 contenteditable DOM fill. Never throws.
+     */
+    const setComposerText = (sessionId: string, text: string): boolean => {
+      const conversation = (ctx as { get(name: string): unknown }).get('conversation') as { input?: SessionInputResolverLike } | undefined
+      const input = conversation?.input
+      const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
+      return writeComposer(
+        text,
+        input !== undefined && scope !== undefined
+          ? { setDraft: (draft: string) => { input.for(scope).setDraft(draft) } }
+          : undefined,
+      )
+    }
+
     const slots = ctx.slots as unknown as SlotsLike
     yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
       {
@@ -140,7 +179,7 @@ export function apply(ctx: ClientContext): void {
         id: 'dsh-rewind-portals',
         order: 1000,
       },
-      createRewindBridge({ sessionOf, chatOf, currentSessionId, t, subscribeLocale }),
+      createRewindBridge({ sessionOf, chatOf, currentSessionId, setComposerText, t, subscribeLocale }),
     ))
 
     // ---- /rewind command decoration (the standard text-driven flow) ----
@@ -183,9 +222,9 @@ export function apply(ctx: ClientContext): void {
 
     /** The composer card the mode popover anchors to (the text flow has no button). */
     const composerAnchor = (): HTMLElement => {
-      const textarea = composerTextarea()
-      const card = textarea?.closest<HTMLElement>('[data-composer-card]')
-      return card ?? textarea ?? document.body
+      const surface = composerSurface()
+      const card = surface?.closest<HTMLElement>('[data-composer-card]')
+      return card ?? surface ?? document.body
     }
 
     // The decoration shared by `/rewind` and its alias `/undo`.
@@ -219,7 +258,7 @@ export function apply(ctx: ClientContext): void {
             preview: candidate.preview,
             anchor: composerAnchor(),
             t,
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId, chatOf) },
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId, chatOf, setComposerText) },
           })
         },
       },
@@ -228,8 +267,10 @@ export function apply(ctx: ClientContext): void {
       yield commandUi.decorate({ name, ...rewindPopupSpec })
     }
 
-    const composerTextarea = (): HTMLTextAreaElement | null =>
-      document.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR)
+    /** The composer's text-holding element: rc.2 `<textarea>` or alpha.1+ contenteditable. */
+    const composerSurface = (): HTMLElement | null =>
+      document.querySelector<HTMLTextAreaElement>(COMPOSER_TEXTAREA_SELECTOR)
+        ?? document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
 
     yield () => {
       style.remove()
