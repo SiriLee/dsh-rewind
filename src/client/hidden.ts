@@ -15,6 +15,32 @@ export interface HiddenChat {
 }
 
 /**
+ * Reader for one session's live chat snapshot. The dual channel hides the
+ * harness split behind SiriLee/dsh-rewind#7: rc.2 serves the chat from the
+ * session face snapshot, while 0.1.2-alpha.1+ serves it from the
+ * `uiConversation` service's named "chat" view (contributed by
+ * dsh-client-ui-chat through the uiSession slot hook).
+ */
+export type ChatOf = (sessionId: string | undefined) => HiddenChat | undefined
+
+/**
+ * Resolve the chat snapshot across the two harness channels: the session-face
+ * snapshot first (rc.2 — on alpha.1+ the face no longer carries `chat`, so the
+ * field reads `undefined`), then the `uiConversation` "chat" view. The view's
+ * `getSnapshot()` returns undefined until the named view is registered, so
+ * both channels missing degrades to `undefined` (no targets, no hiding —
+ * never a crash).
+ */
+export function chatSnapshotOf(
+  face: { getSnapshot(): { chat?: unknown } } | undefined,
+  chatView: { getSnapshot(): unknown } | undefined,
+): HiddenChat | undefined {
+  const legacy = face?.getSnapshot().chat as HiddenChat | undefined
+  if (legacy !== undefined) return legacy
+  return (chatView?.getSnapshot() ?? undefined) as HiddenChat | undefined
+}
+
+/**
  * Extract the rewind target seq from a `/rewind` command's structured `args`
  * (e.g. `@5 chat`, `preview @5 both`). Locale-independent — never parses the
  * host's human outcome copy.

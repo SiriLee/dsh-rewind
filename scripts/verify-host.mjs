@@ -46,7 +46,7 @@ import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
 
 const aborted = () => new AbortController().signal
@@ -64,7 +64,9 @@ await mkdir(wsDir, { recursive: true })
 /** Real-filesystem fs double: resolve returns the real display path. */
 class FakeFs extends FileSystem {
   async resolve(path, opts = {}) {
-    const displayPath = opts?.cwd !== undefined && !path.startsWith('/') ? join(opts.cwd, path) : path
+    // isAbsolute: on Windows absolute paths look like `C:\...` (or `C:/...`),
+    // so a leading-`/` probe would misclassify them as relative.
+    const displayPath = opts?.cwd !== undefined && !isAbsolute(path) ? join(opts.cwd, path) : path
     return { targetKey: FsTargetKey(displayPath), displayPath }
   }
   processPath(target) { return target.displayPath }
@@ -196,7 +198,8 @@ async function runWrite(agentOf, callId, filePath, content) {
   const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
   await ctx.waterfall('tools/execute', exec, async () => {
     const cwd = agentOf?.session?.header?.cwd
-    const resolved = cwd !== undefined && !filePath.startsWith('/') ? join(cwd, filePath) : filePath
+    // isAbsolute: Windows-absolute paths (`C:\...`) must not be re-joined.
+    const resolved = cwd !== undefined && !isAbsolute(filePath) ? join(cwd, filePath) : filePath
     await fs.writeText({ targetKey: FsTargetKey(resolved), displayPath: resolved }, content)
     return { isError: false, content: [] }
   })

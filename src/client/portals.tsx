@@ -34,8 +34,8 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
-import type { ChatConversationViewNode, SessionFace, UserMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hiddenSeqsOf, isExecutedRewindCommand } from './hidden.ts'
+import type { SessionFace, UserMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
+import { hiddenSeqsOf, isExecutedRewindCommand, type ChatOf, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
@@ -43,12 +43,6 @@ import { matchPendingRows, retractSpan } from './pending.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
 type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
-
-/** The chat snapshot shape the portal collection reads (structural subset). */
-interface ChatLike {
-  readonly order: readonly string[]
-  readonly nodes: { get(key: string): ChatConversationViewNode | undefined }
-}
 
 /** One portal target: the actions row of a user/steering seat + its durable node. */
 export type PortalTarget =
@@ -78,6 +72,12 @@ export type PortalTarget =
 /** Capabilities the session-scoped bridge receives from the plugin apply(). */
 export interface RewindBridgeDeps {
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
+  /**
+   * Dual-channel chat reader (rc.2 session face / alpha.1+ uiConversation
+   * "chat" view): every chat snapshot read goes through it. See
+   * `chatSnapshotOf` in hidden.ts for the channel precedence.
+   */
+  readonly chatOf: ChatOf
   readonly currentSessionId: () => string | undefined
   readonly t: Translate
   readonly subscribeLocale: (cb: () => void) => () => void
@@ -99,10 +99,10 @@ export interface SlotsLike {
  * The plain text of the user message at `seq` in the session snapshot, for
  * filling the composer after a withdraw.
  */
-function userTextAt(session: SessionFace, seq: number): string | undefined {
-  const snap = session.getSnapshot()
-  for (const key of snap.chat.order) {
-    const node = snap.chat.nodes.get(key)
+function userTextAt(chat: HiddenChat | undefined, seq: number): string | undefined {
+  if (chat === undefined) return undefined
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
     if (node === undefined || node.kind !== 'user') continue
     const user = node.data as UserMessageNode
     if (user.seq === seq) {
@@ -132,8 +132,8 @@ export function fillComposer(text: string): boolean {
 }
 
 /** The durable user/steering node behind a seat key via the runtime snapshot. */
-function userNodeOf(session: SessionFace, key: string): UserMessageNode | undefined {
-  const node = session.getSnapshot().chat.nodes.get(key)
+function userNodeOf(chat: HiddenChat | undefined, key: string): UserMessageNode | undefined {
+  const node = chat?.nodes.get(key)
   if (node === undefined || (node.kind !== 'user' && node.kind !== 'steering')) return undefined
   // SteeringMessageNode carries the same seq/time/content/source fields.
   return node.data as UserMessageNode
@@ -157,17 +157,18 @@ export async function runRewindAndFill(
   seq: number,
   mode: 'chat' | 'both',
   currentSessionId: () => string | undefined,
+  chatOf: ChatOf,
 ): Promise<void> {
   // Exclude already-present executed-rewind nodes for this target BEFORE
   // issuing the command: a repeated rewind of the same message must wait
   // for THIS command's node, not settle on the previous one.
-  const known = knownCommandSeqs(session, node => isExecutedRewindCommand(node, seq))
+  const known = knownCommandSeqs(session, chatOf, node => isExecutedRewindCommand(node, seq))
   const result = await session.command(`/rewind @${seq} ${mode}`)
   if (!result.ok || result.value?.matched !== true) return
   // The executed rewind lands as a CommandNode with a marker-carrying
   // success outcome; wait for exactly that (longer than the preview wait:
   // a running turn is cancelled first, which can take seconds).
-  const outcome = await waitForCommand(session, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
+  const outcome = await waitForCommand(session, chatOf, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
   if (outcome === null) return
   if (outcome.kind !== 'success') {
     // The host rejected the rewind (e.g. the target was shadowed by
@@ -180,7 +181,7 @@ export async function runRewindAndFill(
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
   if (currentSessionId() !== session.sessionId) return
-  const text = userTextAt(session, seq)
+  const text = userTextAt(chatOf(session.sessionId), seq)
   if (text === undefined || text === '') return
   fillComposer(text)
 }
@@ -218,7 +219,7 @@ const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 const PENDING_SEAT_SELECTOR = '[data-pending-steering][data-time-hover-root]'
 
 /** Collect the portal targets of one session: user rows × snapshot nodes. */
-function collectTargets(chat: ChatLike, hiddenSeqs: ReadonlySet<number>): readonly PortalTarget[] {
+function collectTargets(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>): readonly PortalTarget[] {
   const rows = new Map<string, HTMLElement>()
   for (const element of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) {
     const key = element.dataset.chatAnchorKey
@@ -336,7 +337,7 @@ interface RewindPortalsProps extends RewindBridgeDeps {
  * skipped when the target set is unchanged), so the plugin never runs a
  * synchronous full-transcript scan inside a commit microtask.
  */
-export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subscribeLocale }: RewindPortalsProps): ReactNode {
+export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, t, subscribeLocale }: RewindPortalsProps): ReactNode {
   const [targets, setTargets] = useState<readonly PortalTarget[]>([])
   // Rows we have hidden; re-shown when they leave the withdrawn span.
   const hidden = useRef(new WeakSet<HTMLElement>())
@@ -359,8 +360,12 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
         return
       }
       const snapshot = session.getSnapshot()
-      const chat = snapshot.chat
-      const hiddenSeqs = hiddenSeqsOf(chat)
+      // Since harness 0.1.2-alpha.1 the chat snapshot no longer rides the
+      // session face; `chatOf` picks the rc.2 face channel or the alpha.1+
+      // `uiConversation` "chat" view. undefined = no channel available yet:
+      // skip the durable path entirely (pending targets stay collectible).
+      const chat = chatOf(sessionId)
+      const hiddenSeqs = chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
       let hiddenCount = 0
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
       // message inside the executed rewinds' [earliest target, latest marker]
@@ -372,9 +377,10 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
       // from any collapse/filter hide. Purely observational: the marker is
       // kept in sync with the hide/show state on both branches (a recreated
       // row has no marker and is re-marked when it re-enters a hidden span).
-      for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
+      for (const seat of chat === undefined ? [] : document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
         const key = seat.dataset.chatAnchorKey
-        const anchor = key !== undefined ? chat.nodes.get(key)?.anchorSeq : undefined
+        // `chat` is defined whenever the loop body runs (see the loop guard).
+        const anchor = key !== undefined ? chat?.nodes.get(key)?.anchorSeq : undefined
         if (anchor !== undefined && hiddenSeqs.has(anchor)) {
           seat.style.display = 'none'
           seat.dataset.dshRewindHidden = 'true'
@@ -393,7 +399,8 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
           `[dsh-rewind] hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
         )
       }
-      const next = [...collectTargets(chat, hiddenSeqs), ...collectPendingTargets(snapshot)]
+      const durable = chat === undefined ? [] : collectTargets(chat, hiddenSeqs)
+      const next = [...durable, ...collectPendingTargets(snapshot)]
       // Diff: no change → no re-render (the observer fires on every mutation;
       // only an actual target-set change should touch React).
       setTargets(current => (sameTargets(current, next) ? current : next))
@@ -431,6 +438,7 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
           target={target}
           sessionId={sessionId}
           sessionOf={sessionOf}
+          chatOf={chatOf}
           t={t}
         />
       )
@@ -440,6 +448,7 @@ export function RewindPortals({ sessionId, sessionOf, currentSessionId, t, subsc
           target={target}
           sessionId={sessionId}
           sessionOf={sessionOf}
+          chatOf={chatOf}
           currentSessionId={currentSessionId}
           t={t}
         />
@@ -453,12 +462,13 @@ interface RewindButtonProps {
   readonly target: Extract<PortalTarget, { kind: 'durable' }>
   readonly sessionId: string
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
+  readonly chatOf: ChatOf
   readonly currentSessionId: () => string | undefined
   readonly t: Translate
 }
 
 /** The per-message ↶ button (28px, matching the harness IconActions). */
-function RewindButton({ target, sessionId, sessionOf, currentSessionId, t }: RewindButtonProps): ReactNode {
+function RewindButton({ target, sessionId, sessionOf, chatOf, currentSessionId, t }: RewindButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
@@ -468,16 +478,17 @@ function RewindButton({ target, sessionId, sessionOf, currentSessionId, t }: Rew
       console.warn('[dsh-rewind] rewind button clicked with no session binding')
       return
     }
-    const node = userNodeOf(session, target.key)
+    const node = userNodeOf(chatOf(sessionId), target.key)
     if (node === undefined) return
     openPopover({
       session,
+      chatOf,
       seq: node.seq,
       time: node.time,
       preview: messagePreviewOf(node),
       anchor: event.currentTarget,
       t,
-      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, currentSessionId) },
+      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, currentSessionId, chatOf) },
     })
   }
 
@@ -540,17 +551,20 @@ interface RetractButtonProps {
   readonly target: Extract<PortalTarget, { kind: 'pending' }>
   readonly sessionId: string
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
+  /** Passed through to openPopover (the shared PopoverOptions shape). */
+  readonly chatOf: ChatOf
   readonly t: Translate
 }
 
 /** The per-pending-message ↶ button (same visual family as the durable button). */
-function RetractButton({ target, sessionId, sessionOf, t }: RetractButtonProps): ReactNode {
+function RetractButton({ target, sessionId, sessionOf, chatOf, t }: RetractButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
     if (session === undefined) return
     openPopover({
       session,
+      chatOf,
       preview: target.preview,
       anchor: event.currentTarget,
       t,

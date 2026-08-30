@@ -5,5 +5,5 @@
     "emitDeclarationOnly": false,
     "rootDir": "."
   },
-  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/client-contract.test.ts"]
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/client-contract.test.ts", "tests/chat-channel.test.ts"]
 }
