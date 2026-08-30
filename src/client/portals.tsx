@@ -218,8 +218,12 @@ const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
 const PENDING_SEAT_SELECTOR = '[data-pending-steering][data-time-hover-root]'
 
-/** Collect the portal targets of one session: user rows × snapshot nodes. */
-function collectTargets(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>): readonly PortalTarget[] {
+/**
+ * Collect the portal targets of one session: user rows × snapshot nodes.
+ * Exported as a test seam — the DOM→targets pairing that drives the ↶ button
+ * is otherwise only reachable through a full React portal render.
+ */
+export function collectTargets(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>): readonly PortalTarget[] {
   const rows = new Map<string, HTMLElement>()
   for (const element of document.querySelectorAll<HTMLElement>(USER_SEAT_SELECTOR)) {
     const key = element.dataset.chatAnchorKey

@@ -4,5 +4,5 @@
     "types": ["node"]
   },
   "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "tests/client-contract.test.ts"]
+  "exclude": ["node_modules", "tests/client-contract.test.ts", "tests/client-dom.test.ts"]
 }
