@@ -152,6 +152,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 2. **Lightweight file rewind has a cost** — in specific cases not all changes can be rewound. Consistent with Claude Code. See: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
 3. **Rewinds from `≤ v0.2.4`** — sessions rewound with these versions may **fail to load history** after more conversation. Install a v0.3.3-or-earlier release and use its bundled repair tool ([docs/compat/troubleshooting.md](docs/compat/troubleshooting.md)).
 4. **Rewinds from `≤ v0.3.3`** — compaction (`/compact`) is unavailable for those sessions. Newer versions are compatible; for affected old sessions, start a new session.
+5. **The turn-rail shows rewound turns** — the right-side rail added in DSH `v0.1.2-alpha.1` keeps ticks for withdrawn messages: clicking does not jump and hovering shows the withdrawn text. Only a display difference; no functional impact.
 
 ## Security
 
