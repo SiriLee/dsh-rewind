@@ -46,6 +46,13 @@ git push origin main --tags   # triggers .github/workflows/publish.yml
   build + artifact verification + a `npm pack --dry-run` — on every push / PR
   across both Node engines boundary versions; the tarball layout is guarded by
   `tests/package-layout.test.ts`.
+- **Two-channel verification (hard step)**: the gate (`npm run check`) drives the
+  plugin's compatibility probes on BOTH harness channels — the published rc
+  tuple's session-face path and the bundled `0.1.2-alpha.1` pre-release's
+  `uiConversation` `"chat"` view — via the `chat-channel` / `client-dom`
+  probes. A bundled pre-release never appears in npm `latest`, so it is
+  verified at release time through these probes (never via a peer term — see
+  DSH version alignment below).
 
 ## DSH version alignment (peer range maintenance)
 
