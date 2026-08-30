@@ -17,6 +17,20 @@
 > `0.1.2-rc.x`, `0.2.x`) requires appending a union member; rc rolling within a
 > tuple (`0.1.1-rc.2 → rc.3`) is a no-op. Signal: `npm view @deepseek-ai/dsh version`;
 > flow: `scripts/check-dsh-version.mjs`.
+>
+> Client channel (harness `0.1.2-alpha.1`, a **bundled pre-release — NOT published
+> to npm**): the plugin also reads the session chat when a DSH Desktop build ships
+> that version (`latest` on the registry is still `0.1.1-rc.2`; the alpha is only
+> in the bundled `app.asar.unpacked/node_modules/@deepseek-ai/*`). There
+> `uiConversation` exposes the chat as a per-session named `"chat"` view
+> (contributed by `dsh-client-ui-chat` through the `uiSession` slot hook) instead
+> of the session-face `chat` field. `src/client/hidden.ts` (`chatSnapshotOf`) reads
+> the session-face snapshot first (rc.2 path), then the `uiConversation` `"chat"`
+> view (alpha.1 path); both missing degrades to `undefined` (no targets, never a
+> crash). Peers are intentionally **NOT** extended for `0.1.2-alpha.1` because it is
+> not a registry version (see above); the OR-union stays
+> `^0.1.0-rc.6 || ^0.1.1-rc.2` and will gain the `0.1.2` tuple when the harness
+> publishes it. Pinned by `tests/chat-channel.test.ts`.
 
 ## Definition of "fully compatible" (invariants)
 
