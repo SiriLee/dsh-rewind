@@ -21,7 +21,9 @@ export interface HiddenChat {
  * `uiConversation` service's named "chat" view (contributed by
  * dsh-client-ui-chat through the uiSession slot hook).
  */
-export type ChatOf = (sessionId: string | undefined) => HiddenChat | undefined
+export type ChatOf = (
+  session: { readonly sessionId: string; getSnapshot(): { chat?: unknown } } | undefined,
+) => HiddenChat | undefined
 
 /**
  * Resolve the chat snapshot across the two harness channels: the session-face

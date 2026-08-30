@@ -121,11 +121,11 @@ export function apply(ctx: ClientContext): void {
      * `uiConversation.binding` throws for a session it does not know (a
      * teardown window) — degrade to "no chat" instead of failing the caller.
      */
-    const chatOf: ChatOf = (sessionId) => {
-      if (sessionId === undefined) return undefined
+    const chatOf: ChatOf = (session) => {
+      if (session === undefined) return undefined
       try {
-        const view = uiConversation()?.binding(sessionId).target(CHAT_VIEW)
-        return chatSnapshotOf(sessionOf(sessionId), view)
+        const view = uiConversation()?.binding(session.sessionId).target(CHAT_VIEW)
+        return chatSnapshotOf(session, view)
       } catch {
         return undefined
       }
@@ -155,7 +155,8 @@ export function apply(ctx: ClientContext): void {
 
     /** True when the surface has at least one reachable rewind target. */
     const hasCandidates = (sessionId: string | undefined): boolean => {
-      const chat = chatOf(sessionId)
+      const face = sessionId === undefined ? undefined : sessionOf(sessionId)
+      const chat = chatOf(face)
       return chat !== undefined && rewindCandidatesOfChat(chat as unknown as CandidateChat).length > 0
     }
 

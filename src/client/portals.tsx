@@ -181,7 +181,7 @@ export async function runRewindAndFill(
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
   if (currentSessionId() !== session.sessionId) return
-  const text = userTextAt(chatOf(session.sessionId), seq)
+  const text = userTextAt(chatOf(session), seq)
   if (text === undefined || text === '') return
   fillComposer(text)
 }
@@ -368,7 +368,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
       // session face; `chatOf` picks the rc.2 face channel or the alpha.1+
       // `uiConversation` "chat" view. undefined = no channel available yet:
       // skip the durable path entirely (pending targets stay collectible).
-      const chat = chatOf(sessionId)
+      const chat = chatOf(session)
       const hiddenSeqs = chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
       let hiddenCount = 0
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
@@ -482,7 +482,7 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, currentSessionId, 
       console.warn('[dsh-rewind] rewind button clicked with no session binding')
       return
     }
-    const node = userNodeOf(chatOf(sessionId), target.key)
+    const node = userNodeOf(chatOf(session), target.key)
     if (node === undefined) return
     openPopover({
       session,

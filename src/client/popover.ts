@@ -116,7 +116,7 @@ function findCommand(chat: HiddenChat | undefined, match: (node: CommandNode) =>
  */
 export function knownCommandSeqs(session: SessionFace, chatOf: ChatOf, match: (node: CommandNode) => boolean): Set<number> {
   const known = new Set<number>()
-  const chat = chatOf(session.sessionId)
+  const chat = chatOf(session)
   if (chat === undefined) return known
   for (const key of chat.order) {
     const node = chat.nodes.get(key)
@@ -149,7 +149,7 @@ export function waitForCommand(
       resolve(value)
     }
     const check = (): void => {
-      const node = findCommand(chatOf(session.sessionId), match)
+      const node = findCommand(chatOf(session), match)
       if (node?.outcome !== null && node?.outcome !== undefined) {
         settle({ kind: node.outcome.kind, text: node.outcome.text })
       }
