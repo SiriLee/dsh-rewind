@@ -37,17 +37,13 @@ npm version patch
 git push origin main --tags   # 触发 .github/workflows/publish.yml
 ```
 
+- **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release 可能只随 Desktop 捆绑、而不发到 npm，如 `0.1.2-alpha.1`；见 docs/compat/audit.md）。
 - workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整
   构建 + 产物验证，以 `--provenance`（Sigstore）发布并创建 GitHub Release。
   **幂等**——已发布的版本会跳过。
 - CI（`.github/workflows/ci.yml`）在每次 push / PR 跑 `npm run check`——
   typecheck + 测试 + 构建 + 产物验证 + `npm pack --dry-run`，且覆盖
   engines 两个边界版本；tarball 布局由 `tests/package-layout.test.ts` 守护。
-- **双通道验证（硬性步骤）**：门禁（`npm run check`）会在**两个** harness
-  通道上驱动插件的兼容性探针——已发布 rc tuple 的会话 face 快照路径，以及
-  捆绑 `0.1.2-alpha.1` pre-release 的 `uiConversation` `"chat"` 视图——经由
-  `chat-channel` / `client-dom` 探针。捆绑的 pre-release 从不出现在 npm
-  `latest`，所以它在发布时通过这些探针验证（而非 peer 项——见下文 DSH 版本适配）。
 
 ## DSH 版本适配（peer 范围维护）
 
@@ -59,8 +55,9 @@ OR 并集覆盖 DSH 已发布的每个 rc 元组系列（如 `^0.1.0-rc.6 || ^0.
 - **何时需要更新**：仅当 DSH 发布新元组（`0.1.1 → 0.1.2 → 0.2.x`）时；
   同元组内 rc 滚动（`0.1.1-rc.2 → rc.3`）无需动作。DSH 所有包同版本发布，
   `npm view @deepseek-ai/dsh version` 即权威信号。
-- **自动检测**：`node scripts/check-dsh-version.mjs` 对比 npm 最新版本与
-  peer 覆盖的元组，输出是否需追加（exit 0 无需动作，exit 1 需要）。
+- **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm 最新版本
+  对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读 npm 已发布版本**；
+  更新的未发布 pre-release 走**手动发布前检查**——见上文"升版前手动确认"。
 - **更新步骤**：给每个 `@deepseek-ai/dsh-*` peer 追加 `|| ^<新元组>-rc.<n>`
   → devDependencies 同步升到最新 → `npm install` → `npm run check` → 发版。
 - **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则

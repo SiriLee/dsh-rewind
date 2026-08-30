@@ -38,6 +38,9 @@ npm version patch
 git push origin main --tags   # triggers .github/workflows/publish.yml
 ```
 
+- **Before bumping, manually confirm there is no newer DSH version the plugin
+  has not been verified against** (a pre-release can ship in DSH Desktop
+  without being on npm, e.g. `0.1.2-alpha.1`; see docs/compat/audit.md).
 - The workflow verifies the tag matches `package.json`, runs typecheck + tests +
   a full build + artifact verification, publishes with `--provenance`
   (Sigstore), and creates a GitHub Release. It is **idempotent** — an already
@@ -46,13 +49,6 @@ git push origin main --tags   # triggers .github/workflows/publish.yml
   build + artifact verification + a `npm pack --dry-run` — on every push / PR
   across both Node engines boundary versions; the tarball layout is guarded by
   `tests/package-layout.test.ts`.
-- **Two-channel verification (hard step)**: the gate (`npm run check`) drives the
-  plugin's compatibility probes on BOTH harness channels — the published rc
-  tuple's session-face path and the bundled `0.1.2-alpha.1` pre-release's
-  `uiConversation` `"chat"` view — via the `chat-channel` / `client-dom`
-  probes. A bundled pre-release never appears in npm `latest`, so it is
-  verified at release time through these probes (never via a peer term — see
-  DSH version alignment below).
 
 ## DSH version alignment (peer range maintenance)
 
@@ -65,9 +61,11 @@ uses an OR-union covering every published rc tuple series
   (`0.1.1 → 0.1.2 → 0.2.x`); rc rolling within a tuple (`0.1.1-rc.2 → rc.3`)
   needs nothing. All `@deepseek-ai/*` packages release together;
   `npm view @deepseek-ai/dsh version` is the authoritative signal.
-- **Automatic detection**: `node scripts/check-dsh-version.mjs` compares the
-  latest npm version against the tuples the peers cover and reports whether an
-  extension is needed (exit 0 = nothing to do, exit 1 = update).
+- **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
+  compares the latest npm version against the tuples the peers cover (exit 0 =
+  nothing to do, exit 1 = update). It reads npm published versions only; a
+  newer-but-unpublished pre-release is a manual pre-release check — see the
+  "Before bumping" step above.
 - **Update steps**: append `|| ^<new-tuple>-rc.<n>` to every
   `@deepseek-ai/dsh-*` peer → bump devDependencies to the latest → `npm
   install` → `npm run check` → release.
