@@ -30,7 +30,9 @@
 > crash). Peers are intentionally **NOT** extended for `0.1.2-alpha.1` because it is
 > not a registry version (see above); the OR-union stays
 > `^0.1.0-rc.6 || ^0.1.1-rc.2` and will gain the `0.1.2` tuple when the harness
-> publishes it. Pinned by `tests/chat-channel.test.ts`.
+> publishes it. Pinned by `tests/chat-channel.test.ts` (channel precedence + the
+> alpha.1 snapshot shape) and `tests/client-dom.test.ts` (the button-target
+> pairing that consumes the chat).
 
 ## Definition of "fully compatible" (invariants)
 
