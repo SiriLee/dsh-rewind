@@ -43,6 +43,11 @@ git push origin main --tags   # 触发 .github/workflows/publish.yml
 - CI（`.github/workflows/ci.yml`）在每次 push / PR 跑 `npm run check`——
   typecheck + 测试 + 构建 + 产物验证 + `npm pack --dry-run`，且覆盖
   engines 两个边界版本；tarball 布局由 `tests/package-layout.test.ts` 守护。
+- **双通道验证（硬性步骤）**：门禁（`npm run check`）会在**两个** harness
+  通道上驱动插件的兼容性探针——已发布 rc tuple 的会话 face 快照路径，以及
+  捆绑 `0.1.2-alpha.1` pre-release 的 `uiConversation` `"chat"` 视图——经由
+  `chat-channel` / `client-dom` 探针。捆绑的 pre-release 从不出现在 npm
+  `latest`，所以它在发布时通过这些探针验证（而非 peer 项——见下文 DSH 版本适配）。
 
 ## DSH 版本适配（peer 范围维护）
 
