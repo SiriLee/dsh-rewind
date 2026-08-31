@@ -34,14 +34,16 @@ function chatWith(entries: Array<[string, unknown]>): HiddenChat {
   }
 }
 
-/** Append a user/steering row whose `[data-time-hover-root]` last child is an
- * actions container with a `<button>` — the shape the collector accepts. */
-function addRow(kind: string, key: string, withButton = true): HTMLElement {
+/** Append a user/steering row whose actions-root last child is an actions
+ * container with a `<button>` — the shape the collector accepts. The wrapper
+ * attribute is dual-channel: DSH ≤ 0.1.1-rc.x used `data-time-hover-root`,
+ * 0.1.2-alpha.2+ uses `data-actions-reveal`. */
+function addRow(kind: string, key: string, withButton = true, actionsRootAttr = 'data-time-hover-root'): HTMLElement {
   const row = document.createElement('div')
   row.dataset.chatFlowKind = kind
   row.dataset.chatAnchorKey = key
   const root = document.createElement('div')
-  root.setAttribute('data-time-hover-root', '')
+  root.setAttribute(actionsRootAttr, '')
   const bubble = document.createElement('div')
   bubble.textContent = 'bubble'
   const actions = document.createElement('div')
@@ -105,6 +107,26 @@ describe('collectTargets (chat node × user action row → portal target)', () =
 
   it('collects nothing when a chat node has no matching DOM row', () => {
     const targets = collectTargets(chatWith([['m5', userNode(8)]]), new Set())
+    expect(targets).toHaveLength(0)
+  })
+
+  it('collects a durable target on the 0.1.2-alpha.2 data-actions-reveal root', () => {
+    const actions = addRow('user', 'm6', true, 'data-actions-reveal')
+    const targets = collectTargets(chatWith([['m6', userNode(11)]]), new Set())
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toEqual({
+      kind: 'durable',
+      key: 'm6',
+      container: actions,
+      seq: 11,
+      time: 11000,
+      preview: 'msg 11',
+    })
+  })
+
+  it('refuses an alpha.2 row whose actions container has no <button> (layout mismatch)', () => {
+    addRow('user', 'm7', false, 'data-actions-reveal')
+    const targets = collectTargets(chatWith([['m7', userNode(12)]]), new Set())
     expect(targets).toHaveLength(0)
   })
 })

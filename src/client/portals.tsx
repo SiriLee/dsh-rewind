@@ -288,11 +288,17 @@ const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"][data-chat-anchor-key], 
 /** Every conversation seat row (hidden rows included). */
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 
-/** The row container whose hover reveals the actions (and the time). */
-const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
+/**
+ * The row container whose hover reveals the actions (and the time). Dual
+ * channel: DSH ≤ 0.1.1-rc.x used `[data-time-hover-root]`; 0.1.2-alpha.2+
+ * replaced it with `[data-actions-reveal]` on the message root. Matching both
+ * keeps the ↶ button on both generations (a layout change must never drop the
+ * portal).
+ */
+const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root], [data-actions-reveal]'
 
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
-const PENDING_SEAT_SELECTOR = '[data-pending-steering][data-time-hover-root]'
+const PENDING_SEAT_SELECTOR = '[data-pending-steering][data-time-hover-root], [data-pending-steering][data-actions-reveal]'
 
 /**
  * Collect the portal targets of one session: user rows × snapshot nodes.
