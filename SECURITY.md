@@ -138,10 +138,18 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
   same operating-system user: state files are created with the process
   default permissions (no special modes are set — a standard umask applies),
   and the host user remains trusted.
-- It does **not** exclude paths from the store: recording and restore mirror the
-  paths the model's file tools touched, so a sensitive file (e.g. `.env`) the
-  model may read or edit will be backed up and restorable. Keeping one out is
-  a **DSH model-permission** concern (a per-path deny), not a rewind feature.
+- It does **not** exclude paths from the store, and it never oversteps: the
+  plugin only adds backup/restore on top of permissions DSH already holds. Two
+  distinct cases follow:
+  1. **Sensitive / personal-information files** (e.g. a `.env` file, which may
+     sit inside the workspace) the model may read or edit are backed up and
+     restorable.
+  2. **Files outside the session workspace** the model is allowed to touch are
+     likewise backed up and restored.
+  In both cases the plugin introduces no authority of its own — DSH already
+  granted the read/edit; the plugin merely records a before-backup and can
+  restore it. Keeping a path out is a **DSH model-permission** concern (a
+  per-path deny), not a rewind feature.
 - It does **not** touch git (no refs, index, or worktree operations), makes
   **no network requests**, and does **not** access credentials.
 - It does **not** roll back whole-log state: telemetry, search, and `/export`

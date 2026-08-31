@@ -12,7 +12,7 @@ A deliberately focused plugin with one job: **rewind to any user message, no mat
 
 - **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it — **truly seamless and convenient by design**.
 - **Lightweight workspace backup** — Claude Code-aligned behavior: tracks files edited by the write-class tools, and external changes to **already-tracked** files are restorable too. Selective tracking, before-write backup, store only on change. One lightweight plugin gives you a **complete** agentic rewind capability.
-- **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your conversation; file restores stay inside the plugin's own backup directory. Full security model: [SECURITY.md](SECURITY.md).
+- **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your conversation; backups live in the plugin's own snapshot directory; restores draw only from those backups. Full security model: [SECURITY.md](SECURITY.md).
 - **A complete test system** — unit, probe, and end-to-end host verification, covering compatibility probing, log replay, resume, cross-restart and other scenarios; maintained continuously as the harness evolves to ensure feature stability.
 
 ## Preview
@@ -156,7 +156,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 ## Security
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups and restores stay under `<dsh home>/rewind-snapshots/`. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
 
 ## Development
 
