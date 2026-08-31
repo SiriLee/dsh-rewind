@@ -37,7 +37,11 @@
 > written through the `conversation` service's `input` resolver's `setDraft` (the
 > harness's own Lexical editor), else the rc.2 `<textarea>` / alpha `contenteditable`
 > DOM write (`writeComposer` in `src/client/portals.tsx`); pinned by
-> `tests/client-composer.test.ts`.
+> `tests/client-composer.test.ts`. The session-seat button DOM is dual-channel
+> the same way: the actions (copy/branch) row was located by `[data-time-hover-root]`
+> on ≤ 0.1.1-rc.x and by `[data-actions-reveal]` on 0.1.2-alpha.2
+> (`ACTIONS_ROOT_SELECTOR` / `PENDING_SEAT_SELECTOR` in `src/client/portals.tsx`);
+> pinned by `tests/client-dom.test.ts`.
 
 ## Definition of "fully compatible" (invariants)
 
