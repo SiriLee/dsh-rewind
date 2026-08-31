@@ -33,8 +33,13 @@ import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
+// Namespace import (not a named import) so the host bundle links on BOTH DSH
+// rc.2 (which exports `settingsNamespace`) and 0.1.2-alpha.2 (which removed it):
+// a static `import { settingsNamespace }` would fail to link on alpha.2. The
+// symbol is read through optional chaining in `readSettingsSection` instead.
+import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
+import { readSettingsSection } from './settings-locale.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
@@ -888,7 +893,17 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // was never set) leaves the default English — the ecosystem's neutral
   // fallback — without failing the plugin load.
   ctx.inject(['settings'], (settingsCtx) => {
-    const section = settingsCtx.settings.get(settingsNamespace('locale')) as
+    // Read the durable locale preference via `readSettingsSection`, which
+    // tolerates the settings-namespace brand across generations: on rc.2 it
+    // calls the now-removed-in-alpha.2 `settingsNamespace('locale')` helper
+    // (which returns `'locale'` at runtime), on 0.1.2-alpha.2 it falls back to
+    // the raw `'locale'` string. Same runtime call on both, so one compiled
+    // host bundle links and runs on rc.2 and alpha.2.
+    const section = readSettingsSection(
+      settingsCtx.settings as unknown as { get(ns: string): unknown },
+      'locale',
+      dshSettings.settingsNamespace,
+    ) as
       | { preference?: HostLocaleId }
       | undefined
     if (section?.preference === 'zh' || section?.preference === 'en') {
