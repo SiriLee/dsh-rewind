@@ -61,7 +61,7 @@
 - **session-title / goal fold**: a marker does not disturb `foldSessionTitle` / `foldGoal`.
 - **client ordering**: turn-tail ordering + `step/start` uniqueness hold for tool turns + marker logs.
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
-- **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind during active plan cancels plan mode and stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
+- **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
@@ -72,7 +72,7 @@
 - **Session title auto-regeneration**: the title derives from the surface, so an automatically-derived title may change after a rewind.
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).
 - **Attachment files left after a message is shadowed**: attachment storage is not cleaned with the surface (`dsh-attachment-local` not installed, not automatically verified).
-- **Plan-mode cancel (rule A)**: a rewind cancels plan mode whenever it is active, whether or not the target entered it; routed through `ctx.planMode.set(agent,false)` (which narrates the switch back) else a bare log-only off-flip. The target's text returns to the composer and the user re-enters via `/plan`. Pin: `verify-host` plan-cancel checks, `rewind.test.ts`.
+- **Rewind leaves plan mode untouched**: `/plan text` is two independent actions (enter plan mode + steer the message). Rewinding the message undoes only the message — the log-only `plan/mode` state stays active, and the user leaves plan mode with `/plan off`, which still commits after a rewind (the marker creates no open turn). Pin: `verify-host` plan checks (`plan rewind leaves plan mode active`, `/plan off after rewind turns plan mode off`), `tests/hidden.test.ts` `messageTextAt`.
 
 ## Upstream (harness) issues and the plugin's no-compensation stance
 

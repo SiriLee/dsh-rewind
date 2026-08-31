@@ -42,6 +42,7 @@ import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
+import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
@@ -171,20 +172,6 @@ ctx.provide('commands', {
 })
 ctx.provide('fs', fs)
 ctx.provide('sessions', { flush: async () => {} })
-// A real deployment composes the plan-mode service, so the rewind plugin
-// routes the plan-cancel through `ctx.planMode.set(agent,false)` (which
-// narrates the switch back) instead of silently appending a bare plan/mode
-// event. Provide a spy so the host verification proves the plugin calls it;
-// the spy also appends the off-flip like the real service, so the log-state
-// checks below stay meaningful.
-const planCalls = []
-ctx.provide('planMode', {
-  set: (agent, active) => {
-    planCalls.push(active)
-    agent.session.append('plan/mode', { active })
-    return 'committed'
-  },
-})
 // The real token-meter service (registers itself as ctx.tokenMeter) and a
 // real compaction backend whose ONLY hook is a stubbed summarize() — the
 // manual `/compact` command path needs no LLM.
@@ -610,38 +597,38 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('both preview reports no restorable changes after the wipe', preview.kind === 'success' && /No restorable changes/.test(preview.text), preview.text)
 }
 
-// 17. Rewinding to a plan-mode message CANCELS plan mode. The rewind marker
-//     only cuts the model-visible surface; the log-only, non-surface
-//     `plan/mode{active:true}` survives it, so the host must cancel plan mode —
-//     through `ctx.planMode.set(agent,false)` when composed (which also
-//     narrates the switch back), so a stale "switched to plan mode" notice does
-//     not leave the LLM thinking plan mode is still active. A rewind in a
-//     session that never entered plan mode must touch no plan state.
+// 17. Rewinding /plan text undoes only the message, never the plan-mode state.
+//     `/plan text` is two independent actions (enter plan mode + steer the
+//     message); the rewind cuts the surface and leaves the log-only
+//     `plan/mode` untouched, so plan mode stays active and the user leaves it
+//     with `/plan off` — which must still commit after the rewind. A rewind in
+//     a session that never entered plan mode must touch no plan state.
 {
   const planSession = buildSession('verify-plan')
   planSession.append('plan/mode', { active: true }) // log-only, non-surface
   const planAgent = makeAgent(planSession.id, planSession)
-  const planCallsBefore = planCalls.length
   const planBefore = [...planSession.surface.nodes]
   const planResult = await call(planAgent, '@2 chat')
   const planAfter = [...planSession.surface.nodes]
-  const lastPlanMode = planSession.events.findLast(event => event.type === 'plan/mode')
   check('plan rewind succeeds', planResult.kind === 'success', planResult.text)
   check('plan rewind cuts the surface (target withdrawn)', planAfter.length === 3 && planAfter[0] === 0 && planAfter[1] === 1 && planAfter[2] > 3, `before ${JSON.stringify(planBefore)} -> after ${JSON.stringify(planAfter)}`)
-  // The cancel runs AFTER the marker (rewind first, then cancel) and is routed
-  // through the plan module, so the switch-back narration is injected for the
-  // next request's context (not silently lost).
-  check('plan rewind cancels plan mode (appends plan/mode{active:false})', lastPlanMode?.data?.active === false, JSON.stringify(lastPlanMode))
-  check('plugin routed the plan cancel through planMode.set(false)', planCalls[planCalls.length - 1] === false && planCalls.length === planCallsBefore + 1, JSON.stringify(planCalls))
+  // The rewind never touches plan/mode: plan mode stays active after the rewind
+  // (the plugin does not auto-cancel). A stray plan/mode{active:false} would
+  // mean the rewind wrongly cancelled it.
+  check('plan rewind leaves plan mode active (no auto-cancel)', foldPlanMode(planSession.events) === true, `events=${JSON.stringify(planSession.events.filter(e => e.type === 'plan/mode'))}`)
   check('plan rewind leaves no dangling step/turn frame', hasNoDanglingFrames(planSession.events), planSession.events.map(e => e.type).join(','))
+
+  // A manual /plan off after the rewind must still commit (the marker created
+  // no open turn, so set(false) is the idle-commit path). Simulate its log
+  // effect: appending plan/mode{active:false} flips the fold to inactive.
+  planSession.append('plan/mode', { active: false })
+  check('/plan off after rewind turns plan mode off', foldPlanMode(planSession.events) === false, 'post-off fold still active')
 
   const plainSession = buildSession('verify-plain')
   const plainAgent = makeAgent(plainSession.id, plainSession)
-  const plainCallsBefore = planCalls.length
   const plainResult = await call(plainAgent, '@2 chat')
   check('non-plan rewind succeeds', plainResult.kind === 'success', plainResult.text)
   check('non-plan rewind appends no plan/mode event (no log pollution)', plainSession.events.filter(event => event.type === 'plan/mode').length === 0, plainSession.events.map(e => e.type).join(','))
-  check('non-plan rewind does not call planMode.set (no plan state touched)', planCalls.length === plainCallsBefore, JSON.stringify(planCalls))
 }
 
 await rm(tmpRoot, { recursive: true, force: true })

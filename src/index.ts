@@ -40,7 +40,7 @@ import { unlink } from 'node:fs/promises'
 import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { readSettingsSection } from './settings-locale.ts'
-import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planModeWasActive, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
@@ -538,30 +538,11 @@ async function executeRewind(
       }
     }
 
-    // A rewind cuts only the model-visible surface; the log-only, non-surface
-    // `plan/mode{active:true}` event survives it. If plan mode is active,
-    // rewinding therefore "undoes" the conversation that led into it without
-    // undoing the plan state, leaving the session stuck in plan mode past the
-    // undo — and the stale "switched to plan mode" notice stays in the model
-    // context. Prefer cancelling through the plan module (`set(agent,false)`):
-    // it appends the log-only off-flip AND narrates the switch back, so the
-    // next request sees a balanced context and is not misled into thinking
-    // plan mode is still active. The cancel runs AFTER the marker (rewind
-    // first, then cancel), so it is never undone by this rewind. When no
-    // plan-mode service is composed, degrade to the bare log-only off-flip.
-    // Idempotent: gated on plan being active, so a non-plan rewind appends
-    // nothing.
-    if (planModeWasActive(agent.session.events)) {
-      const planMode = (ctx as { get(name: string): unknown }).get('planMode') as
-        | { set(agent: Agent, active: boolean): unknown }
-        | undefined
-      if (planMode !== undefined) {
-        planMode.set(agent, false)
-      } else {
-        (agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
-          .append('plan/mode', { active: false })
-      }
-    }
+    // A rewind cuts only the model-visible surface and never touches the
+    // log-only `plan/mode` events — plan mode is a separate state the plugin
+    // does not manage. `/plan text` is two independent actions (enter plan
+    // mode + steer the message); rewinding the message undoes only the
+    // message, leaving plan mode for the user to leave with `/plan off`.
 
     let restore = ''
     if (mode === 'both') {
