@@ -7,7 +7,9 @@
  * Regression guard: if someone reverts the host back to a static
  * `settings.get(settingsNamespace('locale'))`, the bundle would fail to link on
  * alpha.2 (the helper is gone). These tests pin the dual-version behavior of the
- * read, and scripts/build.mjs separately guards the artifact (no static named
+ * read and, crucially, that the *brand's return value* (not the raw namespace) is
+ * what gets forwarded to `settings.get` — so the tests fail if the brand is ever
+ * dropped. scripts/build.mjs separately guards the artifact (no static named
  * import of `settingsNamespace`).
  */
 import { describe, expect, it } from 'vitest'
@@ -22,7 +24,8 @@ describe('readSettingsSection', () => {
     const provider: SettingsProviderLike = {
       get: ns => (ns === 'locale' ? { preference: 'zh' } : undefined),
     }
-    // rc.2 `settingsNamespace(ns)` returns `ns` at runtime (the brand is erased).
+    // rc.2 `settingsNamespace('locale')` returns `'locale'` (the brand is erased
+    // at runtime), so the presence of the helper must not change the read.
     const brand: SettingsNamespaceBrand = v => v
     expect(readSettingsSection(provider, 'locale', brand)).toEqual({ preference: 'zh' })
   })
@@ -31,32 +34,26 @@ describe('readSettingsSection', () => {
     const provider: SettingsProviderLike = {
       get: ns => (ns === 'locale' ? { preference: 'en' } : undefined),
     }
-    // alpha.2 removed the brand helper, so the caller passes undefined.
+    // alpha.2 removed the brand helper, so the caller passes undefined and the
+    // raw namespace string is used directly.
     const brand: SettingsNamespaceBrand = undefined
     expect(readSettingsSection(provider, 'locale', brand)).toEqual({ preference: 'en' })
   })
 
-  it('passes the key returned by the brand helper to get()', () => {
+  it("forwards the brand helper's return value, not the raw namespace", () => {
     const received: string[] = []
     const provider: SettingsProviderLike = {
       get: ns => { received.push(ns); return undefined },
     }
-    readSettingsSection(provider, 'locale', v => v)
-    expect(received).toEqual(['locale'])
+    // A transforming brand proves the resolved key comes from the brand's output
+    // (`brand(ns) ?? ns`), not from `ns` directly. A regression that drops the
+    // brand and reads `provider.get(ns)` would fail this assertion.
+    readSettingsSection(provider, 'locale', ns => `branded:${ns}`)
+    expect(received).toEqual(['branded:locale'])
   })
 
   it('returns undefined for an unregistered section (never throws)', () => {
     const provider: SettingsProviderLike = { get: () => undefined }
     expect(readSettingsSection(provider, 'locale', v => v)).toBeUndefined()
-  })
-
-  it('is keyed by the raw namespace, not by the brand, so both generations agree', () => {
-    const received: string[] = []
-    const provider: SettingsProviderLike = {
-      get: ns => { received.push(ns); return undefined },
-    }
-    // The brand helper returns the same string it was given (brand erased at runtime).
-    readSettingsSection(provider, 'locale', v => v)
-    expect(received).toEqual(['locale'])
   })
 })
