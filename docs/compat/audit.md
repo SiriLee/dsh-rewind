@@ -61,7 +61,7 @@
 - **session-title / goal fold**: a marker does not disturb `foldSessionTitle` / `foldGoal`.
 - **client ordering**: turn-tail ordering + `step/start` uniqueness hold for tool turns + marker logs.
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
-- **plan-mode**: `hasOpenTurn` pairs only `turn/start`/`turn/end`; a marker produces no `turn/start`, so it never creates a phantom turn. A rewind during active plan now also **cancels plan mode** — the host appends the log-only, non-surface `plan/mode{active:false}` after the marker, and the `compat-invariants` I1/I3 probe (marker + `plan/mode` variants) plus the `verify-host` e2e both pass.
+- **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind during active plan cancels plan mode and stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
@@ -72,7 +72,7 @@
 - **Session title auto-regeneration**: the title derives from the surface, so an automatically-derived title may change after a rewind.
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).
 - **Attachment files left after a message is shadowed**: attachment storage is not cleaned with the surface (`dsh-attachment-local` not installed, not automatically verified).
-- **Plan-mode cancel is rule A (blanket)**: a rewind cancels plan mode whenever it is active — it does not distinguish "the message that entered plan mode" from a mid-plan follow-up. This is deliberate (no coupling to the `/plan` command shape, no attachment/`/plan off` edge cases); the withdrawn target's text still returns to the composer, and the user re-enters via `/plan`. Pin: `verify-host` e2e (`plan rewind cancels plan mode` + `non-plan rewind appends no plan/mode event`), `rewind.test.ts` `planModeWasActive`.
+- **Plan-mode cancel (rule A)**: a rewind cancels plan mode whenever it is active, whether or not the target entered it; routed through `ctx.planMode.set(agent,false)` (which narrates the switch back) else a bare log-only off-flip. The target's text returns to the composer and the user re-enters via `/plan`. Pin: `verify-host` plan-cancel checks, `rewind.test.ts`.
 
 ## Upstream (harness) issues and the plugin's no-compensation stance
 

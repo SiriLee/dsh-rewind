@@ -542,12 +542,25 @@ async function executeRewind(
     // `plan/mode{active:true}` event survives it. If plan mode is active,
     // rewinding therefore "undoes" the conversation that led into it without
     // undoing the plan state, leaving the session stuck in plan mode past the
-    // undo. Cancel it explicitly (append the log-only off-flip on the next
-    // user message; the resend re-enters `/plan`). Idempotent: only when
-    // currently active, so a non-plan rewind appends nothing.
+    // undo — and the stale "switched to plan mode" notice stays in the model
+    // context. Prefer cancelling through the plan module (`set(agent,false)`):
+    // it appends the log-only off-flip AND narrates the switch back, so the
+    // next request sees a balanced context and is not misled into thinking
+    // plan mode is still active. The cancel runs AFTER the marker (rewind
+    // first, then cancel), so it is never undone by this rewind. When no
+    // plan-mode service is composed, degrade to the bare log-only off-flip.
+    // Idempotent: gated on plan being active, so a non-plan rewind appends
+    // nothing.
     if (planModeWasActive(agent.session.events)) {
-      (agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
-        .append('plan/mode', { active: false })
+      const planMode = (ctx as { get(name: string): unknown }).get('planMode') as
+        | { set(agent: Agent, active: boolean): unknown }
+        | undefined
+      if (planMode !== undefined) {
+        planMode.set(agent, false)
+      } else {
+        (agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
+          .append('plan/mode', { active: false })
+      }
     }
 
     let restore = ''
