@@ -6,7 +6,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   formatCandidate, formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, messagePreview, parseRewindTarget,
-  planRewind, RewindError,
+  planModeWasActive, planRewind, RewindError,
 } from '../src/rewind.ts'
 
 function userEvent(seq: number, text: string, time = seq * 60_000): SessionEvent<'user/message'> {
@@ -457,5 +457,34 @@ describe('markerStepOf (ghost-step frame: a fresh step number the client assembl
     ]
     expect(markerStepOf(events, 1)).toBe(2)
     expect(markerStepOf(events, 2)).toBe(2)
+  })
+})
+
+describe('planModeWasActive (log-only plan-state fold)', () => {
+  function planEvent(seq: number, active: boolean): SessionEvent {
+    return { type: 'plan/mode', seq, time: seq * 60_000, data: { active } } as SessionEvent
+  }
+
+  it('folds to false for an empty log', () => {
+    expect(planModeWasActive([])).toBe(false)
+  })
+
+  it('is true after a single plan/mode{active:true}', () => {
+    expect(planModeWasActive([planEvent(0, true)])).toBe(true)
+  })
+
+  it('last logged value wins: active then inactive folds false', () => {
+    expect(planModeWasActive([planEvent(0, true), planEvent(5, false)])).toBe(false)
+  })
+
+  it('ignores non-plan events (user, assistant, command, rewind marker)', () => {
+    const events = [
+      userEvent(0, 'question'),
+      assistantEvent(1, 'answer'),
+      planEvent(2, true),
+      { type: 'command/run', seq: 3, time: 3 * 60_000, data: { name: 'plan', commandId: 'c1', args: 'draft' } } as unknown as SessionEvent,
+      assistantEvent(4, 'marker'),
+    ]
+    expect(planModeWasActive(events)).toBe(true)
   })
 })

@@ -338,3 +338,25 @@ export function formatCandidate(candidate: RewindCandidate): string {
   const mm = String(time.getMinutes()).padStart(2, '0')
   return `${candidate.index}. ${hh}:${mm} ${candidate.preview || '(no text)'}`
 }
+
+/**
+ * Fold the last logged `plan/mode` event's `active` flag (default `false`).
+ *
+ * `plan/mode` is a log-only, non-surface, whole-value-replace event owned by
+ * `@deepseek-ai/dsh-plan-mode` — the rewind marker's `surfaceOp` cannot touch
+ * it, so a rewind to a plan-mode message must resync plan state explicitly
+ * (see the host `executeRewind`). The plugin does not import that package at
+ * runtime, so the shape is read structurally (`{ active: boolean }`).
+ *
+ * @param events - the full session event log.
+ * @returns whether plan mode is active as of the last logged `plan/mode`.
+ */
+export function planModeWasActive(events: readonly SessionEvent[]): boolean {
+  let active = false
+  for (const event of events) {
+    if ((event as { type?: string }).type === 'plan/mode') {
+      active = (event as { data?: { active?: boolean } }).data?.active === true
+    }
+  }
+  return active
+}

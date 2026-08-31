@@ -35,7 +35,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { SessionFace, UserMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hiddenSeqsOf, isExecutedRewindCommand, type ChatOf, type HiddenChat } from './hidden.ts'
+import { hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, type ChatOf, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
@@ -101,25 +101,6 @@ export interface SlotsLike {
 
 /** Join the text blocks of a user message into one plain preview. */
 // (shared with the `/rewind` command decoration — see `messagePreviewOf` in candidates.ts)
-
-/**
- * The plain text of the user message at `seq` in the session snapshot, for
- * filling the composer after a withdraw.
- */
-function userTextAt(chat: HiddenChat | undefined, seq: number): string | undefined {
-  if (chat === undefined) return undefined
-  for (const key of chat.order) {
-    const node = chat.nodes.get(key)
-    if (node === undefined || node.kind !== 'user') continue
-    const user = node.data as UserMessageNode
-    if (user.seq === seq) {
-      return user.content
-        .map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-        .join('')
-    }
-  }
-  return undefined
-}
 
 /**
  * The alpha.1+ session input facade's write face (structural, so the plugin
@@ -263,7 +244,7 @@ export async function runRewindAndFill(
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
   if (currentSessionId() !== session.sessionId) return
-  const text = userTextAt(chatOf(session), seq)
+  const text = messageTextAt(chatOf(session), seq)
   if (text === undefined || text === '') return
   setComposerText(session.sessionId, text)
 }

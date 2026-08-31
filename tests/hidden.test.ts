@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode, CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, targetSeqOfArgs, type HiddenChat } from '../src/client/hidden.ts'
+import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, targetSeqOfArgs, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A chat view node for one row; only fields the hiding logic reads are real. */
 function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = null): ChatConversationViewNode {
@@ -264,5 +264,46 @@ describe('hasFileImpact (code-restore option availability)', () => {
   it('degrades to always-show for unknown outcomes', () => {
     expect(hasFileImpact(undefined)).toBe(true)
     expect(hasFileImpact('')).toBe(false) // empty text: no changes reported
+  })
+})
+
+describe('messageTextAt (composer refill source)', () => {
+  function human(key: string, kind: 'user' | 'steering', seq: number, text: string) {
+    return viewNode(key, kind, seq, {
+      kind, seq, time: seq * 60_000,
+      content: [{ type: 'text', text }],
+      source: { kind: 'user' },
+    })
+  }
+
+  it('reads the text of a user node', () => {
+    const chat = snap([human('u0', 'user', 0, 'plain prompt')])
+    expect(messageTextAt(chat, 0)).toBe('plain prompt')
+  })
+
+  it('reads the text of a steering node (the /plan <text> entry)', () => {
+    const chat = snap([human('s4', 'steering', 4, '设计计划')])
+    expect(messageTextAt(chat, 4)).toBe('设计计划')
+  })
+
+  it('reads the text regardless of user/steering order (the refill must find either)', () => {
+    const chat = snap([
+      human('u0', 'user', 0, 'first'),
+      human('s4', 'steering', 4, 'design plan'),
+    ])
+    expect(messageTextAt(chat, 4)).toBe('design plan')
+    expect(messageTextAt(chat, 0)).toBe('first')
+  })
+
+  it('returns undefined for an absent seq and empty for a non-text message', () => {
+    const chat = snap([
+      viewNode('u0', 'user', 0, { kind: 'user', seq: 0, content: [{ type: 'image' }] }),
+    ])
+    expect(messageTextAt(chat, 99)).toBeUndefined()
+    expect(messageTextAt(chat, 0)).toBe('')
+  })
+
+  it('returns undefined for an undefined chat snapshot', () => {
+    expect(messageTextAt(undefined, 0)).toBeUndefined()
   })
 })

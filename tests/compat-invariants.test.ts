@@ -96,6 +96,21 @@ describe('I1 log replayability (probe: token-meter + resume preflight)', () => {
     assertReplayable(session)
     assertCompactionBalanced(session)
   })
+
+  it('a rewind that cancels plan mode (marker + log-only plan/mode) stays replayable and frame-legal', () => {
+    // The plugin's plan-cancel appends a log-only `plan/mode{active:false}`
+    // alongside the rewind marker. That extra non-surface event must not break
+    // token-meter replay (I1) or the step/turn structure (I3).
+    const session = buildTurnedSession()
+    const cast = (s: Session) => s as unknown as { append(type: string, data: unknown): unknown }
+    cast(session).append('plan/mode', { active: true }) // the session is in plan mode
+    const target = session.surface.nodes.find(seq =>
+      session.events.find(e => e.seq === seq)?.type === 'user/message')!
+    applyRewind(session, target!)
+    cast(session).append('plan/mode', { active: false }) // the rewind cancels it
+    assertReplayable(session)
+    assertStepTurnStructure(session)
+  })
 })
 
 describe('I2 surface consistency (probe: deriveMessages + node legality)', () => {

@@ -43,6 +43,33 @@ export function chatSnapshotOf(
 }
 
 /**
+ * The plain text of the human message at `seq` in the chat snapshot, for
+ * filling the composer after a withdraw. Accepts BOTH `user` and `steering`
+ * nodes: a plan-mode (`/plan <text>`) input is delivered through the agent
+ * inbox next-step and claimed, so it renders as `steering`, and its text must
+ * still return to the composer (`portals.tsx` `runRewindAndFill`) — the old
+ * `user`-only read silently left it empty. State absent → undefined; a message
+ * with no text blocks → ''. Same text-blocks join the candidate side uses.
+ */
+export function messageTextAt(chat: HiddenChat | undefined, seq: number): string | undefined {
+  if (chat === undefined) return undefined
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
+    if (node === undefined || (node.kind !== 'user' && node.kind !== 'steering')) continue
+    const data = node.data as {
+      seq?: number
+      content?: readonly { type?: string; text?: string }[]
+    }
+    if (data.seq === seq) {
+      return data.content
+        ?.map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+        .join('')
+    }
+  }
+  return undefined
+}
+
+/**
  * Extract the rewind target seq from a `/rewind` command's structured `args`
  * (e.g. `@5 chat`, `preview @5 both`). Locale-independent — never parses the
  * host's human outcome copy.

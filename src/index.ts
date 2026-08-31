@@ -40,7 +40,7 @@ import { unlink } from 'node:fs/promises'
 import * as dshSettings from '@deepseek-ai/dsh-settings'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { readSettingsSection } from './settings-locale.ts'
-import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planModeWasActive, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
@@ -536,6 +536,18 @@ async function executeRewind(
         kind: 'error',
         text: t('failed', { error: error instanceof Error ? error.message : String(error) }),
       }
+    }
+
+    // A rewind cuts only the model-visible surface; the log-only, non-surface
+    // `plan/mode{active:true}` event survives it. If plan mode is active,
+    // rewinding therefore "undoes" the conversation that led into it without
+    // undoing the plan state, leaving the session stuck in plan mode past the
+    // undo. Cancel it explicitly (append the log-only off-flip on the next
+    // user message; the resend re-enters `/plan`). Idempotent: only when
+    // currently active, so a non-plan rewind appends nothing.
+    if (planModeWasActive(agent.session.events)) {
+      (agent.session as unknown as { append(type: string, data: Record<string, unknown>): unknown })
+        .append('plan/mode', { active: false })
     }
 
     let restore = ''

@@ -596,6 +596,31 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('both preview reports no restorable changes after the wipe', preview.kind === 'success' && /No restorable changes/.test(preview.text), preview.text)
 }
 
+// 17. Rewinding to a plan-mode message CANCELS plan mode. The rewind marker
+//     only cuts the model-visible surface; the log-only, non-surface
+//     `plan/mode{active:true}` survives it, so the host must explicitly append
+//     `plan/mode{active:false}` or the session stays stuck in plan mode. A
+//     rewind in a session that never entered plan mode must append nothing.
+{
+  const planSession = buildSession('verify-plan')
+  planSession.append('plan/mode', { active: true }) // log-only, non-surface
+  const planAgent = makeAgent(planSession.id, planSession)
+  const planBefore = [...planSession.surface.nodes]
+  const planResult = await call(planAgent, '@2 chat')
+  const planAfter = [...planSession.surface.nodes]
+  const lastPlanMode = planSession.events.findLast(event => event.type === 'plan/mode')
+  check('plan rewind succeeds', planResult.kind === 'success', planResult.text)
+  check('plan rewind cuts the surface (target withdrawn)', planAfter.length === 3 && planAfter[0] === 0 && planAfter[1] === 1 && planAfter[2] > 3, `before ${JSON.stringify(planBefore)} -> after ${JSON.stringify(planAfter)}`)
+  check('plan rewind cancels plan mode (appends plan/mode{active:false})', lastPlanMode?.data?.active === false, JSON.stringify(lastPlanMode))
+  check('plan rewind leaves no dangling step/turn frame', hasNoDanglingFrames(planSession.events), planSession.events.map(e => e.type).join(','))
+
+  const plainSession = buildSession('verify-plain')
+  const plainAgent = makeAgent(plainSession.id, plainSession)
+  const plainResult = await call(plainAgent, '@2 chat')
+  check('non-plan rewind succeeds', plainResult.kind === 'success', plainResult.text)
+  check('non-plan rewind appends no plan/mode event (no log pollution)', plainSession.events.filter(event => event.type === 'plan/mode').length === 0, plainSession.events.map(e => e.type).join(','))
+}
+
 await rm(tmpRoot, { recursive: true, force: true })
 console.log(failures === 0 ? '\nverify-host: all checks passed' : `\nverify-host: ${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)
