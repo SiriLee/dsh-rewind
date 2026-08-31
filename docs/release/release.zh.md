@@ -49,15 +49,16 @@ git push origin main --tags   # 触发 .github/workflows/publish.yml
 
 DSH 仍在 rc 阶段，npm 的 prerelease 匹配规则要求 peer 范围与宿主版本
 **同 `[major, minor, patch]` 元组**才能匹配。因此 peerDependencies 采用
-OR 并集覆盖 DSH 已发布的每个 rc 元组系列（如 `^0.1.0-rc.6 || ^0.1.1-rc.2`），
+OR 并集覆盖 DSH 已发布的每个元组系列（如 `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2`），
 并随 DSH 发版追加。
 
 - **何时需要更新**：仅当 DSH 发布新元组（`0.1.1 → 0.1.2 → 0.2.x`）时；
   同元组内 rc 滚动（`0.1.1-rc.2 → rc.3`）无需动作。DSH 所有包同版本发布，
   `npm view @deepseek-ai/dsh version` 即权威信号。
-- **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm 最新版本
-  对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读 npm 已发布版本**；
-  更新的未发布 pre-release 走**手动发布前检查**——见上文"升版前手动确认"。
+- **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm `latest`
+  dist-tag 版本对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读
+  `latest` tag**；发布在其它 tag（如 `alpha`）的 pre-release 走**手动发布前检查**
+  ——见上文"升版前手动确认"。
 - **更新步骤**：给每个 `@deepseek-ai/dsh-*` peer 追加 `|| ^<新元组>-rc.<n>`
   → devDependencies 同步升到最新 → `npm install` → `npm run check` → 发版。
 - **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则

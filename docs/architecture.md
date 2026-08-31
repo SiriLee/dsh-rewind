@@ -98,7 +98,7 @@ pruneStale            cross-session auto-cleanup (default off): whole
 
 ## Compatibility strategy
 
-- **Peer ranges as OR-union of DSH rc tuples** (`^0.1.0-rc.6 || ^0.1.1-rc.2`):
+- **Peer ranges as OR-union of DSH version tuples** (`^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2`):
   npm's prerelease rules require the peer range to share the host's
   `[major, minor, patch]` tuple; `scripts/check-dsh-version.mjs` detects when
   a new tuple requires appending. See `docs/release/release.md`.
