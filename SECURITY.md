@@ -83,9 +83,8 @@ and is repaired offline (see `docs/compat/troubleshooting.md`).
 
 - **Store root**: `<harness home>/rewind-snapshots/` by default (resolved via
   `resolveDshHome`, so `~/.dsh/...` when `DSH_HOME` is unset); the `snapshotDir`
-  config, then `DSH_REWIND_SNAPSHOT_DIR` env, override it. The store never
-  overlaps the workspace; deleting it only removes file backups and the store
-  rebuilds from scratch.
+  config, then `DSH_REWIND_SNAPSHOT_DIR` env, override it. Deleting it only
+  removes file backups and the store rebuilds from scratch.
 - **Path sanitization**: session ids and call ids are scrubbed to
   `[a-zA-Z0-9._-]` (`safeSessionId` / `safeFileId`) before joining the store
   root; `.` and `..` bare values are replaced — hostile ids cannot traverse
