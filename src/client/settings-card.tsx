@@ -170,7 +170,7 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
                 <span className="dsh-rewind-cleanup-thumb" />
               </button>
             </div>
-            <span className="dsh-rewind-cleanup-hint">{t('cleanup.auto.hint')}</span>
+            <p className="dsh-rewind-cleanup-hint">{t(draft.enabled ? 'cleanup.auto.on' : 'cleanup.auto.off')}</p>
           </div>
           {draft.enabled ? (
             <div className="dsh-rewind-cleanup-field">
@@ -182,9 +182,9 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
                 type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
                 disabled={disabled} aria-invalid={invalid || undefined} placeholder={String(DEFAULT_MAX_AGE_DAYS)}
                 onChange={(e) => edit({ maxAgeDays: e.target.value })} />
-              <span className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>
+              <p className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>
                 {invalid ? t('cleanup.invalid') : t('cleanup.maxAge.hint')}
-              </span>
+              </p>
             </div>
           ) : null}
           <div className="dsh-rewind-cleanup-footer">
