@@ -71,6 +71,7 @@
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
 - **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
+- **settings-card cross-version reach**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject unmounts the whole client plugin on rc.2 (card and rewind button disappear). It uses only the rc.2↔alpha-common scope subset (`getSnapshot().value` + `set`), never the alpha-only `mutate`.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 
