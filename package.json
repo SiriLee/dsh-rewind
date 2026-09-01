@@ -54,7 +54,8 @@
         "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-client-ui-commands",
-        "@deepseek-ai/dsh-client-ui-conversation"
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web"
     }
@@ -72,9 +73,11 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6 || ^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-ui-commands": "^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2",
     "@deepseek-ai/dsh-commands": "^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2",
     "@deepseek-ai/dsh-fs": "^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2",
@@ -89,6 +92,9 @@
     "@deepseek-ai/cordis": {
       "optional": true
     },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-client-locale": {
       "optional": true
     },
@@ -96,6 +102,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-commands": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-settings": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-slots": {
@@ -128,6 +137,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/schemastery": "^3.18.1",
     "@deepseek-ai/dsh-agent": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-locale": "^0.1.1-rc.2",
     "@deepseek-ai/dsh-client-runtime": "^0.1.1-rc.2",

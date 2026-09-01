@@ -45,6 +45,13 @@ import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } f
 import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
+import {
+  SettingsCleanupCard,
+  CLEANUP_SETTINGS_NAMESPACE,
+  type CleanupCardApi,
+  type CleanupPolicy,
+  type CardTranslate,
+} from './settings-card.tsx'
 
 export const name = 'dsh-rewind'
 // NOTE: deliberately NOT injecting the alpha.1+ `uiConversation` service here.
@@ -53,6 +60,13 @@ export const name = 'dsh-rewind'
 // Desktop 2.0.3. The service is resolved lazily per read instead (see
 // `uiConversation` in apply), the same optional `ctx.get` pattern the
 // harness's own consumer plugins use on alpha.1+.
+//
+// `settingsScope` is likewise NOT a module-level inject. Following the
+// dsh-market template (see src/client/index.ts below), the settings surface is
+// reached through a NESTED `ctx.inject(['settingsScope'], ...)`: naming it at
+// the module level would keep this whole plugin unmounted on a host without
+// that service, costing the rewind feature to gain a settings card the host
+// cannot render. Nested, the card simply never appears there.
 export const inject = ['slots', 'sessions', 'locale', 'commandUi']
 
 const NS = 'rewind'
@@ -78,6 +92,27 @@ interface UiConversationLike {
  */
 interface SessionInputResolverLike {
   for(actx: unknown): { setDraft(text: string): void }
+}
+
+/**
+ * Structural face of the settings-namespace scope the snapshot-cleanup card
+ * binds (the `settingsScope.bind({namespace})` result). Only the subset the
+ * card uses — a resolved-value snapshot, a per-field write, and a change
+ * subscription — typed locally so the plugin never imports the client settings
+ * typed contract (which drifts rc.2 ↔ alpha: alpha adds `mutate`, not used here).
+ */
+interface CleanupSettingsScopeLike {
+  getSnapshot(): {
+    /** The resolved namespace value (schema-valid) or undefined while loading. */
+    value?: { enabled: boolean; maxAgeDays: number }
+    status: 'loading' | 'ready' | 'unavailable' | string
+    /** Whether the Host document accepts writes (the harness's own writable signal). */
+    writable: boolean
+  }
+  /** Write one field's user-layer value (present on rc.2 and alpha). */
+  set(field: string, value: unknown): Promise<void>
+  /** Observe snapshot replacements; returns the disposer. */
+  subscribe(cb: () => void): () => void
 }
 
 /** The slot the session-scoped rewind bridge registers into (harness-declared). */
@@ -181,6 +216,63 @@ export function apply(ctx: ClientContext): void {
       },
       createRewindBridge({ sessionOf, chatOf, currentSessionId, setComposerText, t, subscribeLocale }),
     ))
+
+    // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
+    // Reach the settings surface through a NESTED inject (the dsh-market
+    // template, proven on rc.2 ↔ alpha): do NOT name settingsScope in the
+    // module-level inject, or a host without it leaves this whole plugin
+    // unmounted (costing the rewind feature a card it cannot render). Nested,
+    // the card simply never registers there. The nested scope inherits the
+    // module 'slots' and 'locale', and gains 'settingsScope'; only then is the
+    // namespace bound and the card registered under `settings.plugin.item`
+    // keyed by the SAME namespace the Host half serves. The card reads/writes
+    // through a structural scope face (alpha-only `mutate` deliberately unused).
+    const clientCtx = ctx as unknown as {
+      inject(services: string[], callback: (scoped: {
+        slots: SlotsLike
+        settingsScope: { bind(spec: { namespace: string }): CleanupSettingsScopeLike }
+      }) => void): void
+    }
+    clientCtx.inject(['settingsScope'], (scoped) => {
+      try {
+        const scope = scoped.settingsScope.bind({ namespace: CLEANUP_SETTINGS_NAMESPACE }) as unknown as CleanupSettingsScopeLike
+        const cardApi: CleanupCardApi = {
+          read: () => {
+            const value = scope.getSnapshot().value
+            return value === undefined
+              ? undefined
+              : { enabled: value.enabled, maxAgeDays: value.maxAgeDays }
+          },
+          writable: () => {
+            // The harness's own writable signal (a read-only settings source
+            // reports false); the earlier status/mode derivation was wrong and
+            // left the buttons disabled.
+            return scope.getSnapshot().writable === true
+          },
+          save: async (next: CleanupPolicy) => {
+            await scope.set('enabled', next.enabled)
+            await scope.set('maxAgeDays', next.maxAgeDays)
+          },
+          subscribe: (cb) => scope.subscribe(cb),
+        }
+        scoped.slots.inject('settings.plugin.item', () => scoped.slots.register(
+          {
+            name: 'settings.plugin.item',
+            key: CLEANUP_SETTINGS_NAMESPACE,
+            // Match the official cards / dsh-market: locale + inject provide
+            // the card its props through the slot renderer (the keyed card owns
+            // its internals, but the page feeds it locale + the bound api).
+            locale: NS,
+            inject: () => ({ t: t as unknown as CardTranslate, api: cardApi }),
+          },
+          SettingsCleanupCard,
+        ))
+      } catch (error) {
+        // A settings-card failure must never break the plugin: the rewind
+        // feature is independent of the settings surface.
+        console.error('[dsh-rewind] settings card register failed:', error)
+      }
+    })
 
     // ---- /rewind command decoration (the standard text-driven flow) ----
     // A bare `/rewind` — picked from the slash-menu completion, or typed in

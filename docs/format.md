@@ -149,3 +149,14 @@ version field. A future incompatible format must either bump the journal
 `version` (readers reject unknown values — there is no best-effort fallback or
 legacy coercion) or move the state root (e.g. `rewind-snapshots/v2`) and ship
 an explicit migration tool. Old-format data is never silently re-interpreted.
+
+## Cleanup policy persistence
+
+The snapshot auto-cleanup policy (the `enabled` switch and the `maxAgeDays`
+idle cutoff) is no longer a file: it lives in the **dsh-settings document** under
+the `dsh-rewind-snapshot-cleanup` namespace (validated by a schemastery schema;
+defaults are the `base` layer). On first run after this change, a legacy
+`<dsh home>/snapshot-cleanup.json` is imported into the document **once** and
+then deleted (an absent file is a no-op; an invalid file imports the safe
+default and is dropped). The last-sweep clock stays in its own
+`<dsh home>/snapshot-cleanup-last-sweep.json` state file, which is unchanged.

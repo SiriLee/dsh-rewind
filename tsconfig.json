@@ -4,5 +4,5 @@
     "types": ["node"]
   },
   "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts", "tests/**/*.ts"],
-  "exclude": ["node_modules", "tests/client-contract.test.ts", "tests/client-dom.test.ts", "tests/client-composer.test.ts"]
+  "exclude": ["node_modules", "tests/client-contract.test.ts", "tests/client-dom.test.ts", "tests/client-composer.test.ts", "tests/client-settings-card.test.ts"]
 }

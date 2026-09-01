@@ -38,21 +38,27 @@ import { unlink } from 'node:fs/promises'
 // a static `import { settingsNamespace }` would fail to link on alpha.2. The
 // symbol is read through optional chaining in `readSettingsSection` instead.
 import * as dshSettings from '@deepseek-ai/dsh-settings'
+import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { readSettingsSection } from './settings-locale.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
+  CLEANUP_CONFIG_FILENAME,
+  CLEANUP_SETTINGS_NAMESPACE,
+  CleanupConfigSchema,
   DEFAULT_CLEANUP_CONFIG,
-  loadCleanupConfig,
+  migrateLegacyCleanupConfig,
   parseCleanupCommand,
   resolveCleanupConfigPath,
   resolveCleanupStatePath,
   runAutoCleanupCheck,
-  saveCleanupConfig,
   saveLastSweepAt,
+  settingsCleanupStore,
   type CleanupConfig,
+  type CleanupConfigStore,
+  type CleanupSettingsScope,
 } from './snapshot-cleanup.ts'
 
 export { SnapshotStore } from './snapshot.ts'
@@ -79,6 +85,14 @@ const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
+
+/**
+ * The cleanup-policy store, mounted when the settings service registers the
+ * namespace. `undefined` until then (or in settings-less deployments), which
+ * makes the cleanup command and auto-sweep fail-closed (delete nothing) rather
+ * than guess. Follows the same "optional injected service" pattern as `fsService`.
+ */
+let cleanupStore: CleanupConfigStore | undefined
 
 /** Render one host dictionary key in the active locale. */
 function t(key: HostKey, params?: Record<string, string | number>): string {
@@ -690,10 +704,28 @@ async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId
   autoSweepChecked = true
   await runAutoCleanupCheck({
     pruner: store,
-    configPath: resolveCleanupConfigPath(dshHome),
+    readConfig: () => readCleanupPolicy(),
     statePath: resolveCleanupStatePath(dshHome),
     log: msg => ctx.logger.warn(msg),
   }, sessionId)
+}
+
+/**
+ * Read the resolved cleanup policy from the settings-backed store. Before the
+ * settings service is present the read fails closed (an error, deleting
+ * nothing) — the same safety the pre-migration invalid-file read had.
+ */
+async function readCleanupPolicy(): Promise<{ ok: true; config: CleanupConfig } | { ok: false; error: string }> {
+  if (cleanupStore === undefined) {
+    return { ok: false, error: 'settings service unavailable; snapshot cleanup policy cannot be read' }
+  }
+  return { ok: true, config: cleanupStore.load() }
+}
+
+/** Persist a validated cleanup policy through the settings-backed store. */
+async function writeCleanupPolicy(next: CleanupConfig): Promise<void> {
+  if (cleanupStore === undefined) throw new Error('settings service unavailable; snapshot cleanup policy cannot be written')
+  await cleanupStore.save(next)
 }
 
 /** Render a {@link PruneStaleReport} for the `run` sub-command (dry vs apply). */
@@ -722,37 +754,34 @@ async function handleSnapshotCleanup(
 ): Promise<CommandResult> {
   const parsed = parseCleanupCommand(invocation.rawInput)
   if ('error' in parsed) return { kind: 'error', text: t('cleanup.usage') }
-  const configPath = resolveCleanupConfigPath(dshHome)
   switch (parsed.action) {
     case 'status': {
-      const loaded = await loadCleanupConfig(configPath)
+      const loaded = await readCleanupPolicy()
       if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
       return {
         kind: 'success',
         text: t('cleanup.status', {
           state: t(loaded.config.enabled ? 'cleanup.enabled' : 'cleanup.disabled'),
           days: loaded.config.maxAgeDays,
-          path: configPath,
-          present: t(loaded.fromFile ? 'cleanup.present' : 'cleanup.absent'),
         }),
       }
     }
     case 'on':
     case 'off': {
-      const loaded = await loadCleanupConfig(configPath)
+      const loaded = await readCleanupPolicy()
       const next: CleanupConfig = { ...(loaded.ok ? loaded.config : DEFAULT_CLEANUP_CONFIG), enabled: parsed.action === 'on' }
       try {
-        await saveCleanupConfig(configPath, next)
+        await writeCleanupPolicy(next)
       } catch (error) {
         return { kind: 'error', text: t('cleanup.saveFailed', { detail: error instanceof Error ? error.message : String(error) }) }
       }
       return { kind: 'success', text: t(parsed.action === 'on' ? 'cleanup.onOk' : 'cleanup.offOk') }
     }
     case 'max-age': {
-      const loaded = await loadCleanupConfig(configPath)
+      const loaded = await readCleanupPolicy()
       const next: CleanupConfig = { ...(loaded.ok ? loaded.config : DEFAULT_CLEANUP_CONFIG), maxAgeDays: parsed.value! }
       try {
-        await saveCleanupConfig(configPath, next)
+        await writeCleanupPolicy(next)
       } catch (error) {
         return { kind: 'error', text: t('cleanup.saveFailed', { detail: error instanceof Error ? error.message : String(error) }) }
       }
@@ -766,7 +795,7 @@ async function handleSnapshotCleanup(
       if (parsed.target === 'current') {
         return handleClearCurrent(store, invocation, apply, trackedBySession)
       }
-      const loaded = await loadCleanupConfig(configPath)
+      const loaded = await readCleanupPolicy()
       if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
       try {
         const report = await store.pruneStale({
@@ -915,6 +944,33 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     if (section?.preference === 'zh' || section?.preference === 'en') {
       activeLocale = section.preference
     }
+
+    // Register the snapshot-cleanup policy namespace and back the store with
+    // it. `base` is the defaults layer (below the user layer), so the resolved
+    // policy is always schema-valid. The namespace is hyphenated (the settings
+    // grammar rejects dots). The register's returned scope is read/written
+    // through a structural face so neither rc.2 nor alpha type-couples the
+    // host bundle; the client settings API drift (alpha adds `mutate`) never
+    // reaches this module.
+    const cleanupScope = (
+      settingsCtx.settings as unknown as {
+        register(ns: string, schema: unknown, opts: { base: CleanupConfig }): {
+          get(): unknown
+          update(patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+        }
+      }
+    ).register(CLEANUP_SETTINGS_NAMESPACE, CleanupConfigSchema, { base: DEFAULT_CLEANUP_CONFIG }) as unknown as CleanupSettingsScope
+    cleanupStore = settingsCleanupStore(cleanupScope)
+    // One-time, idempotent migration of the pre-GUI file (see the module doc in
+    // snapshot-cleanup.ts); every startup this is a cheap ENOENT read once the
+    // file is gone.
+    void migrateLegacyCleanupConfig(
+      resolveCleanupConfigPath(dshHome),
+      cleanupScope,
+      msg => ctx.logger.warn(msg),
+    ).catch(error => {
+      ctx.logger.warn(`[dsh-rewind] snapshot cleanup migration failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
   })
 
   ctx.effect(function* () {

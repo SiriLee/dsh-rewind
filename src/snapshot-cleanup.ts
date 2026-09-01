@@ -19,9 +19,10 @@
  * @module dsh-rewind/snapshot-cleanup
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
+import z from '@deepseek-ai/schemastery'
 
 /** The cleanup policy, as persisted under `~/.dsh/snapshot-cleanup.json`. */
 export interface CleanupConfig {
@@ -31,26 +32,120 @@ export interface CleanupConfig {
 
 export const CLEANUP_CONFIG_FILENAME = 'snapshot-cleanup.json'
 
-/** Environment variable overriding the config file path. */
-export const CLEANUP_CONFIG_ENV = 'DSH_SNAPSHOT_CLEANUP_CONFIG'
-
 /** The default keep threshold: finished sessions idle > 30 days are pruned. */
 export const DEFAULT_MAX_AGE_DAYS = 30
 
 /** The safe default policy (off) — a missing/corrupt file behaves like this. */
 export const DEFAULT_CLEANUP_CONFIG: CleanupConfig = { enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS }
 
+/**
+ * The dsh-settings namespace that backs the cleanup policy after migration.
+ * Namespaces must match the settings provider's `^[a-z][a-z0-9-]*$` grammar (no
+ * dots), so this is hyphenated, not dotted.
+ */
+export const CLEANUP_SETTINGS_NAMESPACE = 'dsh-rewind-snapshot-cleanup'
+
+/**
+ * The schemastery schema that persists + validates the cleanup policy in the
+ * dsh-settings document. This is the SINGLE storage validator: the `maxAgeDays`
+ * rule is enforced by `.step(1).min(1)` (positive integer) and the defaults by
+ * `.default(...)`, so the resolved value is always a valid {@link CleanupConfig}
+ * and a bad stored/user value cannot steer the sweep into deleting everything.
+ */
+export const CleanupConfigSchema: z<CleanupConfig> = z.object({
+  enabled: z.boolean().default(DEFAULT_CLEANUP_CONFIG.enabled),
+  maxAgeDays: z.number().step(1).min(1).default(DEFAULT_CLEANUP_CONFIG.maxAgeDays),
+})
+
+/**
+ * Structural face of the settings scope the host needs for the policy: a
+ * resolved read and a validated write. Kept local (never imports the settings
+ * contract) so the host bundle links on both rc.2 and alpha — the settings
+ * API drift (alpha adds `mutate`, rd2 does not) is confined to the seam the
+ * host passes in, never to this module.
+ */
+export interface CleanupSettingsScope {
+  /** The resolved policy: schema defaults, then base, then the user layer. */
+  get(): CleanupConfig
+  /** Merge a partial patch into the user layer (validated by the schema). */
+  update(patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+}
+
+/** A validated policy read/write port the command + auto-sweep use. */
+export interface CleanupConfigStore {
+  /** The resolved policy (always schema-valid, fail-closes when unavailable). */
+  load(): CleanupConfig
+  /** Persist a validated policy, throwing when invalid or unavailable. */
+  save(next: CleanupConfig): Promise<void>
+}
+
+/**
+ * Adapter that turns a {@link CleanupSettingsScope} into a
+ * {@link CleanupConfigStore}. Reads come straight from the resolved scope; a
+ * write validates via `parseCleanupConfig` before touching the scope, so a bad
+ * value can never reach the document (defense-in-depth below the schema).
+ */
+export function settingsCleanupStore(scope: CleanupSettingsScope): CleanupConfigStore {
+  return {
+    load: () => scope.get(),
+    save: async (next) => {
+      const parsed = parseCleanupConfig({ enabled: next.enabled, maxAgeDays: next.maxAgeDays })
+      if (!parsed.ok) throw new RangeError(parsed.error)
+      await scope.update({ enabled: parsed.config.enabled, maxAgeDays: parsed.config.maxAgeDays })
+    },
+  }
+}
+
+/**
+ * One-time migration of the pre-GUI cleanup policy file into the settings
+ * document. Idempotent and cheap: it is called on every startup but only does
+ * work once — a present-and-parsed legacy file is written into the scope and
+ * then deleted, after which the read is an ENOENT no-op. A missing file is a
+ * no-op; an invalid file writes the safe default (deleting nothing) and logs.
+ * This is the ONLY consumption of {@link loadCleanupConfig} after migration.
+ * @returns whether a legacy file was actually migrated.
+ */
+export async function migrateLegacyCleanupConfig(
+  legacyPath: string,
+  scope: CleanupSettingsScope,
+  log: (msg: string) => void,
+): Promise<boolean> {
+  const loaded = await loadCleanupConfig(legacyPath)
+  if (!loaded.ok) {
+    // A structurally invalid legacy file: write the safe default (so the sweep
+    // never guesses from a broken file) and drop it. Never deletes data.
+    log(`[dsh-rewind] legacy snapshot-cleanup config invalid, migrating defaults and removing: ${loaded.error}`)
+    await scope.update({ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS })
+    await unlink(legacyPath).catch(() => undefined)
+    return true
+  }
+  if (!loaded.fromFile) return false
+  if (
+    loaded.config.enabled === DEFAULT_CLEANUP_CONFIG.enabled
+    && loaded.config.maxAgeDays === DEFAULT_CLEANUP_CONFIG.maxAgeDays
+  ) {
+    // File equals the defaults — nothing worth persisting; just drop it.
+    await unlink(legacyPath).catch(() => undefined)
+    return true
+  }
+  await scope.update({ enabled: loaded.config.enabled, maxAgeDays: loaded.config.maxAgeDays })
+  await unlink(legacyPath).catch(() => undefined)
+  log(`[dsh-rewind] migrated legacy snapshot-cleanup config (enabled=${String(loaded.config.enabled)}, maxAgeDays=${String(loaded.config.maxAgeDays)})`)
+  return true
+}
+
 /** Auto-sweep cadence (the user's hardcoded 24h rhythm — not user-set). */
 export const AUTO_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000
 
 /**
- * Resolve the config file path (highest first): the `DSH_SNAPSHOT_CLEANUP_CONFIG`
- * env override, else `<harness home>/snapshot-cleanup.json` — derived from
- * `dshHome` (config.dshHome > `$DSH_HOME` > `~/.dsh`) so the plugin follows the
- * harness home instead of hardcoding `~/.dsh`.
+ * Resolve the LEGACY pre-migration config file path (the only remaining use of
+ * the file store): `<harness home>/snapshot-cleanup.json`, derived from
+ * `dshHome` (config.dshHome > `$DSH_HOME` > `~/.dsh`) so the migration follows
+ * the harness home instead of hardcoding `~/.dsh`. The `DSH_SNAPSHOT_CLEANUP_CONFIG`
+ * env override was removed when the policy moved into the dsh-settings document.
  */
 export function resolveCleanupConfigPath(dshHome?: string): string {
-  return process.env[CLEANUP_CONFIG_ENV] ?? join(resolveDshHome(dshHome), CLEANUP_CONFIG_FILENAME)
+  return join(resolveDshHome(dshHome), CLEANUP_CONFIG_FILENAME)
 }
 
 /** The state file that records the last automatic-sweep wall-clock time. */
@@ -103,11 +198,16 @@ export interface AutoCleanupPruner {
  * `sessionId` is the active session directory that must never be pruned.
  */
 export async function runAutoCleanupCheck(
-  deps: { pruner: AutoCleanupPruner; configPath: string; statePath: string; log: (msg: string) => void },
+  deps: {
+    pruner: AutoCleanupPruner
+    readConfig: () => Promise<{ ok: true; config: CleanupConfig } | { ok: false; error: string }>
+    statePath: string
+    log: (msg: string) => void
+  },
   sessionId: string | undefined,
 ): Promise<void> {
   try {
-    const loaded = await loadCleanupConfig(deps.configPath)
+    const loaded = await deps.readConfig()
     if (!loaded.ok) {
       deps.log(`[dsh-rewind] snapshot cleanup config invalid; auto-cleanup skipped: ${loaded.error}`)
       return
