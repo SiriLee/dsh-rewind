@@ -55,11 +55,6 @@ const aborted = () => new AbortController().signal
 const tmpRoot = await mkdtemp(join(tmpdir(), 'dsh-rewind-verify-'))
 const wsDir = join(tmpRoot, 'ws')
 const snapRoot = join(tmpRoot, 'snapshots')
-// Isolate the cleanup config to a temp sibling (NOT inside snapRoot, which a
-// later check wipes) so the auto-sweep reads an empty/default file during the
-// rewind checks and never touches the developer's real policy.
-const cleanupConfig = join(tmpRoot, 'snapshot-cleanup.json')
-process.env.DSH_SNAPSHOT_CLEANUP_CONFIG = cleanupConfig
 await mkdir(wsDir, { recursive: true })
 
 /** Real-filesystem fs double: resolve returns the real display path. */
@@ -79,6 +74,32 @@ class FakeFs extends FileSystem {
 }
 
 const fs = new FakeFs(new Context())
+
+// Minimal `settings` service double: provides `register`/`get`/`update` backed
+// by an in-memory per-namespace user-section store, enough for the plugin's
+// settings-optional locale read and the snapshot-cleanup policy namespace.
+// register returns a scope whose get() resolves defaults + base + user layer and
+// whose update() validates through the registered schema before merging.
+const fakeSettings = {
+  sections: new Map(),
+  register(ns, schema, opts = {}) {
+    const section = () => this.sections.get(ns) ?? {}
+    const scope = {
+      get: () => {
+        const u = section()
+        return { ...(opts.base ?? {}), ...u }
+      },
+      update: async (patch) => {
+        schema({ ...scope.get(), ...patch }) // validates; throws on invalid
+        this.sections.set(ns, { ...section(), ...patch })
+      },
+      replace: async (s) => { this.sections.set(ns, { ...s }) },
+      watch: () => () => {},
+    }
+    return scope
+  },
+  get(ns) { return this.sections.get(ns) },
+}
 
 const user = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
 const assistant = text => createAssistantMessage({ content: [{ type: 'text', text }], source: { provider: 'test', model: 'test' } })
@@ -171,6 +192,7 @@ ctx.provide('commands', {
   },
 })
 ctx.provide('fs', fs)
+ctx.provide('settings', fakeSettings)
 ctx.provide('sessions', { flush: async () => {} })
 // The real token-meter service (registers itself as ctx.tokenMeter) and a
 // real compaction backend whose ONLY hook is a stubbed summarize() — the
@@ -183,7 +205,7 @@ class StubCompactionEngine extends BasicCompactionEngine {
   }
 }
 new StubCompactionEngine(ctx)
-applyRewind(ctx, { snapshotDir: snapRoot })
+applyRewind(ctx, { snapshotDir: snapRoot, dshHome: tmpRoot })
 applyCommandCompact(ctx)
 
 const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: CommandId('cid'), agent: agentOf, rawInput, signal: aborted() })
@@ -479,12 +501,13 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
 }
 
-// 15. /snapshot-auto-cleanup: view/configure, persist to disk, run (dry then
-//     apply), and fail-closed on a corrupt config file.
+// 15. /snapshot-auto-cleanup: view/configure via the settings document, run
+//     (dry then apply), and reject invalid max-age without writing.
 {
   const cleanupDef = commands.get('snapshot-auto-cleanup')
   const callCleanup = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent, rawInput, signal: aborted() })
   const exists = async (path) => { try { await stat(path); return true } catch { return false } }
+  const NS = 'dsh-rewind-snapshot-cleanup'
   const seedDir = async (sessionId, mtime) => {
     const anchor = join(snapRoot, sessionId, '1')
     await mkdir(anchor, { recursive: true })
@@ -500,23 +523,22 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   // a plain message. Guard that the descriptor keeps it.
   check('snapshot-auto-cleanup declares input', cleanupDef?.input !== undefined, JSON.stringify(cleanupDef))
 
-  // Default: disabled, no config file yet.
+  // Default: disabled, nothing written to the settings document yet.
   const status0 = await callCleanup('')
   check('cleanup default status is disabled', status0.kind === 'success' && /disabled/.test(status0.text), status0.text)
+  check('cleanup default writes nothing', (fakeSettings.sections.get(NS) ?? { enabled: false }).enabled === false, JSON.stringify(fakeSettings.sections.get(NS)))
 
-  // Enable persists a config file with enabled:true.
+  // Enable persists enabled:true in the settings document.
   const onResult = await callCleanup('on')
   check('cleanup on succeeds', onResult.kind === 'success', onResult.text)
-  const cfgOn = JSON.parse(await readFile(cleanupConfig, 'utf8'))
-  check('cleanup config persisted (enabled)', cfgOn.enabled === true, JSON.stringify(cfgOn))
+  check('cleanup config persisted (enabled)', fakeSettings.sections.get(NS)?.enabled === true, JSON.stringify(fakeSettings.sections.get(NS)))
   const statusOn = await callCleanup('')
   check('cleanup status reflects enabled', statusOn.kind === 'success' && /enabled/.test(statusOn.text), statusOn.text)
 
   // max-age persists; an invalid value is rejected without writing.
   const maxAgeResult = await callCleanup('max-age 5')
   check('cleanup max-age set', maxAgeResult.kind === 'success', maxAgeResult.text)
-  const cfgAge = JSON.parse(await readFile(cleanupConfig, 'utf8'))
-  check('cleanup config persisted (maxAgeDays)', cfgAge.maxAgeDays === 5, JSON.stringify(cfgAge))
+  check('cleanup config persisted (maxAgeDays)', fakeSettings.sections.get(NS)?.maxAgeDays === 5, JSON.stringify(fakeSettings.sections.get(NS)))
   const badAge = await callCleanup('max-age 0')
   check('cleanup rejects max-age 0', badAge.kind === 'error', badAge.text)
 
@@ -540,15 +562,8 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   const statusOff = await callCleanup('')
   check('cleanup status reflects disabled', statusOff.kind === 'success' && /disabled/.test(statusOff.text), statusOff.text)
 
-  // A corrupt config file fail-closes: `run` reports an error, deletes nothing.
-  await writeFile(cleanupConfig, '{broken', 'utf8')
-  const badRun = await callCleanup('run')
-  check('cleanup run fail-closes on corrupt config', badRun.kind === 'error', badRun.text)
-
   // A manual `run --current` clears the ACTIVE session's snapshots (dry then
-  // apply). Runs with the config left corrupt ({broken) to prove the clear path
-  // is config-independent. Session-scoped so it never collides with the reused
-  // main session or the seeded cleanup dirs.
+  // apply). Config-independent (uses the resolved policy via the settings doc).
   const csSession = buildSession('verify-clearsession', wsDir)
   const csAgent = makeAgent(csSession.id, csSession)
   const callClear = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent: csAgent, rawInput, signal: aborted() })

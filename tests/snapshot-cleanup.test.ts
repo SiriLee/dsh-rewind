@@ -10,20 +10,24 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SnapshotStore } from '../src/snapshot.ts'
 import {
-  CLEANUP_CONFIG_ENV,
+  CLEANUP_SETTINGS_NAMESPACE,
+  CleanupConfigSchema,
   DEFAULT_CLEANUP_CONFIG,
   DEFAULT_MAX_AGE_DAYS,
   loadLastSweepAt,
   parseCleanupCommand,
   parseCleanupConfig,
   loadCleanupConfig,
+  migrateLegacyCleanupConfig,
   resolveCleanupConfigPath,
   resolveCleanupStatePath,
   runAutoCleanupCheck,
   saveCleanupConfig,
   saveLastSweepAt,
+  settingsCleanupStore,
   shouldRunAutoSweep,
   type CleanupConfig,
+  type CleanupSettingsScope,
 } from '../src/snapshot-cleanup.ts'
 
 let cfg: string
@@ -120,11 +124,6 @@ describe('saveCleanupConfig', () => {
 describe('resolveCleanupConfigPath', () => {
   it('defaults to ~/.dsh/snapshot-cleanup.json', () => {
     expect(resolveCleanupConfigPath()).toBe(join(homedir(), '.dsh', 'snapshot-cleanup.json'))
-  })
-
-  it('honors the env override', () => {
-    vi.stubEnv(CLEANUP_CONFIG_ENV, '/tmp/custom-cleanup.json')
-    expect(resolveCleanupConfigPath()).toBe('/tmp/custom-cleanup.json')
   })
 })
 
@@ -227,10 +226,12 @@ describe('last-sweep state (persisted across restart)', () => {
   })
 })
 
-describe('resolveCleanupStatePath', () => {
-  it('derives from the config path dir with the state filename', () => {
-    vi.stubEnv(CLEANUP_CONFIG_ENV, join(dir, 'my-config.json'))
-    expect(resolveCleanupStatePath()).toBe(join(dir, 'snapshot-cleanup-last-sweep.json'))
+describe('resolveCleanupConfigPath / resolveCleanupStatePath', () => {
+  it('derives both from the same dshHome dir (no env override since the migration)', () => {
+    const dshHome = join(dir, 'home')
+    const cfgPath = resolveCleanupConfigPath(dshHome)
+    expect(cfgPath).toBe(join(dshHome, 'snapshot-cleanup.json'))
+    expect(resolveCleanupStatePath(dshHome)).toBe(join(dshHome, 'snapshot-cleanup-last-sweep.json'))
   })
 })
 
@@ -240,7 +241,12 @@ describe('runAutoCleanupCheck', () => {
   const snapRoot = () => join(dir, 'snapshots')
   const deps = () => ({
     pruner: new SnapshotStore(snapRoot()),
-    configPath: cfg,
+    readConfig: async () => {
+      const loaded = await loadCleanupConfig(cfg)
+      return loaded.ok
+        ? { ok: true as const, config: loaded.config }
+        : { ok: false as const, error: loaded.error }
+    },
     statePath: state,
     log: (_s: string): void => {},
   })
@@ -306,5 +312,97 @@ describe('runAutoCleanupCheck', () => {
     await saveLastSweepAt(state, now() - 40 * day)
     await runAutoCleanupCheck(deps(), 'active')
     await expect(staleExists('active')).resolves.toBe(true) // skipped via keepActiveId
+  })
+})
+
+describe('CleanupConfig schema + settingsCleanupStore', () => {
+  // schemastery's TS call type requires the full config shape; `.default()` makes
+  // absent fields fall back at runtime, so tests drive the schema through a
+  // widened call helper that still exercises the runtime defaults/rejections.
+  const at = (v: Record<string, unknown>): CleanupConfig => CleanupConfigSchema(v as unknown as CleanupConfig)
+
+  it('resolves the default (off) policy when nothing is set', () => {
+    expect(at({})).toEqual({ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS })
+  })
+
+  it('keeps provided values', () => {
+    expect(at({ enabled: true, maxAgeDays: 7 })).toEqual({ enabled: true, maxAgeDays: 7 })
+  })
+
+  it('rejects a non-positive or non-integer maxAgeDays', () => {
+    expect(() => at({ enabled: false, maxAgeDays: 0 })).toThrow()
+    expect(() => at({ enabled: false, maxAgeDays: -1 })).toThrow()
+    expect(() => at({ enabled: false, maxAgeDays: 2.5 })).toThrow()
+    expect(() => at({ enabled: false, maxAgeDays: NaN })).toThrow()
+  })
+
+  it('rejects a non-enum enabled', () => {
+    expect(() => at({ enabled: 'yes' })).toThrow()
+  })
+
+  it('store load() reads the scope and save() validates then updates', async () => {
+    const scope: CleanupSettingsScope = {
+      get: (): CleanupConfig => ({ enabled: true, maxAgeDays: 9 }),
+      update: vi.fn(async () => undefined),
+    }
+    const store = settingsCleanupStore(scope)
+    expect(store.load()).toEqual({ enabled: true, maxAgeDays: 9 })
+    await store.save({ enabled: false, maxAgeDays: 12 })
+    expect(scope.update).toHaveBeenCalledWith({ enabled: false, maxAgeDays: 12 })
+    await expect(store.save({ enabled: false, maxAgeDays: 0 })).rejects.toThrow()
+    expect(scope.update).toHaveBeenCalledTimes(1) // invalid value never touched scope
+  })
+
+  it('namespace is lowercase-hyphenated (settings grammar, no dots)', () => {
+    expect(CLEANUP_SETTINGS_NAMESPACE).toMatch(/^[a-z][a-z0-9-]*$/)
+    expect(CLEANUP_SETTINGS_NAMESPACE).not.toContain('.')
+  })
+})
+
+describe('migrateLegacyCleanupConfig', () => {
+  const makeScope = (): { updates: Array<{ enabled?: boolean; maxAgeDays?: number }>; scope: CleanupSettingsScope } => {
+    const updates: Array<{ enabled?: boolean; maxAgeDays?: number }> = []
+    return {
+      updates,
+      scope: {
+        get: (): CleanupConfig => DEFAULT_CLEANUP_CONFIG,
+        update: async (patch) => { updates.push(patch) },
+      },
+    }
+  }
+
+  it('is a no-op when the legacy file is absent', async () => {
+    const { scope, updates } = makeScope()
+    await expect(migrateLegacyCleanupConfig(join(dir, 'absent.json'), scope, () => {})).resolves.toBe(false)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('imports a present legacy file into the scope and deletes it', async () => {
+    const legacy = join(dir, 'legacy.json')
+    await writeFile(legacy, JSON.stringify({ enabled: true, maxAgeDays: 4 }), 'utf8')
+    const { scope, updates } = makeScope()
+    await expect(migrateLegacyCleanupConfig(legacy, scope, () => {})).resolves.toBe(true)
+    expect(updates).toEqual([{ enabled: true, maxAgeDays: 4 }])
+    await expect(readFile(legacy, 'utf8')).rejects.toThrow() // deleted
+  })
+
+  it('writes the safe default and drops an invalid legacy file', async () => {
+    const legacy = join(dir, 'invalid.json')
+    await writeFile(legacy, '{broken', 'utf8')
+    const log = vi.fn()
+    const { scope, updates } = makeScope()
+    await expect(migrateLegacyCleanupConfig(legacy, scope, log)).resolves.toBe(true)
+    expect(updates).toEqual([{ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS }])
+    expect(log).toHaveBeenCalled()
+    await expect(readFile(legacy, 'utf8')).rejects.toThrow()
+  })
+
+  it('deletes a file equal to the defaults without persisting', async () => {
+    const legacy = join(dir, 'defaults.json')
+    await writeFile(legacy, JSON.stringify({ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS }), 'utf8')
+    const { scope, updates } = makeScope()
+    await expect(migrateLegacyCleanupConfig(legacy, scope, () => {})).resolves.toBe(true)
+    expect(updates).toHaveLength(0)
+    await expect(readFile(legacy, 'utf8')).rejects.toThrow()
   })
 })
