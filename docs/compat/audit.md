@@ -20,6 +20,8 @@
 > `-alpha` prerelease published under another tag, e.g. `0.1.2-alpha.2` under
 > `alpha`, is a manual pre-release check).
 >
+> `0.1.2-alpha.3` 已实测核对兼容（`v0.6.3` 运行正常）；rc.2（`latest`）仍为主力基线。
+>
 > Client channel (harness `0.1.2-alpha.x`; `0.1.2-alpha.2` is published to npm
 > under the `alpha` dist-tag while `latest` stays `0.1.1-rc.2`): the plugin reads
 > the session chat through `uiConversation` whenever the DSH client exposes it.
