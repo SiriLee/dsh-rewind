@@ -47,8 +47,9 @@ describe('draft / config / dirty helpers', () => {
     expect(draftFrom(policy)).toEqual({ enabled: true, maxAgeDays: '30' })
   })
   it('configOf returns the policy when valid, else null', () => {
-    expect(configOf(policy, { enabled: false, maxAgeDays: '7' })).toEqual({ enabled: false, maxAgeDays: 7 })
-    expect(configOf(policy, { enabled: true, maxAgeDays: '0' })).toBeNull()
+    expect(configOf({ enabled: false, maxAgeDays: '7' })).toEqual({ enabled: false, maxAgeDays: 7 })
+    expect(configOf({ enabled: true, maxAgeDays: '0' })).toBeNull()
+    expect(configOf({ enabled: true, maxAgeDays: 'abc' })).toBeNull()
   })
   it('dirtyOf detects a switch or max-age change', () => {
     const base = draftFrom(policy)

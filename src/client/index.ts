@@ -61,7 +61,14 @@ export const name = 'dsh-rewind'
 // Desktop 2.0.3. The service is resolved lazily per read instead (see
 // `uiConversation` in apply), the same optional `ctx.get` pattern the
 // harness's own consumer plugins use on alpha.1+.
-export const inject = ['slots', 'sessions', 'locale', 'commandUi']
+//
+// `settingsScope` IS declared: it exists on both rc.2 and alpha and is loaded
+// because `@deepseek-ai/dsh-client-ui-settings` is in `dsh.client.inject`. The
+// settings card is the one surface that depends on it, so it is resolved
+// through cordis (the harness's own settings cards do the same) rather than a
+// `ctx.get` probe, whose guard can return undefined for an undeclared service
+// and silently hide the card.
+export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'settingsScope']
 
 const NS = 'rewind'
 
@@ -213,17 +220,14 @@ export function apply(ctx: ClientContext): void {
     // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
     // Register one `settings.plugin.item` card keyed by the SAME namespace the
     // Host half serves (ConfigurablePluginsTab renders host-served namespaces ∩
-    // registered cards). The settings scope is OPTIONAL — probed via `ctx.get`,
-    // never a declared inject — so a deployment without the settings UI simply
-    // loses the card and the plugin never stalls (the harness's own consumer
-    // plugins gate optional wire services the same way). The card binds the
-    // namespace once and reads/writes through the structural scope face, so it
+    // registered cards). The scope is a declared inject (see the `inject` note)
+    // but bound HERE and read/written through a structural face, so the card
     // never imports the client settings typed contract (which drifts rc.2 ↔
-    // alpha: alpha adds `mutate`, which this card deliberately does not use).
-    const settingsScope = (ctx as { get(name: string): unknown }).get('settingsScope') as
-      | { bind(spec: { namespace: string }): CleanupSettingsScopeLike }
-      | undefined
-    if (settingsScope !== undefined) {
+    // alpha: alpha adds `mutate`, deliberately unused here).
+    const settingsScope = (ctx as unknown as {
+      settingsScope: { bind(spec: { namespace: string }): CleanupSettingsScopeLike }
+    }).settingsScope
+    try {
       const scope = settingsScope.bind({ namespace: CLEANUP_SETTINGS_NAMESPACE }) as unknown as CleanupSettingsScopeLike
       const cardApi: CleanupCardApi = {
         read: () => {
@@ -249,14 +253,14 @@ export function apply(ctx: ClientContext): void {
         // The rewind dictionary owns the cleanup.card keys (see client locales).
         t: t as unknown as CardTranslate,
       })
-      try {
-        slots.inject('settings.plugin.item', () => slots.register(
-          { name: 'settings.plugin.item', key: CLEANUP_SETTINGS_NAMESPACE },
-          BoundCleanupCard,
-        ))
-      } catch (error) {
-        console.error('[dsh-rewind] settings card register failed:', error)
-      }
+      slots.inject('settings.plugin.item', () => slots.register(
+        { name: 'settings.plugin.item', key: CLEANUP_SETTINGS_NAMESPACE },
+        BoundCleanupCard,
+      ))
+    } catch (error) {
+      // A settings-card registration failure must never break the plugin: the
+      // rewind feature is independent of the settings surface.
+      console.error('[dsh-rewind] settings card register failed:', error)
     }
 
     // ---- /rewind command decoration (the standard text-driven flow) ----

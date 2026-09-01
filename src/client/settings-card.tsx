@@ -71,9 +71,10 @@ export function maxAgeOf(text: string): number | null {
 
 /**
  * The policy a draft resolves to, or `null` when the max-age draft is invalid
- * (which blocks save). `enabled` is always a boolean from the switch.
+ * (which blocks save). `enabled` is always a boolean from the switch, and
+ * `maxAgeDays` comes from the validated draft.
  */
-export function configOf(base: CleanupPolicy, draft: CleanupDraft): CleanupPolicy | null {
+export function configOf(draft: CleanupDraft): CleanupPolicy | null {
   const days = maxAgeOf(draft.maxAgeDays)
   if (days === null) return null
   return { enabled: draft.enabled, maxAgeDays: days }
@@ -120,7 +121,7 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
 
   const save = async () => {
     if (busy || !writable || !dirty) return
-    const next = configOf({ enabled: baseline.enabled, maxAgeDays: Number(baseline.maxAgeDays) || 0 }, draft)
+    const next = configOf(draft)
     if (next === null) { setError(t('cleanup.invalid')); return }
     setBusy(true)
     setError(null)
