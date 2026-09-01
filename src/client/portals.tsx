@@ -412,6 +412,49 @@ function sameTargets(left: readonly PortalTarget[], right: readonly PortalTarget
   })
 }
 
+/**
+ * True when the snapshot holds a `/rewind` command that should cut the surface
+ * (`name=rewind`, not an internal probe — preview / __candidates). Used ONLY to
+ * trigger the hiding diagnostic; recognition is deliberately loose so a
+ * mis-named or detached outcome still surfaces as the anomaly it is.
+ */
+function hasExecutedRewindCommand(chat: HiddenChat): boolean {
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
+    if (node === undefined || node.kind !== 'command') continue
+    const command = node.data as { name?: string; args?: string | null }
+    if (command.name !== 'rewind') continue
+    const args = command.args ?? ''
+    if (args.includes('preview') || args.includes('__candidates')) continue
+    return true
+  }
+  return false
+}
+
+/** One-line picture of the hiding path's inputs, for the debug log. */
+function describeHiding(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>): string {
+  const commands: string[] = []
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
+    if (node === undefined || node.kind !== 'command') continue
+    const c = node.data as { seq?: number; name?: string; outcome?: { kind?: string; sourceEventSeq?: number }; args?: string | null }
+    commands.push(`#${c.seq} name=${c.name} outcome=${c.outcome?.kind ?? '-'} marker=${c.outcome?.sourceEventSeq ?? '-'} args=${JSON.stringify(c.args)}`)
+  }
+  const scoped = hiddenSeqs.size > 0 ? `hidden=[${[...hiddenSeqs].slice(0, 20).join(',')}${hiddenSeqs.size > 20 ? '…' : ''}]` : ''
+  let seats = 0
+  let resolved = 0
+  let inHidden = 0
+  for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
+    seats += 1
+    const key = seat.dataset.chatAnchorKey
+    const node = key === undefined ? undefined : chat.nodes.get(key)
+    if (node === undefined) continue
+    resolved += 1
+    if (hiddenSeqs.has(node.anchorSeq)) inHidden += 1
+  }
+  return `commands=[${commands.join(' | ')}] ${scoped} seats=${seats} resolved=${resolved} inHidden=${inHidden}`
+}
+
 interface RewindPortalsProps extends RewindBridgeDeps {
   readonly sessionId: string
 }
@@ -484,6 +527,15 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
         console.info(
           `[dsh-rewind] hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
         )
+      }
+      // Anomaly (see #9): a rewind that should cut the surface is present, but
+      // ZERO rows were hidden. Print exactly what the hiding path saw (command
+      // nodes + their outcome/args, the computed hide set, and the seat→node
+      // resolution) so one browser run pins whether the snapshot was readable,
+      // the command was recognized, a span was built, or the seats resolved.
+      // Best-effort, never throws; only fires on the anomaly path.
+      if (chat !== undefined && hiddenCount === 0 && hasExecutedRewindCommand(chat)) {
+        console.warn(`[dsh-rewind] rewind not hidden: ${describeHiding(chat, hiddenSeqs)}`)
       }
       const durable = chat === undefined ? [] : collectTargets(chat, hiddenSeqs)
       const next = [...durable, ...collectPendingTargets(snapshot)]
