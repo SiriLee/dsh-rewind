@@ -132,7 +132,7 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 ## Compatibility
 
 - Node.js `^22.19.0 || >=24.0.0`.
-- Each release's supported DeepSeek Harness version range is declared in `package.json` `peerDependencies`; each release note names the DSH versions verified against that release.
+- Compatibility definition, verification method, and version alignment: see [docs/compat/audit.md](docs/compat/audit.md); supported DSH versions are declared by `package.json` `peerDependencies`.
 
 > [!WARNING]
 > This project and DeepSeek Harness are both in developer preview. Pin exact

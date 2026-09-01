@@ -20,7 +20,9 @@
 > `-alpha` prerelease published under another tag, e.g. `0.1.2-alpha.2` under
 > `alpha`, is a manual pre-release check).
 >
-> `0.1.2-alpha.3` 已实测核对兼容（`v0.6.3` 运行正常）；rc.2（`latest`）仍为主力基线。
+> `0.1.2-alpha.1` was never published to npm, so the peer OR-union is declared only from `0.1.2-alpha.2`; the plugin code still supports the `alpha.1`+ client.
+>
+> `0.1.2-alpha.3` verified-compatible (`v0.6.3` runs without issues); `rc.2` (`latest`) remains the primary baseline.
 >
 > Client channel (harness `0.1.2-alpha.x`; `0.1.2-alpha.2` is published to npm
 > under the `alpha` dist-tag while `latest` stays `0.1.1-rc.2`): the plugin reads
