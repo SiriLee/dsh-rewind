@@ -93,9 +93,14 @@ export interface RewindBridgeDeps {
 /** Structural face of the runtime slot service (see the module doc). */
 export interface SlotsLike {
   inject(key: string, install: () => () => void): () => void
-  register(
-    entry: { readonly name: string; readonly id: string; readonly order: number },
-    component: (props: { readonly sessionId: string }) => ReactNode,
+  register<P>(
+    entry: {
+      readonly name: string
+      readonly id?: string
+      readonly order?: number
+      readonly key?: string
+    },
+    component: (props: P) => ReactNode,
   ): () => void
 }
 

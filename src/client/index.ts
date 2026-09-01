@@ -45,6 +45,14 @@ import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } f
 import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
+import {
+  SettingsCleanupCard,
+  CLEANUP_SETTINGS_NAMESPACE,
+  type CleanupCardApi,
+  type CleanupPolicy,
+  type CardTranslate,
+} from './settings-card.tsx'
+import { createElement } from 'react'
 
 export const name = 'dsh-rewind'
 // NOTE: deliberately NOT injecting the alpha.1+ `uiConversation` service here.
@@ -78,6 +86,26 @@ interface UiConversationLike {
  */
 interface SessionInputResolverLike {
   for(actx: unknown): { setDraft(text: string): void }
+}
+
+/**
+ * Structural face of the settings-namespace scope the snapshot-cleanup card
+ * binds (the `settingsScope.bind({namespace})` result). Only the subset the
+ * card uses — a resolved-value snapshot, a per-field write, and a change
+ * subscription — typed locally so the plugin never imports the client settings
+ * typed contract (which drifts rc.2 ↔ alpha: alpha adds `mutate`, not used here).
+ */
+interface CleanupSettingsScopeLike {
+  getSnapshot(): {
+    /** The resolved namespace value (schema-valid) or undefined while loading. */
+    value?: { enabled: boolean; maxAgeDays: number }
+    status: 'loading' | 'ready' | 'unavailable' | string
+    mode: 'host' | 'memory' | string
+  }
+  /** Write one field's user-layer value (present on rc.2 and alpha). */
+  set(field: string, value: unknown): Promise<void>
+  /** Observe snapshot replacements; returns the disposer. */
+  subscribe(cb: () => void): () => void
 }
 
 /** The slot the session-scoped rewind bridge registers into (harness-declared). */
@@ -181,6 +209,55 @@ export function apply(ctx: ClientContext): void {
       },
       createRewindBridge({ sessionOf, chatOf, currentSessionId, setComposerText, t, subscribeLocale }),
     ))
+
+    // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
+    // Register one `settings.plugin.item` card keyed by the SAME namespace the
+    // Host half serves (ConfigurablePluginsTab renders host-served namespaces ∩
+    // registered cards). The settings scope is OPTIONAL — probed via `ctx.get`,
+    // never a declared inject — so a deployment without the settings UI simply
+    // loses the card and the plugin never stalls (the harness's own consumer
+    // plugins gate optional wire services the same way). The card binds the
+    // namespace once and reads/writes through the structural scope face, so it
+    // never imports the client settings typed contract (which drifts rc.2 ↔
+    // alpha: alpha adds `mutate`, which this card deliberately does not use).
+    const settingsScope = (ctx as { get(name: string): unknown }).get('settingsScope') as
+      | { bind(spec: { namespace: string }): CleanupSettingsScopeLike }
+      | undefined
+    if (settingsScope !== undefined) {
+      const scope = settingsScope.bind({ namespace: CLEANUP_SETTINGS_NAMESPACE }) as unknown as CleanupSettingsScopeLike
+      const cardApi: CleanupCardApi = {
+        read: () => {
+          const value = scope.getSnapshot().value
+          return value === undefined
+            ? undefined
+            : { enabled: value.enabled, maxAgeDays: value.maxAgeDays }
+        },
+        writable: () => {
+          const snapshot = scope.getSnapshot()
+          return snapshot.status === 'ready' && snapshot.mode === 'host'
+        },
+        save: async (next: CleanupPolicy) => {
+          await scope.set('enabled', next.enabled)
+          await scope.set('maxAgeDays', next.maxAgeDays)
+        },
+        subscribe: (cb) => scope.subscribe(cb),
+      }
+      // A closure wrapper so the card gets its api/translator without the slot
+      // renderer passing anything (keyed slot owner props are empty).
+      const BoundCleanupCard = () => createElement(SettingsCleanupCard, {
+        api: cardApi,
+        // The rewind dictionary owns the cleanup.card keys (see client locales).
+        t: t as unknown as CardTranslate,
+      })
+      try {
+        slots.inject('settings.plugin.item', () => slots.register(
+          { name: 'settings.plugin.item', key: CLEANUP_SETTINGS_NAMESPACE },
+          BoundCleanupCard,
+        ))
+      } catch (error) {
+        console.error('[dsh-rewind] settings card register failed:', error)
+      }
+    }
 
     // ---- /rewind command decoration (the standard text-driven flow) ----
     // A bare `/rewind` — picked from the slash-menu completion, or typed in
