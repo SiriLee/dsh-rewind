@@ -277,52 +277,57 @@ export const STYLE = `
   line-height: 1.5;
   color: var(--dsw-alias-label-error);
 }
-/* Switch: hidden native checkbox over a styled track+thumb. */
+/* Switch row: label left, role=switch button right, hint below (Subagent module). */
+.dsh-rewind-cleanup-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-rewind-cleanup-toggle-label {
+  flex: 1;
+  min-width: 0;
+}
 .dsh-rewind-cleanup-switch {
+  box-sizing: border-box;
   position: relative;
-  display: inline-flex;
-  width: 34px;
+  flex: 0 0 auto;
+  width: 36px;
   height: 20px;
-  flex: none;
+  padding: 2px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--dsw-alias-border-l3);
   cursor: pointer;
 }
-.dsh-rewind-cleanup-switch input {
-  position: absolute;
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
-.dsh-rewind-cleanup-switch-track {
-  width: 34px;
-  height: 20px;
-  border-radius: 999px;
-  background: var(--dsw-alias-interactive-bg-hover);
-  transition: background .16s;
-}
-.dsh-rewind-cleanup-switch input:checked + .dsh-rewind-cleanup-switch-track {
+.dsh-rewind-cleanup-switch-on {
   background: var(--dsw-alias-brand-primary);
 }
-.dsh-rewind-cleanup-switch-thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
+.dsh-rewind-cleanup-switch:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.dsh-rewind-cleanup-switch:focus-visible {
+  outline: 2px solid var(--dsw-alias-brand-primary);
+  outline-offset: 2px;
+}
+.dsh-rewind-cleanup-thumb {
+  display: block;
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--dsw-alias-bg-layer-3);
-  transition: transform .16s;
+  background: var(--dsw-alias-label-primary-foreground);
+  transition: transform 120ms ease;
 }
-.dsh-rewind-cleanup-switch input:checked + .dsh-rewind-cleanup-switch-track .dsh-rewind-cleanup-switch-thumb {
-  transform: translateX(14px);
-}
-.dsh-rewind-cleanup-switch input:disabled + .dsh-rewind-cleanup-switch-track {
-  opacity: 0.4;
-  cursor: default;
+.dsh-rewind-cleanup-switch-on .dsh-rewind-cleanup-thumb {
+  transform: translateX(16px);
 }
 .dsh-rewind-cleanup-input {
   height: 34px;
-  width: 90px;
-  flex: none;
+  width: 100%;
   padding: 0 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
@@ -331,7 +336,6 @@ export const STYLE = `
   font-size: 13px;
   line-height: 1.5;
   color: var(--dsw-alias-label-primary);
-  text-align: right;
 }
 .dsh-rewind-cleanup-input:focus-visible {
   outline: none;

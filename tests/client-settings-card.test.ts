@@ -107,7 +107,7 @@ function mount(api: CleanupCardApi) {
   act(() => { host!.render(createElement(SettingsCleanupCard, { api, t })) })
   return {
     root: el,
-    checkbox: (path: string) => el.querySelector<HTMLInputElement>(path)!,
+    switch: () => el.querySelector<HTMLButtonElement>('[role="switch"]')!,
     input: (path: string) => el.querySelector<HTMLInputElement>(path)!,
     buttons: () => Array.from(el.querySelectorAll('button')).map((b) => b.textContent),
   }
@@ -135,11 +135,11 @@ describe('SettingsCleanupCard', () => {
     const view = mount(api)
     expect(view.root.querySelector('.dsh-rewind-cleanup-header')).not.toBeNull()
     // Collapsed: the body controls are NOT rendered.
-    expect(view.root.querySelector('#dsh-rewind-cleanup-enabled')).toBeNull()
+    expect(view.root.querySelector('[role="switch"]')).toBeNull()
     expect(view.root.querySelector('#dsh-rewind-cleanup-maxage')).toBeNull()
     // Opening the card reveals the switch but (switch off) no max-age row.
     openCard(view.root)
-    expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(false)
+    expect(view.switch().getAttribute('aria-checked')).toBe('false')
     expect(view.root.querySelector('#dsh-rewind-cleanup-maxage')).toBeNull()
     view.root.remove()
   })
@@ -148,7 +148,7 @@ describe('SettingsCleanupCard', () => {
     const { api } = fakeApi({ enabled: true, maxAgeDays: 30 })
     const view = mount(api)
     openCard(view.root)
-    expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(true)
+    expect(view.switch().getAttribute('aria-checked')).toBe('true')
     expect(view.input('#dsh-rewind-cleanup-maxage').value).toBe('30')
     view.root.remove()
   })
@@ -169,12 +169,12 @@ describe('SettingsCleanupCard', () => {
     const { api } = fakeApi({ enabled: true, maxAgeDays: 30 })
     const view = mount(api)
     openCard(view.root)
-    // Click() toggles the checkbox and fires React's onChange.
-    act(() => { view.checkbox('#dsh-rewind-cleanup-enabled').click() })
-    expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(false)
+    // Clicking the role=switch button toggles React state.
+    act(() => { view.switch().click() })
+    expect(view.switch().getAttribute('aria-checked')).toBe('false')
     expect(findButton(view.root, 'cleanup.save').disabled).toBe(false)
     act(() => { findButton(view.root, 'cleanup.discard').click() })
-    expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(true)
+    expect(view.switch().getAttribute('aria-checked')).toBe('true')
     expect(findButton(view.root, 'cleanup.save').disabled).toBe(true)
     view.root.remove()
   })

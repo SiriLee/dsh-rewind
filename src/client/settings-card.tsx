@@ -29,6 +29,9 @@ import { useEffect, useState } from 'react'
  */
 export const CLEANUP_SETTINGS_NAMESPACE = 'dsh-rewind-snapshot-cleanup'
 
+/** The defaults the host uses; shown as the field placeholder until a draft. */
+export const DEFAULT_MAX_AGE_DAYS = 30
+
 /** The two editable knobs, exactly as the host policy exposes them. */
 export interface CleanupPolicy {
   readonly enabled: boolean
@@ -159,19 +162,21 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
         <div className="dsh-rewind-cleanup-body">
           {!writable ? <p className="dsh-rewind-cleanup-readonly" role="status">{t('cleanup.readonly')}</p> : null}
           <div className="dsh-rewind-cleanup-row">
-            <span className="dsh-rewind-cleanup-row-label">{t('cleanup.auto')}</span>
-            <label className="dsh-rewind-cleanup-switch" title={t('cleanup.auto.hint')}>
-              <input type="checkbox" id="dsh-rewind-cleanup-enabled" checked={draft.enabled} disabled={disabled}
-                onChange={(e) => edit({ enabled: e.target.checked })} />
-              <span className="dsh-rewind-cleanup-switch-track"><span className="dsh-rewind-cleanup-switch-thumb" /></span>
-            </label>
+            <div className="dsh-rewind-cleanup-toggle-row">
+              <span className="dsh-rewind-cleanup-toggle-label" id="dsh-rewind-cleanup-enabled-label">{t('cleanup.auto')}</span>
+              <button type="button" role="switch" className={`dsh-rewind-cleanup-switch${draft.enabled ? ' dsh-rewind-cleanup-switch-on' : ''}`}
+                aria-checked={draft.enabled} aria-labelledby="dsh-rewind-cleanup-enabled-label" disabled={disabled}
+                onClick={() => edit({ enabled: !draft.enabled })}>
+                <span className="dsh-rewind-cleanup-thumb" />
+              </button>
+            </div>
             <span className="dsh-rewind-cleanup-hint">{t('cleanup.auto.hint')}</span>
           </div>
           {draft.enabled ? (
             <div className="dsh-rewind-cleanup-row">
               <label className="dsh-rewind-cleanup-row-label" htmlFor="dsh-rewind-cleanup-maxage">{t('cleanup.maxAge')}</label>
               <input type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
-                disabled={disabled} aria-invalid={invalid || undefined}
+                disabled={disabled} aria-invalid={invalid || undefined} placeholder={String(DEFAULT_MAX_AGE_DAYS)}
                 onChange={(e) => edit({ maxAgeDays: e.target.value })} />
               <span className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>
                 {invalid ? t('cleanup.invalid') : t('cleanup.maxAge.hint')}
