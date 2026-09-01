@@ -98,14 +98,15 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 
 ### 2. File restore: lightweight checkpointing, "back up before the change"
 
-The file half follows Claude Code's checkpoint semantics — **per-file before-backups plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
+The file half follows Claude Code's checkpoint semantics — **partial tracking + before-write backup, plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
 
-- **Before-backup**: tracks the write-class tools (`write`, `edit`, `str_replace_editor`) and stores the original content **before** each write. Timing is the key — it captures after any approval gate lets the call through: an approval short-circuit can't skip the backup, and a denied call never records; a read failure only warns, never blocks the write. Backups are grouped by conversation turn and **persist on disk** across restarts.
-- **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — edits or deletions made outside the write tools are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
-- **Reconcile against the real disk before restoring**: the most interesting decision. At rewind time the plugin reads each file's current content and compares it to the target state — **only files that actually differ are touched**: modified files are written back to their earliest backup, files created after the target are deleted, files already matching are skipped. Repeated rewinds are therefore **idempotent with zero side effects** and never produce "ghost impact".
+- **Before-write backup**: tracks only the write-class tools (`write`, `edit`, `str_replace_editor`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight.
+- **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — external changes such as a command run or a manual edit are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
+- **Unchanged-not-recorded, identical-content-as-link**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy. Repeated writes cost almost nothing, and a link is materialized before its group is evicted — never left dangling.
+- **Reconcile against the real disk before restoring**: restore takes each path's **earliest** record, then reads the live file and compares — **only files that actually differ are touched**: modified files are written back to the earliest backup, files created after the target are deleted, already-matching files are skipped. Repeated rewinds are therefore **idempotent with zero side effects** and never produce "ghost impact".
 - **Safety boundary**: symlinks / hard links are skipped so one restore can't clobber another name of the same file; paths are sanitized so nothing ever escapes the backup root; a per-file failure never aborts the pass.
 
-> **Design highlight**: **"reconcile against the real disk before acting"** is the most insightful decision in this checkpoint design — it never assumes blindly; it trusts the disk, doing what must be done and skipping what must not.
+> **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and content-as-link drop the repetition; which files to touch is decided against the real disk at restore time.
 
 ### Design highlights
 
