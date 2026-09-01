@@ -107,7 +107,8 @@ interface CleanupSettingsScopeLike {
     /** The resolved namespace value (schema-valid) or undefined while loading. */
     value?: { enabled: boolean; maxAgeDays: number }
     status: 'loading' | 'ready' | 'unavailable' | string
-    mode: 'host' | 'memory' | string
+    /** Whether the Host document accepts writes (the harness's own writable signal). */
+    writable: boolean
   }
   /** Write one field's user-layer value (present on rc.2 and alpha). */
   set(field: string, value: unknown): Promise<void>
@@ -237,8 +238,10 @@ export function apply(ctx: ClientContext): void {
             : { enabled: value.enabled, maxAgeDays: value.maxAgeDays }
         },
         writable: () => {
-          const snapshot = scope.getSnapshot()
-          return snapshot.status === 'ready' && snapshot.mode === 'host'
+          // The harness's own writable signal (a read-only settings source
+          // reports false); the earlier status/mode derivation was wrong and
+          // left the buttons disabled.
+          return scope.getSnapshot().writable === true
         },
         save: async (next: CleanupPolicy) => {
           await scope.set('enabled', next.enabled)

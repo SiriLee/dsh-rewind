@@ -161,7 +161,7 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
       {open ? (
         <div className="dsh-rewind-cleanup-body">
           {!writable ? <p className="dsh-rewind-cleanup-readonly" role="status">{t('cleanup.readonly')}</p> : null}
-          <div className="dsh-rewind-cleanup-row">
+          <div className="dsh-rewind-cleanup-permission">
             <div className="dsh-rewind-cleanup-toggle-row">
               <span className="dsh-rewind-cleanup-toggle-label" id="dsh-rewind-cleanup-enabled-label">{t('cleanup.auto')}</span>
               <button type="button" role="switch" className={`dsh-rewind-cleanup-switch${draft.enabled ? ' dsh-rewind-cleanup-switch-on' : ''}`}
@@ -173,9 +173,13 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
             <span className="dsh-rewind-cleanup-hint">{t('cleanup.auto.hint')}</span>
           </div>
           {draft.enabled ? (
-            <div className="dsh-rewind-cleanup-row">
-              <label className="dsh-rewind-cleanup-row-label" htmlFor="dsh-rewind-cleanup-maxage">{t('cleanup.maxAge')}</label>
-              <input type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
+            <div className="dsh-rewind-cleanup-field">
+              <div className="dsh-rewind-cleanup-head">
+                <label className="dsh-rewind-cleanup-label" htmlFor="dsh-rewind-cleanup-maxage">{t('cleanup.maxAge')}</label>
+              </div>
+              <input
+                className={`dsh-rewind-cleanup-input${invalid ? ' dsh-rewind-cleanup-input-invalid' : ''}`}
+                type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
                 disabled={disabled} aria-invalid={invalid || undefined} placeholder={String(DEFAULT_MAX_AGE_DAYS)}
                 onChange={(e) => edit({ maxAgeDays: e.target.value })} />
               <span className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>

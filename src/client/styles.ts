@@ -248,18 +248,28 @@ export const STYLE = `
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
-.dsh-rewind-cleanup-row {
+.dsh-rewind-cleanup-permission {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+}
+.dsh-rewind-cleanup-field {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
+  gap: 6px;
   padding: 12px 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l2);
 }
-.dsh-rewind-cleanup-row:last-of-type {
-  border-bottom: 0;
+.dsh-rewind-cleanup-field + .dsh-rewind-cleanup-field {
+  border-top: 1px solid var(--dsw-alias-border-l2);
 }
-.dsh-rewind-cleanup-row-label {
+.dsh-rewind-cleanup-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.dsh-rewind-cleanup-label {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 500;
   line-height: 1.5;
