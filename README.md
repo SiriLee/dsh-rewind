@@ -123,7 +123,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 ## 兼容性
 
 - Node.js `^22.19.0 || >=24.0.0`。
-- DeepSeek Harness web 配置档（`dsh --profile web`）；peer `@deepseek-ai/*` 包由 harness 运行时解析。
+- 各版本适配的 DSH 版本范围见 `package.json` 的 `peerDependencies`；每个版本的发布说明会注明该版实测的 DSH 版本。
 
 > [!WARNING]
 > 本项目与 DeepSeek Harness 均处于开发者预览阶段。可复现环境请 pin 精确版本，

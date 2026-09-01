@@ -132,7 +132,7 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 ## Compatibility
 
 - Node.js `^22.19.0 || >=24.0.0`.
-- DeepSeek Harness web profile (`dsh --profile web`); peer `@deepseek-ai/*` packages are resolved by the harness at runtime.
+- Each release's supported DeepSeek Harness version range is declared in `package.json` `peerDependencies`; each release note names the DSH versions verified against that release.
 
 > [!WARNING]
 > This project and DeepSeek Harness are both in developer preview. Pin exact
