@@ -13,6 +13,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement, act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+
+// jsdom + React act: the environment must opt in so act() does not warn.
+;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 import {
   SettingsCleanupCard,
   CLEANUP_SETTINGS_NAMESPACE,
@@ -113,6 +116,12 @@ function mount(api: CleanupCardApi) {
 const findButton = (el: Element, label: string): HTMLButtonElement =>
   Array.from(el.querySelectorAll('button')).find((b) => b.textContent === label)!
 
+/** The card starts collapsed (like the harness PluginCard); click the header. */
+function openCard(el: Element): void {
+  const header = el.querySelector<HTMLButtonElement>('.dsh-rewind-cleanup-header')!
+  act(() => { header.click() })
+}
+
 /** Drive a controlled <input> value change the way React expects in jsdom. */
 function setText(el: HTMLInputElement, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
@@ -121,9 +130,15 @@ function setText(el: HTMLInputElement, value: string): void {
 }
 
 describe('SettingsCleanupCard', () => {
-  it('renders collapsed (no max-age row) when the switch is off', () => {
+  it('renders a collapsed card whose controls are hidden until opened', () => {
     const { api } = fakeApi({ enabled: false, maxAgeDays: 30 })
     const view = mount(api)
+    expect(view.root.querySelector('.dsh-rewind-cleanup-header')).not.toBeNull()
+    // Collapsed: the body controls are NOT rendered.
+    expect(view.root.querySelector('#dsh-rewind-cleanup-enabled')).toBeNull()
+    expect(view.root.querySelector('#dsh-rewind-cleanup-maxage')).toBeNull()
+    // Opening the card reveals the switch but (switch off) no max-age row.
+    openCard(view.root)
     expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(false)
     expect(view.root.querySelector('#dsh-rewind-cleanup-maxage')).toBeNull()
     view.root.remove()
@@ -132,6 +147,7 @@ describe('SettingsCleanupCard', () => {
   it('expands the max-age editor when the switch is on', () => {
     const { api } = fakeApi({ enabled: true, maxAgeDays: 30 })
     const view = mount(api)
+    openCard(view.root)
     expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(true)
     expect(view.input('#dsh-rewind-cleanup-maxage').value).toBe('30')
     view.root.remove()
@@ -140,6 +156,7 @@ describe('SettingsCleanupCard', () => {
   it('blocks save on an invalid max-age and shows the invalid hint', () => {
     const { api } = fakeApi({ enabled: true, maxAgeDays: 30 })
     const view = mount(api)
+    openCard(view.root)
     act(() => { setText(view.input('#dsh-rewind-cleanup-maxage'), 'abc') })
     // The save button is disabled while the draft is invalid.
     const save = findButton(view.root, 'cleanup.save')
@@ -151,6 +168,7 @@ describe('SettingsCleanupCard', () => {
   it('discard restores the baseline', () => {
     const { api } = fakeApi({ enabled: true, maxAgeDays: 30 })
     const view = mount(api)
+    openCard(view.root)
     // Click() toggles the checkbox and fires React's onChange.
     act(() => { view.checkbox('#dsh-rewind-cleanup-enabled').click() })
     expect(view.checkbox('#dsh-rewind-cleanup-enabled').checked).toBe(false)
@@ -164,6 +182,7 @@ describe('SettingsCleanupCard', () => {
   it('save applies the draft and reports failure without clobbering the draft', async () => {
     const { api, saved, failOn, failOff } = fakeApi({ enabled: true, maxAgeDays: 30 })
     const view = mount(api)
+    openCard(view.root)
     act(() => { setText(view.input('#dsh-rewind-cleanup-maxage'), '5') })
     failOn()
     await act(async () => { findButton(view.root, 'cleanup.save').click() })

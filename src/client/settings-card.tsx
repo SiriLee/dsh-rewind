@@ -19,7 +19,7 @@
  * @module dsh-rewind/client/settings-card
  */
 
-import { useEffect, useState, createElement } from 'react'
+import { useEffect, useState } from 'react'
 
 /**
  * The dsh-settings namespace the card binds to. Duplicated here (not imported
@@ -94,6 +94,7 @@ export function dirtyOf(base: CleanupDraft, draft: CleanupDraft): boolean {
  * @returns the card element.
  */
 export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTranslate }) {
+  const [open, setOpen] = useState(false)
   const [baseline, setBaseline] = useState<CleanupDraft>(() => draftFrom(api.read()))
   const [draft, setDraft] = useState<CleanupDraft>(() => draftFrom(api.read()))
   const [busy, setBusy] = useState(false)
@@ -113,6 +114,7 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
   const dirty = dirtyOf(baseline, draft)
   const days = maxAgeOf(draft.maxAgeDays)
   const invalid = days === null
+  const disabled = busy || !writable
 
   const edit = (patch: Partial<CleanupDraft>) => {
     setDraft((cur) => ({ ...cur, ...patch }))
@@ -138,42 +140,53 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
 
   const discard = () => { if (busy) return; setDraft(baseline); setError(null) }
 
-  return createElement('div', { className: 'dsw-fieldset' },
-    createElement('div', { className: 'dsw-fieldset-title' }, t('cleanup.title'), createElement('span', { className: 'dsw-fieldset-desc' }, t('cleanup.desc'))),
-    createElement('div', { className: 'dsw-fieldset-row' },
-      createElement('label', { className: 'dsw-fieldset-label', htmlFor: 'dsh-rewind-cleanup-enabled' }, t('cleanup.auto')),
-      createElement('input', {
-        type: 'checkbox',
-        id: 'dsh-rewind-cleanup-enabled',
-        checked: draft.enabled,
-        disabled: busy || !writable,
-        onChange: (e) => edit({ enabled: e.target.checked }),
-      }),
-      createElement('span', { className: 'dsw-fieldset-hint' }, t('cleanup.auto.hint')),
-    ),
-    draft.enabled ? createElement('div', { className: 'dsw-fieldset-row' },
-      createElement('label', { className: 'dsw-fieldset-label', htmlFor: 'dsh-rewind-cleanup-maxage' }, t('cleanup.maxAge')),
-      createElement('input', {
-        type: 'text',
-        inputMode: 'numeric',
-        id: 'dsh-rewind-cleanup-maxage',
-        value: draft.maxAgeDays,
-        disabled: busy || !writable,
-        'aria-invalid': invalid || undefined,
-        onChange: (e) => edit({ maxAgeDays: e.target.value }),
-      }),
-      createElement('span', { className: invalid ? 'dsw-fieldset-error' : 'dsw-fieldset-hint' }, invalid ? t('cleanup.invalid') : t('cleanup.maxAge.hint')),
-    ) : null,
-    !writable ? createElement('span', { className: 'dsw-fieldset-error' }, t('cleanup.readonly')) : null,
-    createElement('div', { className: 'dsw-fieldset-actions' },
-      error ? createElement('span', { className: 'dsw-fieldset-error' }, error) : null,
-      createElement('button', { type: 'button', className: 'dsw-fieldset-btn', disabled: !dirty || busy || !writable, onClick: discard }, t('cleanup.discard')),
-      createElement('button', {
-        type: 'button',
-        className: 'dsw-fieldset-btn dsw-fieldset-btn-primary',
-        disabled: !dirty || busy || !writable || invalid,
-        onClick: save,
-      }, busy ? t('cleanup.saving') : t('cleanup.save')),
-    ),
+  return (
+    <li className={`dsh-rewind-cleanup-card${open ? ' dsh-rewind-cleanup-card-open' : ''}`}>
+      <button type="button" className="dsh-rewind-cleanup-header" aria-expanded={open}
+        aria-label={`${t(open ? 'cleanup.collapse' : 'cleanup.expand')}: ${t('cleanup.title')}`}
+        onClick={() => setOpen(!open)}>
+        <span className="dsh-rewind-cleanup-head-text">
+          <span className="dsh-rewind-cleanup-name">{t('cleanup.title')}</span>
+          <span className="dsh-rewind-cleanup-desc">{t('cleanup.desc')}</span>
+        </span>
+        {dirty ? <span className="dsh-rewind-cleanup-pending">{t('cleanup.unsaved')}</span> : null}
+        <svg className={`dsh-rewind-cleanup-chevron${open ? ' dsh-rewind-cleanup-chevron-open' : ''}`}
+          width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open ? (
+        <div className="dsh-rewind-cleanup-body">
+          {!writable ? <p className="dsh-rewind-cleanup-readonly" role="status">{t('cleanup.readonly')}</p> : null}
+          <div className="dsh-rewind-cleanup-row">
+            <span className="dsh-rewind-cleanup-row-label">{t('cleanup.auto')}</span>
+            <label className="dsh-rewind-cleanup-switch" title={t('cleanup.auto.hint')}>
+              <input type="checkbox" id="dsh-rewind-cleanup-enabled" checked={draft.enabled} disabled={disabled}
+                onChange={(e) => edit({ enabled: e.target.checked })} />
+              <span className="dsh-rewind-cleanup-switch-track"><span className="dsh-rewind-cleanup-switch-thumb" /></span>
+            </label>
+            <span className="dsh-rewind-cleanup-hint">{t('cleanup.auto.hint')}</span>
+          </div>
+          {draft.enabled ? (
+            <div className="dsh-rewind-cleanup-row">
+              <label className="dsh-rewind-cleanup-row-label" htmlFor="dsh-rewind-cleanup-maxage">{t('cleanup.maxAge')}</label>
+              <input type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
+                disabled={disabled} aria-invalid={invalid || undefined}
+                onChange={(e) => edit({ maxAgeDays: e.target.value })} />
+              <span className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>
+                {invalid ? t('cleanup.invalid') : t('cleanup.maxAge.hint')}
+              </span>
+            </div>
+          ) : null}
+          <div className="dsh-rewind-cleanup-footer">
+            {error ? <p className="dsh-rewind-cleanup-failed" role="status">{error}</p> : null}
+            <button type="button" className="dsh-rewind-cleanup-discard" disabled={!dirty || busy || !writable}
+              onClick={discard}>{t('cleanup.discard')}</button>
+            <button type="button" className="dsh-rewind-cleanup-save" disabled={!dirty || busy || !writable || invalid}
+              onClick={save}>{busy ? t('cleanup.saving') : t('cleanup.save')}</button>
+          </div>
+        </div>
+      ) : null}
+    </li>
   )
 }
