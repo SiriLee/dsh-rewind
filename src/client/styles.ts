@@ -336,8 +336,8 @@ export const STYLE = `
   transform: translateX(16px);
 }
 .dsh-rewind-cleanup-input {
+  box-sizing: border-box;
   height: 34px;
-  width: 100%;
   padding: 0 12px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
