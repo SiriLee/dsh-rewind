@@ -15,7 +15,7 @@ you've stopped using, and now and then remove their snapshots to keep disk usage
 down. It never touches your active session, and it never touches your
 conversation.
 
-**Manual:** even with automatic cleanup off, you can run the cleanup yourself:
+**Manual**: even with automatic cleanup off, you can run the cleanup yourself:
 
 - `/snapshot-auto-cleanup run [--apply]` — preview, then actually remove the
   snapshots of sessions you haven't used for a while.
@@ -41,20 +41,12 @@ whether or not automatic cleanup is on.
 
 ## Settings
 
-The settings live in `<dsh home>/snapshot-cleanup.json`:
+The auto-cleanup switch and the idle-day cutoff live in the **dsh-settings configuration document**. View and edit them in the **Settings &gt; Plugins &gt; Plugin configuration &gt; Snapshot cleanup** panel (the auto-cleanup switch and the idle days), or view and set them with the `/snapshot-auto-cleanup` command:
 
-```json
-{ "enabled": false, "maxAgeDays": 30 }
-```
+<img src="../assets/screenshots/cleanup-setting.png" alt="Snapshot cleanup settings: auto-cleanup and idle days" width="600">
 
 - `enabled` — whether automatic cleanup runs (default `false`).
-- `maxAgeDays` — how many idle days before a session's snapshots are removed
-  (default `30`). Only positive numbers are accepted, so a broken setting can
-  never delete everything.
-
-You can point the plugin at a different file with the `DSH_SNAPSHOT_CLEANUP_CONFIG`
-environment variable. The file is changed only when you turn cleanup on/off or
-set `max-age`; a missing file reads as the safe default (off).
+- `maxAgeDays` — how many idle days before a session's snapshots are removed (default `30`). Only positive integers are accepted, so a broken setting can never delete everything.
 
 ## When automatic cleanup runs
 

@@ -60,7 +60,9 @@ dsh plugin --profile web add dsh-rewind-plugin
 
 快照（写前备份）存储于 `<dsh home>/rewind-snapshots/`（未设 `$DSH_HOME` 时即 `~/.dsh/rewind-snapshots/`）。插件对**同一会话**的快照做内容去重（内容未变则存为链接）并保留最近 100 组锚点；**手动删除该目录**仅清除文件备份（对话回退不受影响），插件会自动重建。
 
-另提供**全局自动清理**（默认关闭）：把**长期不活跃**的会话快照整目录移除，不影响活动会话与对话日志。用 `/snapshot-auto-cleanup` 命令**查看、设置和运行**，配置写入 `<dsh home>/snapshot-cleanup.json`；最近一次自动清扫的时间记录在 `<dsh home>/snapshot-cleanup-last-sweep.json`。详见：[快照自动清理](docs/snapshot-auto-cleanup.zh.md)。
+另提供**全局自动清理**（默认关闭）：把长期不活跃的会话快照整目录移除，不影响活动会话与对话日志。可在 `设置→插件→插件配置→快照清理` 面板查看与配置（自动清理开关、失活天数），也可用 `/snapshot-auto-cleanup` 命令查看、设置和运行。详见：[快照自动清理](docs/snapshot-auto-cleanup.zh.md)。
+
+<img src="assets/screenshots/cleanup-setting.png" alt="快照清理设置：自动清理与失活天数" width="600">
 
 ## 本插件的优势
 

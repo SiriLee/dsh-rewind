@@ -66,10 +66,13 @@ clears the file backups (chat rewinds are unaffected) and the plugin rebuilds th
 automatically.
 
 A **global auto-cleanup** (off by default) removes the snapshot directories of
-**long-inactive** sessions, leaving the active session and chat log untouched. Use
-`/snapshot-auto-cleanup` to **view, configure, and run** it; the settings live in
-`<dsh home>/snapshot-cleanup.json` and the last-sweep time in
-`<dsh home>/snapshot-cleanup-last-sweep.json`. See: [Snapshot cleanup](docs/snapshot-auto-cleanup.md).
+long-inactive sessions, leaving the active session and chat log untouched. Configure
+and review it in the **Settings &gt; Plugins &gt; Plugin configuration &gt; Snapshot
+cleanup** panel (the auto-cleanup switch and the idle-day cutoff), or use the
+`/snapshot-auto-cleanup` command to **view, configure, and run** it. See:
+[Snapshot cleanup](docs/snapshot-auto-cleanup.md).
+
+<img src="assets/screenshots/cleanup-setting.png" alt="Snapshot cleanup settings: auto-cleanup and idle days" width="600">
 
 ## Why it stands out
 
