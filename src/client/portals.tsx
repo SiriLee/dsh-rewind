@@ -99,6 +99,8 @@ export interface SlotsLike {
       readonly id?: string
       readonly order?: number
       readonly key?: string
+      readonly locale?: string
+      readonly inject?: () => P
     },
     component: (props: P) => ReactNode,
   ): () => void
