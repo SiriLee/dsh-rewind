@@ -95,6 +95,16 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     expect(info).toHaveBeenCalledTimes(1)
   })
 
+  it('logs the hiding event once per rewind (event-level, not per batch)', async () => {
+    const { session, chatOf } = fakeSession()
+    localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill,dsh-rewind:hiding')
+    const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
+    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, vi.fn(() => true))
+    // One refill line + one hiding line; nothing per mutation batch.
+    expect(info).toHaveBeenCalledTimes(2)
+    expect(info.mock.calls.some(args => String(args[0]).includes('hiding'))).toBe(true)
+  })
+
   it('skips the refill when the composer already holds a draft (guard)', async () => {
     addEditableDraft('in progress draft')
     const { session, chatOf } = fakeSession()

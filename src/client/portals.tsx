@@ -270,6 +270,23 @@ export async function runRewindAndFill(
     showHint(outcome.text ?? 'rewind failed')
     return
   }
+  // Hiding diagnostics — event-level, once per rewind (NOT the per-batch
+  // refresh scan, which would flood the console during streaming). Built from
+  // the same snapshot the executed rewind already carried: an empty hide set
+  // despite a successful rewind is the anomaly worth surfacing.
+  const hidSeqs = (() => {
+    const chat = chatOf(session)
+    return chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
+  })()
+  if (hidSeqs.size === 0) {
+    rewindLog.warn('hiding', `rewind not hidden (target @${seq})`, { target: seq })
+  } else {
+    rewindLog.debug(
+      'hiding',
+      `rewind hides seqs [${[...hidSeqs].slice(0, 20).join(', ')}${hidSeqs.size > 20 ? '…' : ''}]`,
+      { target: seq },
+    )
+  }
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
   if (currentSessionId() !== session.sessionId) {
@@ -498,49 +515,6 @@ function sameTargets(left: readonly PortalTarget[], right: readonly PortalTarget
   })
 }
 
-/**
- * True when the snapshot holds a `/rewind` command that should cut the surface
- * (`name=rewind`, not an internal probe — preview / __candidates). Used ONLY to
- * trigger the hiding diagnostic; recognition is deliberately loose so a
- * mis-named or detached outcome still surfaces as the anomaly it is.
- */
-function hasExecutedRewindCommand(chat: HiddenChat): boolean {
-  for (const key of chat.order) {
-    const node = chat.nodes.get(key)
-    if (node === undefined || node.kind !== 'command') continue
-    const command = node.data as { name?: string; args?: string | null }
-    if (command.name !== 'rewind') continue
-    const args = command.args ?? ''
-    if (args.includes('preview') || args.includes('__candidates')) continue
-    return true
-  }
-  return false
-}
-
-/** One-line picture of the hiding path's inputs, for the debug log. */
-function describeHiding(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>): string {
-  const commands: string[] = []
-  for (const key of chat.order) {
-    const node = chat.nodes.get(key)
-    if (node === undefined || node.kind !== 'command') continue
-    const c = node.data as { seq?: number; name?: string; outcome?: { kind?: string; sourceEventSeq?: number }; args?: string | null }
-    commands.push(`#${c.seq} name=${c.name} outcome=${c.outcome?.kind ?? '-'} marker=${c.outcome?.sourceEventSeq ?? '-'} args=${JSON.stringify(c.args)}`)
-  }
-  const scoped = hiddenSeqs.size > 0 ? `hidden=[${[...hiddenSeqs].slice(0, 20).join(',')}${hiddenSeqs.size > 20 ? '…' : ''}]` : ''
-  let seats = 0
-  let resolved = 0
-  let inHidden = 0
-  for (const seat of document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
-    seats += 1
-    const key = seat.dataset.chatAnchorKey
-    const node = key === undefined ? undefined : chat.nodes.get(key)
-    if (node === undefined) continue
-    resolved += 1
-    if (hiddenSeqs.has(node.anchorSeq)) inHidden += 1
-  }
-  return `commands=[${commands.join(' | ')}] ${scoped} seats=${seats} resolved=${resolved} inHidden=${inHidden}`
-}
-
 interface RewindPortalsProps extends RewindBridgeDeps {
   readonly sessionId: string
 }
@@ -581,7 +555,6 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
       // skip the durable path entirely (pending targets stay collectible).
       const chat = chatOf(session)
       const hiddenSeqs = chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
-      let hiddenCount = 0
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
       // message inside the executed rewinds' [earliest target, latest marker]
       // span) so the rendered transcript matches the agent's context. React
@@ -600,31 +573,16 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
           seat.style.display = 'none'
           seat.dataset.dshRewindHidden = 'true'
           hidden.current.add(seat)
-          hiddenCount += 1
         } else if (hidden.current.has(seat)) {
           seat.style.display = ''
           delete seat.dataset.dshRewindHidden
           hidden.current.delete(seat)
         }
       }
-      // Diagnostics — verbose only (DEBUG switch): the per-batch hiding
-      // picture would otherwise flood the console during streaming. Push it
-      // to `debug`; a normal user never sees it.
-      if (hiddenSeqs.size > 0 || hiddenCount > 0) {
-        rewindLog.debug(
-          'hiding',
-          `hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
-        )
-      }
-      // Anomaly (see #9): a rewind that should cut the surface is present, but
-      // ZERO rows were hidden. Print exactly what the hiding path saw (command
-      // nodes + their outcome/args, the computed hide set, and the seat→node
-      // resolution) so one browser run pins whether the snapshot was readable,
-      // the command was recognized, a span was built, or the seats resolved.
-      // Best-effort, never throws; always-on (`warn`), as it is the guard.
-      if (chat !== undefined && hiddenCount === 0 && hasExecutedRewindCommand(chat)) {
-        rewindLog.warn('hiding', 'rewind not hidden', describeHiding(chat, hiddenSeqs))
-      }
+      // Hiding diagnostics are event-level: logged once where a rewind
+      // settles (runRewindAndFill), not per mutation batch — printing them
+      // here would flood the console during streaming, and the rewind event
+      // already carries the hide set. Nothing is logged in this per-batch scan.
       const durable = chat === undefined ? [] : collectTargets(chat, hiddenSeqs)
       const next = [...durable, ...collectPendingTargets(snapshot)]
       // Diff: no change → no re-render (the observer fires on every mutation;
