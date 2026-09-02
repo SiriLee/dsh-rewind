@@ -158,6 +158,9 @@ withdrew should consume the stable, locale-independent helpers exported from
 4. **Rewinds from `≤ v0.3.3`** — compaction (`/compact`) is unavailable for those sessions. Newer versions are compatible; for affected old sessions, start a new session.
 5. **The turn-rail shows rewound turns** — the right-side rail added in DSH `v0.1.2-alpha.1` keeps ticks for withdrawn messages: clicking does not jump and hovering shows the withdrawn text. Only a display difference; no functional impact.
 
+> [!NOTE]
+> Browser diagnostics are available; see [Browser diagnostics](docs/compat/diagnostics.md).
+
 ## Security
 
 This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).

@@ -145,14 +145,8 @@ dsh plugin --profile web add dsh-rewind-plugin
 4. **v0.3.3 及更早版本**回退过的会话，压缩对话（compact）不可用。新版本已兼容；受影响的旧会话建议新建会话。
 5. **导轨显示已回退轮次**——DSH `v0.1.2-alpha.1` 新增的右侧导轨，会为已撤回消息保留刻度：点击不跳转、悬浮显示已撤回正文。仅显示差异，无功能影响。
 
-<!-- HIDDEN tip (kept for future restoration): the verbose-diagnostics switch was
-     withdrawn. `error`/`warn` anomalies now warn automatically, so this old
-     "enable verbose output" note is no longer accurate and is hidden rather than
-     deleted. Restore it if a genuinely attributable verbose diagnostic returns.
 > [!NOTE]
-> 若使用中遇到问题，可开启详细诊断输出，复现后附上控制台 `[dsh-rewind]` 输出便于定位。详见
-> [浏览器诊断与详细输出开关](docs/compat/diagnostics.zh.md)。
--->
+> 本插件提供浏览器端诊断输出；详见 [浏览器诊断](docs/compat/diagnostics.zh.md)。
 
 ## 安全
 

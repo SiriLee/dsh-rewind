@@ -83,6 +83,3 @@ reload.
   without notice.
 - It is scoped to one browser origin and one browser; capture where the problem
   actually occurs.
-
-Related: [audit.md](audit.md) for the verified-compatibility matrix and
-[troubleshooting.md](troubleshooting.md) for the legacy repair steps.

@@ -58,5 +58,3 @@ delete localStorage['dsh-rewind.debug']
 
 - 该诊断表面是维护者与配合排查者使用的工具，**不是**稳定公开接口；其具体键与输出可能不经通知而改变。
 - 它受单个浏览器 origin、单个浏览器限定；请在实际出问题的地方采集。
-
-相关：[audit.md](audit.md) 为已验证兼容矩阵，[troubleshooting.md](troubleshooting.md) 为历史修复步骤。
