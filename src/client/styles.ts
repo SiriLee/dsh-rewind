@@ -329,6 +329,7 @@ export const STYLE = `
   width: 16px;
   height: 16px;
   border-radius: 50%;
+  corner-shape: round;
   background: var(--dsw-alias-label-primary-foreground);
   transition: transform 120ms ease;
 }
