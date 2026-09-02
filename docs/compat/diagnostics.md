@@ -25,11 +25,13 @@ subsystem, and is also what the verbose switch filters on:
 | `error` | on | Unexpected/breaking; always printed |
 | `warn` | on | Recoverable anomaly guard (`rewind not hidden`, `refill skipped/refused/threw`); always printed |
 | `info` | off | Event-level lifecycle (one line per rewind / refill) |
-| `debug` | off | Per-batch detail (the per-refresh hiding picture) |
+| `debug` | off | Additional event-level detail behind the switch (the hide-set line, one per rewind) |
 
 `error`/`warn` are always printed so an anomaly surfaces even for a user who
 never touched the switch; `info`/`debug` are gated so a normal user's console
-stays clean and streaming does not flood it.
+stays clean. Both gated levels emit once per relevant event (a rewind, a
+refill), never per streaming frame — so a rewound session does not flood the
+console even with verbose output switched on.
 
 ## Enabling verbose output
 
