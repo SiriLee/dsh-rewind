@@ -167,6 +167,12 @@ export const STYLE = `
 }
 
 /* ---- Snapshot-cleanup settings card (mirrors the harness PluginCard look) ---- */
+/* Dual-channel note: the harness card corner/border drifted across versions —
+   rc.2 uses border-radius 12px + 1px solid border-l2, while alpha uses 16px +
+   0.5px border-l4 (and adds corner-shape: round). We intentionally keep the
+   rc.2 values here for now; if the alpha look is wanted, switch these on the
+   host version like the other dual-channel surfaces (see the host-version probe
+   in src/client/index.ts). */
 .dsh-rewind-cleanup-card {
   list-style: none;
   border: 1px solid var(--dsw-alias-border-l2);
