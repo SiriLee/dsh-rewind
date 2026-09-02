@@ -3,9 +3,10 @@
  *
  * Composer-refill probes for the durable rewind path (`runRewindAndFill` in
  * `portals.tsx`): the empty-draft guard (a draft the user is editing must not
- * be clobbered, matching `retractPending`), the event-level refill log, and
- * the teardown-safety rewrite (a `session.command` throw becomes a `warn` on
- * the `void runRewindAndFill(...)` call site instead of a silent unhandled
+ * be clobbered, matching `retractPending`), the narrowed contract that a
+ * normal rewind emits no verbose diagnostics, and the teardown-safety rewrite
+ * (a `session.command` throw becomes a `warn` on the
+ * `void runRewindAndFill(...)` call site instead of a silent unhandled
  * rejection). The session face and chat snapshot are hand fakes.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -83,26 +84,20 @@ afterEach(() => {
 describe('runRewindAndFill (durable rewind refill)', () => {
   const currentSessionId = (): string => 's1'
 
-  it('refills the empty composer and logs the event when the switch is on', async () => {
+  it('refills the empty composer (normal path emits no verbose diagnostics)', async () => {
     const { session, chatOf, command } = fakeSession()
     const setComposerText = vi.fn(() => true)
-    localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill')
+    // The DEBUG switch no longer gates any call in this path: even with it
+    // on, a successful rewind must not emit verbose info/debug output.
+    localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill,dsh-rewind:hiding')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
+    const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
     await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, setComposerText)
     expect(command).toHaveBeenCalledWith(`/rewind @${TARGET} both`)
     expect(setComposerText).toHaveBeenCalledTimes(1)
     expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
-    expect(info).toHaveBeenCalledTimes(1)
-  })
-
-  it('logs the hiding event once per rewind (event-level, not per batch)', async () => {
-    const { session, chatOf } = fakeSession()
-    localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill,dsh-rewind:hiding')
-    const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, vi.fn(() => true))
-    // One refill line + one hiding line; nothing per mutation batch.
-    expect(info).toHaveBeenCalledTimes(2)
-    expect(info.mock.calls.some(args => String(args[0]).includes('hiding'))).toBe(true)
+    expect(info).not.toHaveBeenCalled()
+    expect(debug).not.toHaveBeenCalled()
   })
 
   it('skips the refill when the composer already holds a draft (guard)', async () => {

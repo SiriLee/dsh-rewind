@@ -206,9 +206,6 @@ export function apply(ctx: ClientContext): void {
             ? { setDraft: (draft: string) => { input.for(scope).setDraft(draft) } }
             : undefined,
         )
-        // Event-level (DEBUG switch) picture of which channel restores the
-        // draft and whether it applied; gated, so a normal user never sees it.
-        rewindLog.info('refill', 'composer write', { channel: facade ? 'facade' : 'dom', ok })
         return ok
       } catch (error) {
         rewindLog.warn('refill', 'composer write threw', error)
