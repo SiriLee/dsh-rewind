@@ -44,6 +44,7 @@ import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
 import { rewindLog } from './log.ts'
+import { BUILD_HASH, PLUGIN_VERSION } from './build-info.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 import {
@@ -134,6 +135,12 @@ const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
  * @param ctx - client root context carrying `slots`, `sessions`, `locale` and `commandUi`.
  */
 export function apply(ctx: ClientContext): void {
+  // Startup identity line (behind the existing `dsh-rewind.debug` switch, never
+  // a new key): lets a reporter confirm the running bundle matches a fix,
+  // ruling out stale cache / an un-restarted host — the cheapest, most likely
+  // root cause. One line per load, not per event.
+  rewindLog.info('boot', `loaded v${PLUGIN_VERSION} (build ${BUILD_HASH})`)
+
   ctx.effect(function* () {
     yield ctx.locale.register(NS, { zh, en })
     const t = ctx.locale.bind(NS)
@@ -206,9 +213,6 @@ export function apply(ctx: ClientContext): void {
             ? { setDraft: (draft: string) => { input.for(scope).setDraft(draft) } }
             : undefined,
         )
-        // Event-level (DEBUG switch) picture of which channel restores the
-        // draft and whether it applied; gated, so a normal user never sees it.
-        rewindLog.info('refill', 'composer write', { channel: facade ? 'facade' : 'dom', ok })
         return ok
       } catch (error) {
         rewindLog.warn('refill', 'composer write threw', error)

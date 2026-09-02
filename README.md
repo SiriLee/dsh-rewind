@@ -146,8 +146,7 @@ dsh plugin --profile web add dsh-rewind-plugin
 5. **导轨显示已回退轮次**——DSH `v0.1.2-alpha.1` 新增的右侧导轨，会为已撤回消息保留刻度：点击不跳转、悬浮显示已撤回正文。仅显示差异，无功能影响。
 
 > [!NOTE]
-> 若使用中遇到问题，可开启详细诊断输出，复现后附上控制台 `[dsh-rewind]` 输出便于定位。详见
-> [浏览器诊断与详细输出开关](docs/compat/diagnostics.zh.md)。
+> 本插件提供浏览器端诊断输出；详见 [浏览器诊断](docs/compat/diagnostics.zh.md)。
 
 ## 安全
 

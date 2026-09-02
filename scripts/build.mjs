@@ -21,12 +21,35 @@
  */
 import { build } from 'esbuild'
 import { execSync } from 'node:child_process'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
+
+/** Recursively list the client half's source files (the bundle's real inputs). */
+async function listClientSources(dir, out = []) {
+  for (const ent of await readdir(dir, { withFileTypes: true })) {
+    const p = join(dir, ent.name)
+    if (ent.isDirectory()) await listClientSources(p, out)
+    else if (/\.(ts|tsx)$/.test(ent.name)) out.push(p)
+  }
+  return out
+}
+
+// Deterministic content hash over the client source. Injected at build time as
+// the runtime build marker: a reporter can confirm the running bundle actually
+// matches a fix (stale cache / un-restarted host detection), and it never
+// depends on the injected value itself (no circular define).
+const clientSrcFiles = (await listClientSources(join(ROOT, 'src', 'client'))).sort()
+const hash = createHash('sha256')
+for (const f of clientSrcFiles) {
+  hash.update(f.slice(ROOT.length))
+  hash.update(await readFile(f, 'utf8'))
+}
+const buildHash = hash.digest('hex').slice(0, 8)
 
 // Clean first: stale declarations from earlier builds (e.g. a removed module's
 // `ledger.d.ts`) must not survive into the next tarball.
@@ -62,6 +85,10 @@ await build({
   external: ['react', 'react-dom', 'react/jsx-runtime'],
   jsx: 'automatic',
   sourcemap: false,
+  define: {
+    __DSH_REWIND_VERSION__: JSON.stringify(pkg.version),
+    __DSH_REWIND_BUILD__: JSON.stringify(buildHash),
+  },
 })
 const clientSource = await readFile(join(ROOT, 'lib', '_client.js'), 'utf8')
 await rm(join(ROOT, 'lib', '_client.js'))
@@ -102,6 +129,14 @@ if (!/import\s*\*\s*as\s+\w+\s+from\s*["']@deepseek-ai\/dsh-settings["']/.test(h
 }
 for (const needle of ['window.__ModuleLoader__.load', `id: ${JSON.stringify(pkg.name)}`]) {
   if (!bundle.includes(needle)) throw new Error(`client bundle missing ${needle}`)
+}
+// The build identity (`boot` line, gated by the verbosity switch) must be wired:
+// the injected globals are replaced by the define and the line must be present.
+if (bundle.includes('__DSH_REWIND_VERSION__') || bundle.includes('__DSH_REWIND_BUILD__')) {
+  throw new Error('client bundle leaked an undefined build-time define (esbuild define off?)')
+}
+if (!bundle.includes('loaded v') || !bundle.includes('(build ')) {
+  throw new Error('client bundle missing the boot build-identity line')
 }
 // Public contract exports (docs/contract/client-contract.md) must stay reachable.
 const exportStart = clientSource.indexOf('__export(index_exports')

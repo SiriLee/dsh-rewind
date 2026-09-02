@@ -244,7 +244,6 @@ export async function runRewindAndFill(
     return
   }
   if (!result.ok || result.value?.matched !== true) {
-    rewindLog.info('refill', `rewind @${seq} not matched, no refill`)
     return
   }
   // The executed rewind lands as a CommandNode with a marker-carrying
@@ -266,31 +265,12 @@ export async function runRewindAndFill(
     // compaction and is no longer in the model context). The refusal is the
     // correct behavior, but it must not fail silently — surface the host's
     // reason instead.
-    rewindLog.warn('refill', `rewind @${seq} refused`, outcome.text)
     showHint(outcome.text ?? 'rewind failed')
     return
-  }
-  // Hiding diagnostics — event-level, once per rewind (NOT the per-batch
-  // refresh scan, which would flood the console during streaming). Built from
-  // the same snapshot the executed rewind already carried: an empty hide set
-  // despite a successful rewind is the anomaly worth surfacing.
-  const hidSeqs = (() => {
-    const chat = chatOf(session)
-    return chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
-  })()
-  if (hidSeqs.size === 0) {
-    rewindLog.warn('hiding', `rewind not hidden (target @${seq})`, { target: seq })
-  } else {
-    rewindLog.debug(
-      'hiding',
-      `rewind hides seqs [${[...hidSeqs].slice(0, 20).join(', ')}${hidSeqs.size > 20 ? '…' : ''}]`,
-      { target: seq },
-    )
   }
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
   if (currentSessionId() !== session.sessionId) {
-    rewindLog.info('refill', `skipped refill @${seq}: session switched during rewind`)
     return
   }
   let text: string | undefined
@@ -301,23 +281,19 @@ export async function runRewindAndFill(
     return
   }
   if (text === undefined || text === '') {
-    rewindLog.info('refill', `skipped refill @${seq}: no editable text`)
     return
   }
   // Empty-composer guard (Claude Code parity, matches retractPending): never
   // clobber a draft the user is already editing.
   if (composerText().trim() !== '') {
-    rewindLog.info('refill', `skipped refill @${seq}: composer already has a draft`)
     return
   }
-  let ok = false
   try {
-    ok = setComposerText(session.sessionId, text)
+    setComposerText(session.sessionId, text)
   } catch (error) {
     rewindLog.warn('refill', `composer refill @${seq} threw`, error)
     return
   }
-  rewindLog.info('refill', `rewound to @${seq} (${mode})`, { ok, text: text.slice(0, 80) })
 }
 
 /** The composer's text-holding element: rc.2 `<textarea>` or alpha.1+ contenteditable. */

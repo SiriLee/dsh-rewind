@@ -1,54 +1,57 @@
-# Browser diagnostics and the verbose switch
+# Browser diagnostics
 
 [简体中文](diagnostics.zh.md)
 
-Every browser-side diagnostic this plugin emits goes through one small
-channel, so a report can be captured with a single console filter and a
-verbose mode can be switched on without a plugin rebuild.
+Every browser-side diagnostic this plugin emits is routed through one small,
+level-filtered channel, so an anomaly surfaces under a single console filter.
+The channel is deliberately narrow: it records only genuine internal anomalies
+the plugin itself detects as off-contract — **not** the normal-path facts the
+user already sees on screen, which carry no attribution.
 
-## Scope-prefixed output
+## Always-on anomaly alerts
+
+`error` and `warn` are always printed (no switch, no configuration) so a fault
+surfaces even for a user who never configured anything:
+
+| Level | Meaning |
+| --- | --- |
+| `error` | Unexpected/breaking failure (e.g. the settings card fails to register) |
+| `warn` | Recoverable anomaly guard (e.g. a rewind command/refill throws, a waited-on outcome never settles, an unmet session binding) |
+
+These cases are rare, cheap, and off-contract. Normal-path detail (which
+branch a refill took, whether a write matched, which rows a rewind cut) is
+deliberately **not** logged: it re-states what the user already sees and adds
+nothing to attribution.
+
+## Scopes
 
 Diagnostics are printed as `[dsh-rewind:<scope>] ...`. The scope names the
-subsystem, and is also what the verbose switch filters on:
+subsystem an anomaly belongs to, so a report can be captured with a single
+console filter:
 
-| Scope | What it reports |
+| Scope | What an anomaly here means |
 | --- | --- |
-| `hiding` | The row-hiding path (which rows a rewind cuts; the `rewind not hidden` anomaly) |
-| `refill` | The composer refill after a rewind (target seq, mode, used channel, write result) |
+| `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
+| `refill` | The composer refill after a rewind (command/wait/refill throws, an outcome that never settles) |
 | `portals` | Per-message button mount issues (e.g. no session binding) |
 | `settings` | The snapshot-cleanup settings card |
+| `hiding` | **Reserved** — no active alert at present. If a future row-hiding diagnostic is added, it belongs in this region. |
 
-## Levels
+## Verbose switch
 
-| Level | Default | Meaning |
-| --- | --- | --- |
-| `error` | on | Unexpected/breaking; always printed |
-| `warn` | on | Recoverable anomaly guard (`rewind not hidden`, `refill skipped/refused/threw`); always printed |
-| `info` | off | Event-level lifecycle (one line per rewind / refill) |
-| `debug` | off | Additional event-level detail behind the switch (the hide-set line, one per rewind) |
-
-`error`/`warn` are always printed so an anomaly surfaces even for a user who
-never touched the switch; `info`/`debug` are gated so a normal user's console
-stays clean. Both gated levels emit once per relevant event (a rewind, a
-refill), never per streaming frame — so a rewound session does not flood the
-console even with verbose output switched on.
-
-## Enabling verbose output
-
-The switch lives in the **browser's** `localStorage` under the plugin's own
-key, so it can never enable another plugin/feature and nothing else can wake
-this one. Set it, reload the page, reproduce, then filter the console for
-`[dsh-rewind]`:
+The `info`/`debug` levels are gated by `localStorage['dsh-rewind.debug']`, read
+once per call and filtered by namespace. After the withdrawal of the restating
+verbose detail, exactly **one** verbose line remains: the `boot` scope's startup
+identity line. It is deliberately **off** by default (a normal user's console
+stays clean, and it is not an anomaly), so a reporter enables the scope to see
+it:
 
 ```js
-// Every dsh-rewind namespace.
+// Just the startup identity line.
+localStorage['dsh-rewind.debug'] = 'dsh-rewind:boot'
+
+// Or everything (avoids needing an exact scope).
 localStorage['dsh-rewind.debug'] = 'dsh-rewind*'
-
-// Or just the subsystem you care about (exact scope match).
-localStorage['dsh-rewind.debug'] = 'dsh-rewind:refill'
-
-// Several at once (comma-separated).
-localStorage['dsh-rewind.debug'] = 'dsh-rewind:refill,dsh-rewind:hiding'
 ```
 
 Reload (`F5`) after setting it. To switch it off:
@@ -57,26 +60,26 @@ Reload (`F5`) after setting it. To switch it off:
 delete localStorage['dsh-rewind.debug']
 ```
 
+The `error`/`warn` anomaly alerts are **not** gated by this switch — they are
+always printed. The other verbose detail (used write channel, an empty
+hide-set, per-rewind lifecycle lines) has been withdrawn: it re-stated behavior
+the user already sees and carried no attribution.
+
 ## Capturing a report
 
-1. On the machine/browser page that reproduces the problem, enable the
-   relevant namespace (see above) and reload.
-2. Reproduce once.
-3. In DevTools, filter the Console for `[dsh-rewind]` and copy the output
+1. Reproduce once on the affected page.
+2. In DevTools, filter the Console for `[dsh-rewind]` and copy the output
    (with the plugin version and the DSH/kernel version).
 
-For a rewind that did not refill the composer, the `refill` scope is what
-matters: its `composer write` line reports whether the draft was restored
-through the harness facade (`facade`) or the DOM fallback (`dom`) and whether
-the write succeeded, which tells a plugin fault apart from a harness-side
-render desync.
+The `error`/`warn` anomaly alerts require no setup — they always print. To also
+capture the startup identity line (`boot`) — useful for ruling out a stale
+bundle / un-restarted host — enable the verbose switch first (see above), then
+reload.
 
 ## Notes
 
-- The switch is an aid for maintainers and cooperating reporters, **not** a
-  stable public interface; its exact keys and output may change without notice.
-- It is scoped to one browser origin and one browser; enable it where the
-  problem actually occurs.
-
-Related: [audit.md](audit.md) for the verified-compatibility matrix and
-[troubleshooting.md](troubleshooting.md) for the legacy repair steps.
+- This diagnostic surface is an aid for maintainers and cooperating reporters,
+  **not** a stable public interface; its exact keys and output may change
+  without notice.
+- It is scoped to one browser origin and one browser; capture where the problem
+  actually occurs.
