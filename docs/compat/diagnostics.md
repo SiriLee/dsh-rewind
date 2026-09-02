@@ -31,29 +31,39 @@ console filter:
 
 | Scope | What an anomaly here means |
 | --- | --- |
+| `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
 | `refill` | The composer refill after a rewind (command/wait/refill throws, an outcome that never settles) |
 | `portals` | Per-message button mount issues (e.g. no session binding) |
 | `settings` | The snapshot-cleanup settings card |
 | `hiding` | **Reserved** — no active alert at present. If a future row-hiding diagnostic is added, it belongs in this region. |
 
-## Reserved: verbose switch
+## Verbose switch
 
-A previously-shipped `localStorage['dsh-rewind.debug']` switch gated `info`/
-`debug` detail (the used write channel, an empty hide-set, per-rewind lifecycle
-lines). That gated verbose output has been withdrawn: those lines re-stated
-behavior the user already sees and carried no attribution, and the `hiding`
-scope now has no active alert.
-
-The switch's layered scaffold (the DEBUG key, the namespace filter, the
-always-on `error`/`warn` rule) is retained as a dormant shell and may be wired
-up again if a genuinely attributable diagnostic is added. Until then the switch
-is inert: a stale value in `localStorage['dsh-rewind.debug']` is silently ignored.
+The `info`/`debug` levels are gated by `localStorage['dsh-rewind.debug']`, read
+once per call and filtered by namespace. After the withdrawal of the restating
+verbose detail, exactly **one** verbose line remains: the `boot` scope's startup
+identity line. It is deliberately **off** by default (a normal user's console
+stays clean, and it is not an anomaly), so a reporter enables the scope to see
+it:
 
 ```js
-// The key is no longer read. A stale value is harmless and ignored —
-// removing it is optional.
+// Just the startup identity line.
+localStorage['dsh-rewind.debug'] = 'dsh-rewind:boot'
+
+// Or everything (avoids needing an exact scope).
+localStorage['dsh-rewind.debug'] = 'dsh-rewind*'
+```
+
+Reload (`F5`) after setting it. To switch it off:
+
+```js
 delete localStorage['dsh-rewind.debug']
 ```
+
+The `error`/`warn` anomaly alerts are **not** gated by this switch — they are
+always printed. The other verbose detail (used write channel, an empty
+hide-set, per-rewind lifecycle lines) has been withdrawn: it re-stated behavior
+the user already sees and carried no attribution.
 
 ## Capturing a report
 
@@ -61,7 +71,10 @@ delete localStorage['dsh-rewind.debug']
 2. In DevTools, filter the Console for `[dsh-rewind]` and copy the output
    (with the plugin version and the DSH/kernel version).
 
-No setup is required: `error`/`warn` anomalies always print.
+The `error`/`warn` anomaly alerts require no setup — they always print. To also
+capture the startup identity line (`boot`) — useful for ruling out a stale
+bundle / un-restarted host — enable the verbose switch first (see above), then
+reload.
 
 ## Notes
 
