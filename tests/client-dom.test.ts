@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { collectTargets } from '../src/client/portals.tsx'
+import { actionsContainerOf, collectTargets } from '../src/client/portals.tsx'
 import type { HiddenChat } from '../src/client/hidden.ts'
 
 /** A durable user node in the HiddenChat shape the collector reads. */
@@ -55,6 +55,33 @@ function addRow(kind: string, key: string, withButton = true, actionsRootAttr = 
   }
   root.append(bubble, actions)
   row.appendChild(root)
+  document.body.appendChild(row)
+  return actions
+}
+
+/** alpha.4 (0.1.2-alpha.4) seat shape: the user row carries NO
+ * `data-actions-reveal` / `data-time-hover-root` marker (that marker now lives
+ * only on the per-turn tail footer, `TurnTailNodeView`); the actions container
+ * is the LAST child of the message row and directly holds the copy `<button>`.
+ * `pending` marks the row `data-pending-steering` for the pending collector. */
+function addRowAlpha4(kind: string, key: string, opts: { withButton?: boolean; pending?: boolean } = {}): HTMLElement {
+  const { withButton = true, pending = false } = opts
+  const row = document.createElement('div')
+  row.dataset.chatFlowKind = kind
+  row.dataset.chatAnchorKey = key
+  const userRow = document.createElement('div')
+  if (pending) userRow.dataset.pendingSteering = ''
+  const bubble = document.createElement('div')
+  bubble.textContent = 'bubble'
+  const actions = document.createElement('div')
+  actions.className = 'actions'
+  if (withButton) {
+    const button = document.createElement('button')
+    button.textContent = 'Copy'
+    actions.appendChild(button)
+  }
+  userRow.append(bubble, actions)
+  row.appendChild(userRow)
   document.body.appendChild(row)
   return actions
 }
@@ -128,5 +155,70 @@ describe('collectTargets (chat node × user action row → portal target)', () =
     addRow('user', 'm7', false, 'data-actions-reveal')
     const targets = collectTargets(chatWith([['m7', userNode(12)]]), new Set())
     expect(targets).toHaveLength(0)
+  })
+
+  it('collects a durable target on the alpha.4 structural row (no actions-reveal marker)', () => {
+    const actions = addRowAlpha4('user', 'a1')
+    const targets = collectTargets(chatWith([['a1', userNode(21)]]), new Set())
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toEqual({
+      kind: 'durable',
+      key: 'a1',
+      container: actions,
+      seq: 21,
+      time: 21000,
+      preview: 'msg 21',
+    })
+  })
+
+  it('collects an alpha.4 steering row via the structural fallback', () => {
+    const actions = addRowAlpha4('steering', 'a2')
+    const targets = collectTargets(
+      chatWith([['a2', { kind: 'steering', anchorSeq: 23, data: { seq: 23, time: 23000, content: [{ type: 'text', text: 'st' }] } }]]),
+      new Set(),
+    )
+    expect(targets).toHaveLength(1)
+    const target = targets[0]!
+    expect(target.kind).toBe('durable')
+    if (target.kind === 'durable') {
+      expect(target.seq).toBe(23)
+      expect(target.container).toBe(actions)
+    }
+  })
+
+  it('refuses an alpha.4 row whose actions container has no <button> (layout mismatch)', () => {
+    addRowAlpha4('user', 'a3', { withButton: false })
+    const targets = collectTargets(chatWith([['a3', userNode(24)]]), new Set())
+    expect(targets).toHaveLength(0)
+  })
+})
+
+describe('actionsContainerOf (dual-channel finder: rc.2 attribute → alpha.4 structural)', () => {
+  it('finds the actions container on an rc.2 data-time-hover-root row', () => {
+    const actions = addRow('user', 'r1')
+    expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="r1"]')!)).toBe(actions)
+  })
+
+  it('finds the actions container on an alpha.2 data-actions-reveal row', () => {
+    const actions = addRow('user', 'r2', true, 'data-actions-reveal')
+    expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="r2"]')!)).toBe(actions)
+  })
+
+  it('finds the actions container on an alpha.4 row via the copy-button parent (no marker)', () => {
+    const actions = addRowAlpha4('user', 'a4')
+    expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="a4"]')!)).toBe(actions)
+  })
+
+  it('finds the actions container on an alpha.4 pending row (last child = actions, no marker)', () => {
+    const actions = addRowAlpha4('user', 'a5', { pending: true })
+    const pendingRow = document.querySelector('[data-pending-steering]')!
+    expect(pendingRow).toBeInstanceOf(HTMLElement)
+    expect(actionsContainerOf(pendingRow as HTMLElement)).toBe(actions)
+  })
+
+  it('returns undefined when the row exposes no qualifying container', () => {
+    const row = document.createElement('div')
+    document.body.appendChild(row)
+    expect(actionsContainerOf(row)).toBeUndefined()
   })
 })

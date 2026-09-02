@@ -305,7 +305,39 @@ const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root], [data-actions-reveal]'
 
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
-const PENDING_SEAT_SELECTOR = '[data-pending-steering][data-time-hover-root], [data-pending-steering][data-actions-reveal]'
+const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
+
+/**
+ * Locate the actions container of a user/steering seat row — the element the
+ * ↶ button portals into (the copy/branch IconActions row).
+ *
+ * Dual channel:
+ * - rc.2 (0.1.1-rc.2) / alpha.2+ (0.1.2-alpha.2): the hover-reveal root is
+ *   attribute-marked (`[data-time-hover-root]` ≤ rc.x, `[data-actions-reveal]`
+ *   alpha.2+) and mounts the actions row as its LAST child. A pending row IS
+ *   that root; a durable row CONTAINS it as a descendant.
+ * - alpha.4 (0.1.2-alpha.4): the marker was removed from user rows (it now
+ *   lives only on the per-turn tail footer, `TurnTailNodeView`), and the user
+ *   action row is revealed via CSS `:has()`. The container is instead located
+ *   structurally: the direct holder of the copy `<button>` (the
+ *   `MessageIconActions` container, which mounts that button as a direct
+ *   child — `MessageIconActions.tsx:83,86`).
+ *
+ * Returns undefined when no qualifying container is found; the caller refuses
+ * to portal (never a crash, never a wrong attachment). Exported as a test seam
+ * (see `collectTargets`) so the dual-channel finder is exercised directly for
+ * both durable and pending row shapes without a full React portal render.
+ */
+export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | undefined {
+  const root = row?.matches(ACTIONS_ROOT_SELECTOR) ? row : row?.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
+  const actions = root?.lastElementChild
+  if (actions instanceof HTMLElement && actions.querySelector('button') !== null) return actions
+  // alpha.4 structural fallback: the copy button's own container.
+  const copy = row?.querySelector<HTMLElement>('button')
+  const structural = copy?.parentElement
+  if (structural instanceof HTMLElement && structural.querySelector('button') !== null) return structural
+  return undefined
+}
 
 /**
  * Collect the portal targets of one session: user rows × snapshot nodes.
@@ -326,12 +358,11 @@ export function collectTargets(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>
     // A withdrawn row must not get a button (it is not part of the surface).
     if (hiddenSeqs.has(node.anchorSeq ?? user.seq)) continue
     const row = rows.get(key)
-    const messageRoot = row?.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
-    const actions = messageRoot?.lastElementChild
+    const actions = actionsContainerOf(row)
     // The actions row is the last child of the user row and holds the
     // copy/branch IconActions; refuse to portal when the DOM does not match
     // (a layout change must not break the conversation).
-    if (!(actions instanceof HTMLElement) || actions.querySelector('button') === null) continue
+    if (actions === undefined) continue
     targets.push({ kind: 'durable', key, container: actions, seq: user.seq, time: user.time, preview: messagePreviewOf(user) })
   }
   return targets
@@ -390,12 +421,13 @@ function collectPendingTargets(snapshot: QueueLike): readonly PortalTarget[] {
     if (itemId === null) continue
     const row = rows[i]
     if (row === undefined) continue
-    // Unlike durable rows, the pending bubble row IS the time-hover root (no
-    // outer seat wrapper); its actions row is the last child and holds the
-    // copy IconAction — refuse to portal when the DOM does not match.
-    const messageRoot = row.matches(ACTIONS_ROOT_SELECTOR) ? row : row.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
-    const actions = messageRoot?.lastElementChild
-    if (!(actions instanceof HTMLElement) || actions.querySelector('button') === null) continue
+    // Unlike durable rows, the pending bubble row IS the hover/actions root
+    // (no outer seat wrapper); its actions row is the last child and holds the
+    // copy IconAction — refuse to portal when the DOM does not match. alpha.4
+    // dropped the attribute marker from this row too, so the same dual-channel
+    // finder (with the structural fallback) is reused.
+    const actions = actionsContainerOf(row)
+    if (actions === undefined) continue
     const item = steering[i]!
     targets.push({
       kind: 'pending',

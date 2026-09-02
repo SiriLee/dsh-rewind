@@ -40,6 +40,7 @@ import { unlink } from 'node:fs/promises'
 import * as dshSettings from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
+import { eventsOf } from './session-events.ts'
 import { readSettingsSection } from './settings-locale.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
@@ -151,7 +152,7 @@ interface AnchorCacheEntry {
  * recycled id would hand back another session's anchor.
  */
 function anchorSeqOf(session: Session, cache: WeakMap<Session, AnchorCacheEntry>): number | undefined {
-  const events = session.events
+  const events = eventsOf(session)
   const cached = cache.get(session)
   if (cached !== undefined && cached.eventsLength === events.length) return cached.anchor
   let anchor: number | undefined = cached?.anchor
@@ -331,7 +332,7 @@ function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'r
 }
 
 /** Resolve a raw target token into a plan, mapping failures to messages. */
-function resolveOrError(events: Session['events'], surface: Session['surface']['nodes'], raw: string): RewindPlan {
+function resolveOrError(events: readonly SessionEvent[], surface: readonly number[], raw: string): RewindPlan {
   const target = parseRewindTarget(raw)
   if (target === undefined) {
     throw new RewindError('invalid-index', t('error.invalidTarget', { raw }))
@@ -508,7 +509,7 @@ async function executeRewind(
     }
     let plan: RewindPlan
     try {
-      plan = resolveOrError(agent.session.events, agent.session.surface.nodes, rawTarget)
+      plan = resolveOrError(eventsOf(agent.session), agent.session.surface.nodes, rawTarget)
     } catch (error) {
       return rewindErrorResult(error)
     }
@@ -528,8 +529,8 @@ async function executeRewind(
       // (every real step already closed). Without the frame, the first
       // measure() after the rewind throws "no matching step/start event" and
       // /compact (and automatic compaction) stay broken for the session.
-      const turn = markerTurnOf(agent.session.events)
-      const step = markerStepOf(agent.session.events, turn)
+      const turn = markerTurnOf(eventsOf(agent.session))
+      const step = markerStepOf(eventsOf(agent.session), turn)
       agent.session.append('step/start', { turn, step })
       try {
         event = agent.session.append('assistant/message', { turn, step, message: marker }, {
@@ -624,7 +625,7 @@ async function handleRewind(
     // is a defensive fallback for non-composer callers: it withdraws the most
     // recent user message (time-travel back one turn; the text is offered
     // back in the composer).
-    const candidates = listRewindCandidates(session.events, session.surface.nodes, 1)
+    const candidates = listRewindCandidates(eventsOf(session), session.surface.nodes, 1)
     if (candidates.length === 0) {
       return { kind: 'error', text: t('noUserMessages') }
     }
@@ -637,7 +638,7 @@ async function handleRewind(
     if (target === undefined) return { kind: 'error', text: usage() }
     let plan: RewindPlan
     try {
-      plan = resolveOrError(session.events, session.surface.nodes, target)
+      plan = resolveOrError(eventsOf(session), session.surface.nodes, target)
     } catch (error) {
       return rewindErrorResult(error)
     }
@@ -650,7 +651,7 @@ async function handleRewind(
   // can render every reachable rewind target — not just the already-loaded
   // history window. Side-effect free: no event is appended, nothing rewound.
   if (parts[0] === '__candidates') {
-    const candidates = listRewindCandidates(session.events, session.surface.nodes)
+    const candidates = listRewindCandidates(eventsOf(session), session.surface.nodes)
     return { kind: 'success', text: formatCandidateList(candidates) }
   }
 
