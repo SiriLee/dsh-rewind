@@ -43,6 +43,7 @@ import {
 import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
+import { rewindLog } from './log.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 import {
@@ -194,15 +195,25 @@ export function apply(ctx: ClientContext): void {
      * the rc.2 textarea / alpha.1 contenteditable DOM fill. Never throws.
      */
     const setComposerText = (sessionId: string, text: string): boolean => {
-      const conversation = (ctx as { get(name: string): unknown }).get('conversation') as { input?: SessionInputResolverLike } | undefined
-      const input = conversation?.input
-      const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
-      return writeComposer(
-        text,
-        input !== undefined && scope !== undefined
-          ? { setDraft: (draft: string) => { input.for(scope).setDraft(draft) } }
-          : undefined,
-      )
+      try {
+        const conversation = (ctx as { get(name: string): unknown }).get('conversation') as { input?: SessionInputResolverLike } | undefined
+        const input = conversation?.input
+        const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
+        const facade = input !== undefined && scope !== undefined
+        const ok = writeComposer(
+          text,
+          facade
+            ? { setDraft: (draft: string) => { input.for(scope).setDraft(draft) } }
+            : undefined,
+        )
+        // Event-level (DEBUG switch) picture of which channel restores the
+        // draft and whether it applied; gated, so a normal user never sees it.
+        rewindLog.info('refill', 'composer write', { channel: facade ? 'facade' : 'dom', ok })
+        return ok
+      } catch (error) {
+        rewindLog.warn('refill', 'composer write threw', error)
+        return false
+      }
     }
 
     const slots = ctx.slots as unknown as SlotsLike
@@ -270,7 +281,7 @@ export function apply(ctx: ClientContext): void {
       } catch (error) {
         // A settings-card failure must never break the plugin: the rewind
         // feature is independent of the settings surface.
-        console.error('[dsh-rewind] settings card register failed:', error)
+        rewindLog.error('settings', 'settings card register failed', error)
       }
     })
 

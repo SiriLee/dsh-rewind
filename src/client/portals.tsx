@@ -40,6 +40,7 @@ import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
 import { matchPendingRows, retractSpan } from './pending.ts'
+import { rewindLog } from './log.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
 type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
@@ -233,27 +234,73 @@ export async function runRewindAndFill(
   // issuing the command: a repeated rewind of the same message must wait
   // for THIS command's node, not settle on the previous one.
   const known = knownCommandSeqs(session, chatOf, node => isExecutedRewindCommand(node, seq))
-  const result = await session.command(`/rewind @${seq} ${mode}`)
-  if (!result.ok || result.value?.matched !== true) return
+  let result: Awaited<ReturnType<SessionFace['command']>>
+  try {
+    result = await session.command(`/rewind @${seq} ${mode}`)
+  } catch (error) {
+    // A command/teardown throw must never become a silent unhandled rejection
+    // on the `void runRewindAndFill(...)` call site.
+    rewindLog.warn('refill', `rewind command threw, skipping refill @${seq}`, error)
+    return
+  }
+  if (!result.ok || result.value?.matched !== true) {
+    rewindLog.info('refill', `rewind @${seq} not matched, no refill`)
+    return
+  }
   // The executed rewind lands as a CommandNode with a marker-carrying
   // success outcome; wait for exactly that (longer than the preview wait:
   // a running turn is cancelled first, which can take seconds).
-  const outcome = await waitForCommand(session, chatOf, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
-  if (outcome === null) return
+  let outcome: Awaited<ReturnType<typeof waitForCommand>>
+  try {
+    outcome = await waitForCommand(session, chatOf, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
+  } catch (error) {
+    rewindLog.warn('refill', `waiting for rewind @${seq} outcome threw`, error)
+    return
+  }
+  if (outcome === null) {
+    rewindLog.warn('refill', `rewind @${seq} never settled within timeout, no refill`)
+    return
+  }
   if (outcome.kind !== 'success') {
     // The host rejected the rewind (e.g. the target was shadowed by
     // compaction and is no longer in the model context). The refusal is the
     // correct behavior, but it must not fail silently — surface the host's
     // reason instead.
+    rewindLog.warn('refill', `rewind @${seq} refused`, outcome.text)
     showHint(outcome.text ?? 'rewind failed')
     return
   }
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
-  if (currentSessionId() !== session.sessionId) return
-  const text = messageTextAt(chatOf(session), seq)
-  if (text === undefined || text === '') return
-  setComposerText(session.sessionId, text)
+  if (currentSessionId() !== session.sessionId) {
+    rewindLog.info('refill', `skipped refill @${seq}: session switched during rewind`)
+    return
+  }
+  let text: string | undefined
+  try {
+    text = messageTextAt(chatOf(session), seq)
+  } catch (error) {
+    rewindLog.warn('refill', `reading target text for @${seq} threw`, error)
+    return
+  }
+  if (text === undefined || text === '') {
+    rewindLog.info('refill', `skipped refill @${seq}: no editable text`)
+    return
+  }
+  // Empty-composer guard (Claude Code parity, matches retractPending): never
+  // clobber a draft the user is already editing.
+  if (composerText().trim() !== '') {
+    rewindLog.info('refill', `skipped refill @${seq}: composer already has a draft`)
+    return
+  }
+  let ok = false
+  try {
+    ok = setComposerText(session.sessionId, text)
+  } catch (error) {
+    rewindLog.warn('refill', `composer refill @${seq} threw`, error)
+    return
+  }
+  rewindLog.info('refill', `rewound to @${seq} (${mode})`, { ok, text: text.slice(0, 80) })
 }
 
 /** The composer's text-holding element: rc.2 `<textarea>` or alpha.1+ contenteditable. */
@@ -560,11 +607,13 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
           hidden.current.delete(seat)
         }
       }
-      // Diagnostics (only when something is hidden): confirm the hiding path
-      // actually fires in the browser.
+      // Diagnostics — verbose only (DEBUG switch): the per-batch hiding
+      // picture would otherwise flood the console during streaming. Push it
+      // to `debug`; a normal user never sees it.
       if (hiddenSeqs.size > 0 || hiddenCount > 0) {
-        console.info(
-          `[dsh-rewind] hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
+        rewindLog.debug(
+          'hiding',
+          `hiding: ${hiddenCount} rows, seqs [${[...hiddenSeqs].slice(0, 20).join(', ')}${hiddenSeqs.size > 20 ? '…' : ''}]`,
         )
       }
       // Anomaly (see #9): a rewind that should cut the surface is present, but
@@ -572,9 +621,9 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
       // nodes + their outcome/args, the computed hide set, and the seat→node
       // resolution) so one browser run pins whether the snapshot was readable,
       // the command was recognized, a span was built, or the seats resolved.
-      // Best-effort, never throws; only fires on the anomaly path.
+      // Best-effort, never throws; always-on (`warn`), as it is the guard.
       if (chat !== undefined && hiddenCount === 0 && hasExecutedRewindCommand(chat)) {
-        console.warn(`[dsh-rewind] rewind not hidden: ${describeHiding(chat, hiddenSeqs)}`)
+        rewindLog.warn('hiding', 'rewind not hidden', describeHiding(chat, hiddenSeqs))
       }
       const durable = chat === undefined ? [] : collectTargets(chat, hiddenSeqs)
       const next = [...durable, ...collectPendingTargets(snapshot)]
@@ -655,7 +704,7 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, currentSessionId, 
     if (session === undefined) {
       // No session binding (transition): nothing to rewind, say so instead
       // of failing silently.
-      console.warn('[dsh-rewind] rewind button clicked with no session binding')
+      rewindLog.warn('portals', 'rewind button clicked with no session binding')
       return
     }
     const node = userNodeOf(chatOf(session), target.key)
