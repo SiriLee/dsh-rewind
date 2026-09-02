@@ -74,8 +74,12 @@ function tag(scope: string): string {
 
 /**
  * Emit one diagnostic line. `error`/`warn` always print; `info`/`debug` print
- * only when the DEBUG switch selects the namespace. `data` is spread last so
- * DevTools' structured view keeps it inspectable (never stringified).
+ * only when the DEBUG switch selects the namespace. Both gated levels are
+ * routed to the always-visible `console.info` rather than `console.debug`,
+ * whose "Verbose" level Chrome filters out by default — otherwise a reporter
+ * who turns the switch on still would not see the line without also changing
+ * the DevTools level filter (mapped to `console.debug`). `data` is spread last
+ * so DevTools' structured view keeps it inspectable (never stringified).
  */
 export function log(level: LogLevel, scope: string, message: string, data?: unknown): void {
   if (ALWAYS_ON.has(level)) {
@@ -83,8 +87,7 @@ export function log(level: LogLevel, scope: string, message: string, data?: unkn
     return
   }
   if (!matches(switchValue(), `${NS}:${scope}`)) return
-  const method: 'info' | 'debug' = level === 'info' ? 'info' : 'debug'
-  console[method](tag(scope), message, data)
+  console.info(tag(scope), message, data)
 }
 
 /** Convenience shorthands (typed so call sites read cleanly). */

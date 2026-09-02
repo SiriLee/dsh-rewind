@@ -6,7 +6,9 @@
  * `localStorage['dsh-rewind.debug']` switch selects the namespace — so a
  * normal user's console stays clean by default, and a reporter flips one key
  * to see the verbose internals. Pins: always-on levels, default-off verbose,
- * wildcard / exact / comma-separated namespace matching, and empty=off.
+ * wildcard / exact / comma-separated namespace matching, empty=off, and that
+ * gated verbose lines route to the always-visible `console.info` (never the
+ * `console.debug` "Verbose" level Chrome hides by default).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { rewindLog } from '../src/client/log.ts'
@@ -50,28 +52,25 @@ describe('log layering (verbose off by default)', () => {
     const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
     rewindLog.debug('hiding', 'h')
-    expect(info).toHaveBeenCalledTimes(1)
-    expect(debug).toHaveBeenCalledTimes(1)
+    expect(info).toHaveBeenCalledTimes(2)
+    // Gated verbose must be visible by default, never the hidden console.debug.
+    expect(debug).not.toHaveBeenCalled()
   })
 
   it('filters by namespace: refill only, hiding stays silent', () => {
     localStorage.setItem(KEY, 'dsh-rewind:refill')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
-    const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
     rewindLog.debug('hiding', 'h')
-    expect(info).toHaveBeenCalledTimes(1)
-    expect(debug).not.toHaveBeenCalled()
+    expect(info).toHaveBeenCalledTimes(1) // refill emitted; hiding gated off
   })
 
   it('supports comma-separated namespaces', () => {
     localStorage.setItem(KEY, 'dsh-rewind:refill,dsh-rewind:hiding')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
-    const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
     rewindLog.debug('hiding', 'h')
     rewindLog.debug('popover', 'p')
-    expect(info).toHaveBeenCalledTimes(1)
-    expect(debug).toHaveBeenCalledTimes(1) // hiding matched, popover not
+    expect(info).toHaveBeenCalledTimes(2) // refill + hiding matched; popover not
   })
 })
