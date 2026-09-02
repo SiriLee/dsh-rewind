@@ -22,30 +22,21 @@
 >
 > `0.1.2-alpha.1` was never published to npm, so the peer OR-union is declared only from `0.1.2-alpha.2`; the plugin code still supports the `alpha.1`+ client.
 >
-> `0.1.2-alpha.3` verified-compatible (`v0.6.3` runs without issues); `rc.2` (`latest`) remains the primary baseline.
->
-> Client channel (harness `0.1.2-alpha.x`; `0.1.2-alpha.2` is published to npm
-> under the `alpha` dist-tag while `latest` stays `0.1.1-rc.2`): the plugin reads
-> the session chat through `uiConversation` whenever the DSH client exposes it.
-> `uiConversation` surfaces the chat as a per-session named `"chat"` view
-> (contributed by `dsh-client-ui-chat` through the `uiSession` slot hook) instead
-> of the session-face `chat` field. `src/client/hidden.ts` (`chatSnapshotOf`) reads
-> the session-face snapshot first (rc.2 path), then the `uiConversation` `"chat"`
-> view (alpha path); both missing degrades to `undefined` (no targets, never a
-> crash). The channel is held via a lazy `ctx.get` (never a declared `inject`), so
-> the plugin keeps the rc.2 type baseline while the OR-union covers the published
-> `0.1.2` tuple: `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2`. Pinned by
-> `tests/chat-channel.test.ts` (channel precedence + the alpha snapshot shape) and
-> `tests/client-dom.test.ts` (the button-target pairing that consumes the chat).
-> The composer refill is dual-channel the same way: on alpha the withdrawn text is
-> written through the `conversation` service's `input` resolver's `setDraft` (the
-> harness's own Lexical editor), else the rc.2 `<textarea>` / alpha `contenteditable`
-> DOM write (`writeComposer` in `src/client/portals.tsx`); pinned by
-> `tests/client-composer.test.ts`. The session-seat button DOM is dual-channel
-> the same way: the actions (copy/branch) row was located by `[data-time-hover-root]`
-> on ≤ 0.1.1-rc.x and by `[data-actions-reveal]` on 0.1.2-alpha.2
-> (`ACTIONS_ROOT_SELECTOR` / `PENDING_SEAT_SELECTOR` in `src/client/portals.tsx`);
-> pinned by `tests/client-dom.test.ts`.
+> `0.1.2-alpha.2` … `0.1.2-alpha.4` verified-compatible. Built/tested on the rc.2
+> baseline (the `latest` dist-tag); the same published build also drives the alpha
+> line, and `alpha.2`/`alpha.3`/`alpha.4` share the `0.1.2` tuple, so the single
+> `^0.1.2-alpha.2` peer member covers all three. `rc.2` (`latest`) remains the
+> primary baseline; four versions verified: rc.2, alpha.2, alpha.3, alpha.4.
+
+### Channeled seams (version × channel)
+
+| Seam | rc.2 (`0.1.1-rc.2`) | alpha.2 / alpha.3 | alpha.4 |
+| --- | --- | --- | --- |
+| Host session log (`eventsOf`) | `Session.events` | `Session.events` | `session.snapshotEvents()` |
+| Client chat snapshot (`chatSnapshotOf`) | session-face `chat` field | `uiConversation` `chat` view | `uiConversation` `chat` view |
+| Client composer refill (`writeComposer`) | `<textarea>` DOM write | `conversation.input.setDraft` | `conversation.input.setDraft` |
+| Client settings card | nested `ctx.inject(['settingsScope'])` | nested `ctx.inject(['settingsScope'])` | nested `ctx.inject(['settingsScope'])` |
+| Client seat-button DOM (`actionsContainerOf`) | `[data-time-hover-root]` | `[data-actions-reveal]` | structural locate of the copy-`<button>` container |
 
 ## Definition of "fully compatible" (invariants)
 
