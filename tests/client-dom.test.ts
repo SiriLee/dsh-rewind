@@ -86,6 +86,41 @@ function addRowAlpha4(kind: string, key: string, opts: { withButton?: boolean; p
   return actions
 }
 
+/** alpha.4 (0.1.2-alpha.4/5) IMAGE seat shape: the media gallery mounts the
+ * thumbnail as a `<button>` (MessageImage's `.frame`, ui-attachment) and sits
+ * in `.userStack` BEFORE `.actions` in document order. The old "first <button>
+ * in the row" heuristic portaled the ↶ button into the gallery; the actions
+ * container must still be located by the LAST button-bearing element. */
+function addRowAlpha4Image(kind: string, key: string, opts: { ownButtonInActions?: boolean } = {}): HTMLElement {
+  const { ownButtonInActions = false } = opts
+  const row = document.createElement('div')
+  row.dataset.chatFlowKind = kind
+  row.dataset.chatAnchorKey = key
+  const userRow = document.createElement('div')
+  const userStack = document.createElement('div')
+  const gallery = document.createElement('div')
+  const frame = document.createElement('button')
+  frame.textContent = 'image'
+  gallery.appendChild(frame)
+  const bubble = document.createElement('div')
+  bubble.textContent = 'bubble'
+  userStack.append(gallery, bubble)
+  const actions = document.createElement('div')
+  actions.className = 'actions'
+  const copy = document.createElement('button')
+  copy.textContent = 'Copy'
+  actions.appendChild(copy)
+  if (ownButtonInActions) {
+    const own = document.createElement('button')
+    own.className = 'dsh-rewind-btn'
+    actions.appendChild(own)
+  }
+  userRow.append(userStack, actions)
+  row.appendChild(userRow)
+  document.body.appendChild(row)
+  return actions
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
 })
@@ -214,6 +249,19 @@ describe('actionsContainerOf (dual-channel finder: rc.2 attribute → alpha.4 st
     const pendingRow = document.querySelector('[data-pending-steering]')!
     expect(pendingRow).toBeInstanceOf(HTMLElement)
     expect(actionsContainerOf(pendingRow as HTMLElement)).toBe(actions)
+  })
+
+  it('locates the actions container, NOT the media gallery, on an alpha.4/5 image row', () => {
+    // The thumbnail `<button>` in `.gallery` precedes `.actions`; the finder
+    // must skip it and land on the copy button's container (dsh-rewind#7 image
+    // regression: the ↶ button was pinned at the image's top-right).
+    const actions = addRowAlpha4Image('user', 'img1')
+    expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="img1"]')!)).toBe(actions)
+  })
+
+  it('still locates the actions container when this plugin own button is already portaled there', () => {
+    const actions = addRowAlpha4Image('user', 'img2', { ownButtonInActions: true })
+    expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="img2"]')!)).toBe(actions)
   })
 
   it('returns undefined when the row exposes no qualifying container', () => {

@@ -399,10 +399,19 @@ export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | 
   const root = row?.matches(ACTIONS_ROOT_SELECTOR) ? row : row?.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
   const actions = root?.lastElementChild
   if (actions instanceof HTMLElement && actions.querySelector('button') !== null) return actions
-  // 0.1.2-rc.1 structural fallback: the copy button's own container (the marker
-  // was removed from user rows; see the @dualmode note above).
-  const copy = row?.querySelector<HTMLElement>('button')
-  const structural = copy?.parentElement
+  // 0.1.2-rc.1 structural fallback (alpha.4/alpha.5, marker removed from user
+  // rows — see the @dualmode note above): the copy button's own container. The
+  // container is located by the LAST action `<button>`, NOT the first `<button>`
+  // in the row: a user message with an image renders its thumbnail as a
+  // `<button>` (MessageImage's frame, ui-attachment) inside the media gallery,
+  // which precedes the actions row in document order — `row.querySelector('button')`
+  // would portal the ↶ button into the gallery (pinned at the image's
+  // top-right). The action row always comes LAST, so take the parent of the
+  // last button-bearing element, skipping this plugin's own portal button so a
+  // refresh never re-targets itself.
+  const buttons = Array.from(row?.querySelectorAll<HTMLButtonElement>('button') ?? [])
+  const lastButton = buttons.filter(button => !button.classList.contains(CLASS.button)).at(-1)
+  const structural = lastButton?.parentElement
   if (structural instanceof HTMLElement && structural.querySelector('button') !== null) return structural
   return undefined
 }
