@@ -1,8 +1,7 @@
 # DeepSeek Harness interface reference
 
 > Maintainer doc: the harness subsystems this plugin depends on, and the key
-> source files behind each interface. Local fork (if present):
-> `<workspace>/oss/deepseek-harness/` — official repo:
+> source files behind each interface. Official repo:
 > [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 
 ## Subsystem docs (`docs/subsystems/`)
