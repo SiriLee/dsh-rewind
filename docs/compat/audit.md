@@ -22,15 +22,15 @@
 >
 > `0.1.2-alpha.1` was never published to npm, so the peer OR-union is declared only from `0.1.2-alpha.2`; the plugin code still supports the `alpha.1`+ client.
 >
-> `0.1.2-alpha.2` … `0.1.2-alpha.4` verified-compatible. Built/tested on the rc.2
+> `0.1.2-alpha.2` … `0.1.2-alpha.5` verified-compatible. Built/tested on the rc.2
 > baseline (the `latest` dist-tag); the same published build also drives the alpha
-> line, and `alpha.2`/`alpha.3`/`alpha.4` share the `0.1.2` tuple, so the single
-> `^0.1.2-alpha.2` peer member covers all three. `rc.2` (`latest`) remains the
-> primary baseline; four versions verified: rc.2, alpha.2, alpha.3, alpha.4.
+> line, and `alpha.2`/`alpha.3`/`alpha.4`/`alpha.5` share the `0.1.2` tuple, so the
+> single `^0.1.2-alpha.2` peer member covers all four. `rc.2` (`latest`) remains the
+> primary baseline; five versions verified: rc.2, alpha.2, alpha.3, alpha.4, alpha.5.
 
 ### Channeled seams (version × channel)
 
-| Seam | rc.2 (`0.1.1-rc.2`) | alpha.2 / alpha.3 | alpha.4 |
+| Seam | rc.2 (`0.1.1-rc.2`) | alpha.2 / alpha.3 | alpha.4 / alpha.5 |
 | --- | --- | --- | --- |
 | Host session log (`eventsOf`) | `Session.events` | `Session.events` | `session.snapshotEvents()` |
 | Client chat snapshot (`chatSnapshotOf`) | session-face `chat` field | `uiConversation` `chat` view | `uiConversation` `chat` view |
