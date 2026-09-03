@@ -34,14 +34,14 @@ export interface PopoverOptions {
   readonly onRetract?: () => void
   readonly preview: string
   /**
-   * Dual-channel chat reader (rc.2 session face / alpha.1+ uiConversation
-   * view): the durable variant's command probes scan the chat through it.
-   * Unused by the pending-retract variant.
+   * Dual-channel chat reader (0.1.1-rc.2 session face / 0.1.2-rc.1
+   * uiConversation view): the durable variant's command probes scan the chat
+   * through it. Unused by the pending-retract variant.
    */
   readonly chatOf: ChatOf
   /**
    * Subscribe to one session's live chat-update signal, so a probe waiting on
-   * a command's chat node can be woken when the chat snapshot changes (alpha.1+
+   * a command's chat node can be woken when the chat snapshot changes (0.1.2-rc.1
    * the session face no longer fires on a chat update). Passed straight through
    * to `waitForCommand`.
    */
@@ -162,11 +162,11 @@ export function waitForCommand(
         settle({ kind: node.outcome.kind, text: node.outcome.text })
       }
     }
-    // The chat-update signal: on alpha.1+ the session face's `subscribe` no
+    // The chat-update signal: on 0.1.2-rc.1 the session face's `subscribe` no
     // longer fires when the chat snapshot changes (the chat moved to the
     // `uiConversation` view), so a waiting caller passes a watch bound to that
     // view. Otherwise fall back to the session face's own `subscribe`, which on
-    // rc.2 IS the chat-update signal (its snapshot still carries the chat).
+    // 0.1.1-rc.2 IS the chat-update signal (its snapshot still carries the chat).
     const unsubscribe = (watch ?? ((cb: () => void) => session.subscribe(cb)))(check)
     const timer = setTimeout(() => settle(null), timeoutMs)
     check()
