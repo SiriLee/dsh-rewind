@@ -61,6 +61,9 @@ uses an OR-union covering every published tuple series
   (`0.1.1 → 0.1.2 → 0.2.x`); rc rolling within a tuple (`0.1.1-rc.2 → rc.3`)
   needs nothing. All `@deepseek-ai/*` packages release together;
   `npm view @deepseek-ai/dsh version` is the authoritative signal.
+- **Exception — `@deepseek-ai/dsh-client-runtime`**: it never published a
+  `0.1.2-alpha.*` (npm `next` is `0.1.1-rc.2`) and is imported `import type`
+  only, so keep it at `^0.1.0-rc.6 || ^0.1.1-rc.2` (no `0.1.2` member).
 - **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
   compares the `latest` dist-tag version against the tuples the peers cover
   (exit 0 = nothing to do, exit 1 = update). It reads the `latest` tag only; a

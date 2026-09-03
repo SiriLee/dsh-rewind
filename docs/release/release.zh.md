@@ -55,6 +55,9 @@ OR 并集覆盖 DSH 已发布的每个元组系列（如 `^0.1.0-rc.6 || ^0.1.1-
 - **何时需要更新**：仅当 DSH 发布新元组（`0.1.1 → 0.1.2 → 0.2.x`）时；
   同元组内 rc 滚动（`0.1.1-rc.2 → rc.3`）无需动作。DSH 所有包同版本发布，
   `npm view @deepseek-ai/dsh version` 即权威信号。
+- **例外 —— `@deepseek-ai/dsh-client-runtime`**：它从未发布 `0.1.2-alpha.*`
+  （npm `next` 为 `0.1.1-rc.2`）且仅被 `import type` 引用，保持
+  `^0.1.0-rc.6 || ^0.1.1-rc.2` 即可（无 `0.1.2` 元组项）。
 - **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm `latest`
   dist-tag 版本对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读
   `latest` tag**；发布在其它 tag（如 `alpha`）的 pre-release 走**手动发布前检查**
