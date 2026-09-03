@@ -35,6 +35,27 @@ export type ChatOf = (
 export type ChatWatch = (sessionId: string, cb: () => void) => () => void
 
 /**
+ * Choose the chat-update subscription for `waitForCommand`: prefer the
+ * `uiConversation` "chat" view's own `subscribe` when available (alpha.1+,
+ * where the chat-update signal lives), else the session face's `subscribe`
+ * (rc.2, whose snapshot still carries the chat, so its own subscribe is the
+ * chat-update signal). Extracted as a pure channel-selection step so the
+ * "view vs face" branch is unit-testable; the resolvers are injected by the
+ * caller (see `watchChat` in index.ts). Never throws.
+ */
+export function resolveChatWatch(
+  resolveView: (sessionId: string) => { subscribe?(cb: () => void): () => void } | undefined,
+  resolveFace: (sessionId: string) => { subscribe(cb: () => void): () => void } | undefined,
+  sessionId: string,
+  cb: () => void,
+): () => void {
+  const view = resolveView(sessionId)
+  if (view?.subscribe !== undefined) return view.subscribe(cb)
+  const face = resolveFace(sessionId)
+  return face?.subscribe(cb) ?? (() => {})
+}
+
+/**
  * Resolve the chat snapshot across the two harness channels: the session-face
  * snapshot first (rc.2 — on alpha.1+ the face no longer carries `chat`, so the
  * field reads `undefined`), then the `uiConversation` "chat" view. The view's

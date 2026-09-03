@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatConversationViewNode, CommandNode, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import { waitForCommand } from '../src/client/popover.ts'
-import { isExecutedRewindCommand, type ChatOf, type HiddenChat } from '../src/client/hidden.ts'
+import { isExecutedRewindCommand, resolveChatWatch, type ChatOf, type HiddenChat } from '../src/client/hidden.ts'
 
 const TARGET = 5
 const COMMAND_SEQ = 99
@@ -108,5 +108,36 @@ describe('waitForCommand wait signal', () => {
     const pending = waitForCommand(session, chatOf, matchExecuted, 5000)
     await vi.advanceTimersByTimeAsync(5000)
     await expect(pending).resolves.toBeNull()
+  })
+})
+
+describe('resolveChatWatch channel selection', () => {
+  const viewOf = (subscribe?: (cb: () => void) => () => void) => ({ subscribe })
+  const faceOf = (subscribe: (cb: () => void) => () => void) => ({ subscribe })
+
+  it('prefers the uiConversation view subscribe when it is reachable', () => {
+    const viewSub = vi.fn(() => () => {})
+    const faceSub = vi.fn(() => () => {})
+    resolveChatWatch(() => viewOf(viewSub), () => faceOf(faceSub), 's1', () => {})
+    expect(viewSub).toHaveBeenCalledTimes(1)
+    expect(faceSub).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the session face when the view has no subscribe', () => {
+    const faceSub = vi.fn(() => () => {})
+    resolveChatWatch(() => viewOf(undefined), () => faceOf(faceSub), 's1', () => {})
+    expect(faceSub).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the session face when the view is unreachable', () => {
+    const faceSub = vi.fn(() => () => {})
+    resolveChatWatch(() => undefined, () => faceOf(faceSub), 's1', () => {})
+    expect(faceSub).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns a no-op when neither the view nor the face is available', () => {
+    const unsub = resolveChatWatch(() => undefined, () => undefined, 's1', () => {})
+    expect(typeof unsub).toBe('function')
+    expect(() => unsub()).not.toThrow()
   })
 })

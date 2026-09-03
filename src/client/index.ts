@@ -42,7 +42,7 @@ import {
 } from './candidates.ts'
 import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
-import { chatSnapshotOf, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
+import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_VERSION } from './build-info.ts'
 import { en, zh } from './locales.ts'
@@ -222,23 +222,23 @@ export function apply(ctx: ClientContext): void {
 
     /**
      * Subscribe to one session's live chat-update signal (the wait signal for
-     * `waitForCommand`). On alpha.1+ the chat lives in the `uiConversation`
-     * "chat" view and the session face's `subscribe` no longer fires on a chat
-     * update, so prefer that view's `subscribe`; when the view is unreachable
-     * (rc.2, or before the view registers) fall back to the session face's own
-     * `subscribe` — which is exactly the chat-update signal there (its snapshot
-     * still carries the chat). Never throws.
+     * `waitForCommand`). Channel selection mirrors the chat's residence (see
+     * `resolveChatWatch`): on alpha.1+ prefer the `uiConversation` "chat" view's
+     * `subscribe`; when that view is unreachable (rc.2, or before it registers)
+     * fall back to the session face's own `subscribe`. Never throws.
      */
-    const watchChat: ChatWatch = (sessionId, cb) => {
-      try {
-        const view = uiConversation()?.binding(sessionId).target(CHAT_VIEW)
-        if (view?.subscribe !== undefined) return view.subscribe(cb)
-      } catch {
-        // fall through: the view could not be resolved, use the session face
-      }
-      const face = sessionOf(sessionId)
-      return face?.subscribe(cb) ?? (() => {})
-    }
+    const watchChat: ChatWatch = (sessionId, cb) => resolveChatWatch(
+      id => {
+        try {
+          return uiConversation()?.binding(id).target(CHAT_VIEW)
+        } catch {
+          return undefined
+        }
+      },
+      id => sessionOf(id),
+      sessionId,
+      cb,
+    )
 
     const slots = ctx.slots as unknown as SlotsLike
     yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
