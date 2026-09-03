@@ -16,7 +16,7 @@
 
 import type { SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hasFileImpact, type ChatOf, type HiddenChat } from './hidden.ts'
+import { hasFileImpact, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'
 
@@ -39,6 +39,13 @@ export interface PopoverOptions {
    * Unused by the pending-retract variant.
    */
   readonly chatOf: ChatOf
+  /**
+   * Subscribe to one session's live chat-update signal, so a probe waiting on
+   * a command's chat node can be woken when the chat snapshot changes (alpha.1+
+   * the session face no longer fires on a chat update). Passed straight through
+   * to `waitForCommand`.
+   */
+  readonly watchChat: ChatWatch
   /** The button that opened the popover (outside-click ignore target). */
   readonly anchor: HTMLElement
   readonly t: Translate
@@ -138,6 +145,7 @@ export function waitForCommand(
   chatOf: ChatOf,
   match: (node: CommandNode) => boolean,
   timeoutMs = 8000,
+  watch?: (cb: () => void) => () => void,
 ): Promise<{ kind: 'success' | 'error'; text?: string } | null> {
   return new Promise(resolve => {
     let settled = false
@@ -154,7 +162,12 @@ export function waitForCommand(
         settle({ kind: node.outcome.kind, text: node.outcome.text })
       }
     }
-    const unsubscribe = session.subscribe(check)
+    // The chat-update signal: on alpha.1+ the session face's `subscribe` no
+    // longer fires when the chat snapshot changes (the chat moved to the
+    // `uiConversation` view), so a waiting caller passes a watch bound to that
+    // view. Otherwise fall back to the session face's own `subscribe`, which on
+    // rc.2 IS the chat-update signal (its snapshot still carries the chat).
+    const unsubscribe = (watch ?? ((cb: () => void) => session.subscribe(cb)))(check)
     const timer = setTimeout(() => settle(null), timeoutMs)
     check()
   })
@@ -173,14 +186,19 @@ function isPreviewFor(node: CommandNode, seq: number): boolean {
  * Run `/rewind preview @seq both` and await its outcome. Returns null when the
  * command was not matched or timed out.
  */
-async function previewImpact(session: SessionFace, chatOf: ChatOf, seq: number): Promise<PreviewOutcome> {
+async function previewImpact(
+  session: SessionFace,
+  chatOf: ChatOf,
+  seq: number,
+  watch?: (cb: () => void) => () => void,
+): Promise<PreviewOutcome> {
   // Exclude preview nodes that already exist: a second popover on the same
   // message must wait for THIS command's node, not settle on the previous
   // preview's outcome (which may predate a restore).
   const known = knownCommandSeqs(session, chatOf, node => isPreviewFor(node, seq))
   const result = await session.command(`/rewind preview @${seq} both`)
   if (!result.ok || result.value?.matched !== true) return null
-  return waitForCommand(session, chatOf, node => isPreviewFor(node, seq) && !known.has(node.seq))
+  return waitForCommand(session, chatOf, node => isPreviewFor(node, seq) && !known.has(node.seq), 8000, watch)
 }
 
 /** Element factory helpers (kept local so no framework is involved). */
@@ -236,6 +254,7 @@ interface DurablePopoverOptions {
   readonly anchor: HTMLElement
   readonly t: Translate
   readonly chatOf: ChatOf
+  readonly watchChat: ChatWatch
   readonly onRewind: (mode: 'chat' | 'both') => void
 }
 
@@ -268,7 +287,7 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
   focusFirst(root)
 
   void (async () => {
-    const outcome = cached ?? await previewImpact(session, opts.chatOf, seq)
+    const outcome = cached ?? await previewImpact(session, opts.chatOf, seq, cb => opts.watchChat(session.sessionId, cb))
     if (outcome === null) {
       impact.textContent = t('popover.impact.failed', { message: 'preview command failed or timed out' })
       return
@@ -433,7 +452,7 @@ export function openPopover(opts: PopoverOptions): void {
   const onRewind = opts.onRewind
   if (seq === undefined || time === undefined || onRewind === undefined) return
   // Narrowed durable identity: the pending variant never reaches this flow.
-  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, chatOf, onRewind }
+  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, chatOf, watchChat: opts.watchChat, onRewind }
 
   const root = el('div', CLASS.popover)
   root.setAttribute('role', 'dialog')
@@ -534,7 +553,7 @@ export function openPopover(opts: PopoverOptions): void {
   // keeps "both" enabled — degrade to always-shown rather than hiding a
   // working option.
   void (async () => {
-    const outcome = await previewImpact(session, chatOf, seq)
+    const outcome = await previewImpact(session, chatOf, seq, cb => opts.watchChat(session.sessionId, cb))
     impactOutcome = outcome
     if (outcome !== null && outcome.kind === 'success') {
       bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }

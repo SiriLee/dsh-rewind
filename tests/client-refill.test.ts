@@ -12,7 +12,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatConversationViewNode, CommandNode, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
 import { runRewindAndFill } from '../src/client/portals.tsx'
-import type { ChatOf, HiddenChat } from '../src/client/hidden.ts'
+import type { ChatOf, ChatWatch, HiddenChat } from '../src/client/hidden.ts'
 
 const TARGET = 5
 const COMMAND_SEQ = 99
@@ -62,7 +62,36 @@ function fakeSession() {
     getSnapshot: vi.fn(() => ({})),
   } as unknown as SessionFace
   const chatOf: ChatOf = () => chat
-  return { session, chatOf, command }
+  // First-check hit path: the watch is never needed (no-op), but the signature
+  // now requires it. See fakeSessionControlled for the watch-driven path.
+  const watch: ChatWatch = () => () => {}
+  return { session, chatOf, command, watch }
+}
+
+/**
+ * A fake session that does NOT append the executed rewind node inside
+ * `command`: the first check misses, and the refill only proceeds once the
+ * chat-update `watch` fires (alpha.1+ signal path). Exposes a manual trigger.
+ */
+function fakeSessionControlled() {
+  let chat = makeChat([userNode(TARGET)])
+  let trigger: (() => void) | null = null
+  const command = vi.fn(async () => ({ ok: true, value: { matched: true } }))
+  const watch: ChatWatch = (_sid, cb) => {
+    trigger = cb
+    return () => {}
+  }
+  const session = {
+    sessionId: 's1',
+    command,
+    subscribe: vi.fn(() => () => {}),
+    getSnapshot: vi.fn(() => ({})),
+  } as unknown as SessionFace
+  const chatOf: ChatOf = () => chat
+  const settleChat = (): void => {
+    chat = makeChat([userNode(TARGET), executedRewind(COMMAND_SEQ, TARGET)])
+  }
+  return { session, chatOf, command, watch, settleChat, getTrigger: (): (() => void) | null => trigger }
 }
 
 /** A `[data-composer-input]` contenteditable holding an existing draft. */
@@ -85,14 +114,14 @@ describe('runRewindAndFill (durable rewind refill)', () => {
   const currentSessionId = (): string => 's1'
 
   it('refills the empty composer (normal path emits no verbose diagnostics)', async () => {
-    const { session, chatOf, command } = fakeSession()
+    const { session, chatOf, command, watch } = fakeSession()
     const setComposerText = vi.fn(() => true)
     // The DEBUG switch no longer gates any call in this path: even with it
     // on, a successful rewind must not emit verbose info/debug output.
     localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill,dsh-rewind:hiding')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
     expect(command).toHaveBeenCalledWith(`/rewind @${TARGET} both`)
     expect(setComposerText).toHaveBeenCalledTimes(1)
     expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
@@ -102,27 +131,55 @@ describe('runRewindAndFill (durable rewind refill)', () => {
 
   it('skips the refill when the composer already holds a draft (guard)', async () => {
     addEditableDraft('in progress draft')
-    const { session, chatOf } = fakeSession()
+    const { session, chatOf, watch } = fakeSession()
     const setComposerText = vi.fn(() => true)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
   })
 
   it('turns a session.command throw into a warn instead of an unhandled rejection', async () => {
-    const { session, chatOf } = fakeSession()
+    const { session, chatOf, watch } = fakeSession()
     session.command = vi.fn(async () => { throw new Error('teardown') }) as SessionFace['command']
     const setComposerText = vi.fn(() => true)
     const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await expect(runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, setComposerText)).resolves.toBeUndefined()
+    await expect(runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)).resolves.toBeUndefined()
     expect(setComposerText).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledTimes(1)
   })
 
   it('does nothing on an unmatched rewind (matched !== true)', async () => {
-    const { session, chatOf } = fakeSession()
+    const { session, chatOf, watch } = fakeSession()
     session.command = vi.fn(async () => ({ ok: true, value: { matched: false } })) as SessionFace['command']
     const setComposerText = vi.fn(() => true)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    expect(setComposerText).not.toHaveBeenCalled()
+  })
+
+  it('refills after the chat-update watch fires (alpha signal path: the first check misses)', async () => {
+    const { session, chatOf, command, watch, settleChat, getTrigger } = fakeSessionControlled()
+    const setComposerText = vi.fn(() => true)
+    const call = runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    // command resolves (matched) and the first check misses; the refill waits on watch
+    await Promise.resolve()
+    await Promise.resolve()
+    settleChat()
+    getTrigger()?.()
+    await call
+    expect(command).toHaveBeenCalledWith(`/rewind @${TARGET} both`)
+    expect(setComposerText).toHaveBeenCalledTimes(1)
+    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+  })
+
+  it('still honours the empty-composer guard when the watch fires late', async () => {
+    addEditableDraft('in progress draft')
+    const { session, chatOf, watch, settleChat, getTrigger } = fakeSessionControlled()
+    const setComposerText = vi.fn(() => true)
+    const call = runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    await Promise.resolve()
+    await Promise.resolve()
+    settleChat()
+    getTrigger()?.()
+    await call
     expect(setComposerText).not.toHaveBeenCalled()
   })
 })
