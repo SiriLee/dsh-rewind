@@ -35,7 +35,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import type { SessionFace, UserMessageNode } from '@deepseek-ai/dsh-client-runtime/client'
-import { hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, type ChatOf, type HiddenChat } from './hidden.ts'
+import { hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
@@ -79,6 +79,13 @@ export interface RewindBridgeDeps {
    * `chatSnapshotOf` in hidden.ts for the channel precedence.
    */
   readonly chatOf: ChatOf
+  /**
+   * Subscribe to one session's live chat-update signal, so the composer refill
+   * waiting on an executed rewind's chat node can be woken when the chat
+   * snapshot changes (alpha.1+ the session face no longer fires on a chat
+   * update). Passed through to `waitForCommand`.
+   */
+  readonly watchChat: ChatWatch
   readonly currentSessionId: () => string | undefined
   readonly t: Translate
   readonly subscribeLocale: (cb: () => void) => () => void
@@ -228,6 +235,7 @@ export async function runRewindAndFill(
   mode: 'chat' | 'both',
   currentSessionId: () => string | undefined,
   chatOf: ChatOf,
+  watchChat: ChatWatch,
   setComposerText: (sessionId: string, text: string) => boolean,
 ): Promise<void> {
   // Exclude already-present executed-rewind nodes for this target BEFORE
@@ -251,7 +259,7 @@ export async function runRewindAndFill(
   // a running turn is cancelled first, which can take seconds).
   let outcome: Awaited<ReturnType<typeof waitForCommand>>
   try {
-    outcome = await waitForCommand(session, chatOf, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000)
+    outcome = await waitForCommand(session, chatOf, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000, cb => watchChat(session.sessionId, cb))
   } catch (error) {
     rewindLog.warn('refill', `waiting for rewind @${seq} outcome threw`, error)
     return
@@ -502,7 +510,7 @@ interface RewindPortalsProps extends RewindBridgeDeps {
  * skipped when the target set is unchanged), so the plugin never runs a
  * synchronous full-transcript scan inside a commit microtask.
  */
-export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, t, subscribeLocale, setComposerText }: RewindPortalsProps): ReactNode {
+export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, watchChat, t, subscribeLocale, setComposerText }: RewindPortalsProps): ReactNode {
   const [targets, setTargets] = useState<readonly PortalTarget[]>([])
   // Rows we have hidden; re-shown when they leave the withdrawn span.
   const hidden = useRef(new WeakSet<HTMLElement>())
@@ -599,6 +607,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
           sessionId={sessionId}
           sessionOf={sessionOf}
           chatOf={chatOf}
+          watchChat={watchChat}
           setComposerText={setComposerText}
           t={t}
         />
@@ -610,6 +619,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
           sessionId={sessionId}
           sessionOf={sessionOf}
           chatOf={chatOf}
+          watchChat={watchChat}
           currentSessionId={currentSessionId}
           setComposerText={setComposerText}
           t={t}
@@ -625,13 +635,14 @@ interface RewindButtonProps {
   readonly sessionId: string
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   readonly chatOf: ChatOf
+  readonly watchChat: ChatWatch
   readonly currentSessionId: () => string | undefined
   readonly setComposerText: (sessionId: string, text: string) => boolean
   readonly t: Translate
 }
 
 /** The per-message ↶ button (28px, matching the harness IconActions). */
-function RewindButton({ target, sessionId, sessionOf, chatOf, currentSessionId, setComposerText, t }: RewindButtonProps): ReactNode {
+function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, currentSessionId, setComposerText, t }: RewindButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
@@ -646,12 +657,13 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, currentSessionId, 
     openPopover({
       session,
       chatOf,
+      watchChat,
       seq: node.seq,
       time: node.time,
       preview: messagePreviewOf(node),
       anchor: event.currentTarget,
       t,
-      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, currentSessionId, chatOf, setComposerText) },
+      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, currentSessionId, chatOf, watchChat, setComposerText) },
     })
   }
 
@@ -725,12 +737,13 @@ interface RetractButtonProps {
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   /** Passed through to openPopover (the shared PopoverOptions shape). */
   readonly chatOf: ChatOf
+  readonly watchChat: ChatWatch
   readonly setComposerText: (sessionId: string, text: string) => boolean
   readonly t: Translate
 }
 
 /** The per-pending-message ↶ button (same visual family as the durable button). */
-function RetractButton({ target, sessionId, sessionOf, chatOf, setComposerText, t }: RetractButtonProps): ReactNode {
+function RetractButton({ target, sessionId, sessionOf, chatOf, watchChat, setComposerText, t }: RetractButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
@@ -738,6 +751,7 @@ function RetractButton({ target, sessionId, sessionOf, chatOf, setComposerText, 
     openPopover({
       session,
       chatOf,
+      watchChat,
       preview: target.preview,
       anchor: event.currentTarget,
       t,

@@ -42,7 +42,7 @@ import {
 } from './candidates.ts'
 import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
-import { chatSnapshotOf, isCandidateCommand, type ChatOf } from './hidden.ts'
+import { chatSnapshotOf, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_VERSION } from './build-info.ts'
 import { en, zh } from './locales.ts'
@@ -81,7 +81,7 @@ const NS = 'rewind'
  */
 interface UiConversationLike {
   binding(source: string | { readonly sessionId: string }): {
-    target(name: string): { getSnapshot(): unknown } | undefined
+    target(name: string): { getSnapshot(): unknown; subscribe?(cb: () => void): () => void } | undefined
   }
 }
 
@@ -220,6 +220,26 @@ export function apply(ctx: ClientContext): void {
       }
     }
 
+    /**
+     * Subscribe to one session's live chat-update signal (the wait signal for
+     * `waitForCommand`). On alpha.1+ the chat lives in the `uiConversation`
+     * "chat" view and the session face's `subscribe` no longer fires on a chat
+     * update, so prefer that view's `subscribe`; when the view is unreachable
+     * (rc.2, or before the view registers) fall back to the session face's own
+     * `subscribe` — which is exactly the chat-update signal there (its snapshot
+     * still carries the chat). Never throws.
+     */
+    const watchChat: ChatWatch = (sessionId, cb) => {
+      try {
+        const view = uiConversation()?.binding(sessionId).target(CHAT_VIEW)
+        if (view?.subscribe !== undefined) return view.subscribe(cb)
+      } catch {
+        // fall through: the view could not be resolved, use the session face
+      }
+      const face = sessionOf(sessionId)
+      return face?.subscribe(cb) ?? (() => {})
+    }
+
     const slots = ctx.slots as unknown as SlotsLike
     yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
       {
@@ -229,7 +249,7 @@ export function apply(ctx: ClientContext): void {
         id: 'dsh-rewind-portals',
         order: 1000,
       },
-      createRewindBridge({ sessionOf, chatOf, currentSessionId, setComposerText, t, subscribeLocale }),
+      createRewindBridge({ sessionOf, chatOf, currentSessionId, watchChat, setComposerText, t, subscribeLocale }),
     ))
 
     // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
@@ -317,7 +337,7 @@ export function apply(ctx: ClientContext): void {
       const known = knownCommandSeqs(face, chatOf, node => isCandidateCommand(node))
       const result = await face.command('/rewind __candidates')
       if (!result.ok || result.value?.matched !== true) return undefined
-      const outcome = await waitForCommand(face, chatOf, node => isCandidateCommand(node) && !known.has(node.seq))
+      const outcome = await waitForCommand(face, chatOf, node => isCandidateCommand(node) && !known.has(node.seq), 8000, cb => watchChat(face.sessionId, cb))
       if (outcome === null || outcome.kind !== 'success' || outcome.text === undefined) return undefined
       return rewindCandidatesFromHostText(outcome.text)
     }
@@ -360,12 +380,13 @@ export function apply(ctx: ClientContext): void {
           openPopover({
             session: face,
             chatOf,
+            watchChat,
             seq: candidate.seq,
             time: candidate.time,
             preview: candidate.preview,
             anchor: composerAnchor(),
             t,
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId, chatOf, setComposerText) },
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId, chatOf, watchChat, setComposerText) },
           })
         },
       },
