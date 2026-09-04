@@ -6,7 +6,7 @@
  * @module dsh-rewind/client/hidden
  */
 
-import type { ChatConversationViewNode, CommandNode } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ChatConversationViewNode, CommandNode } from './dsh-types.ts'
 
 /** Minimal chat snapshot reader the hiding logic needs. */
 export interface HiddenChat {

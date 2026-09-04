@@ -10,7 +10,7 @@
  * default session face fallback (rc.2), and timeout.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChatConversationViewNode, CommandNode, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ChatConversationViewNode, CommandNode, SessionFace } from '../src/client/dsh-types.ts'
 import { waitForCommand } from '../src/client/popover.ts'
 import { isExecutedRewindCommand, resolveChatWatch, type ChatOf, type HiddenChat } from '../src/client/hidden.ts'
 

@@ -10,7 +10,7 @@
  * rejection). The session face and chat snapshot are hand fakes.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChatConversationViewNode, CommandNode, SessionFace } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ChatConversationViewNode, CommandNode, SessionFace } from '../src/client/dsh-types.ts'
 import { runRewindAndFill } from '../src/client/portals.tsx'
 import type { ChatOf, ChatWatch, HiddenChat } from '../src/client/hidden.ts'
 
