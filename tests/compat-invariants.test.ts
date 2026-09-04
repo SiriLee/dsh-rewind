@@ -24,24 +24,24 @@ import { Context } from '@deepseek-ai/cordis'
 import { GoalId } from '@deepseek-ai/dsh-goal'
 import { foldGoal } from '@deepseek-ai/dsh-goal'
 import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { apply as applySessionStats } from '@deepseek-ai/dsh-session-stats'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import { applyRewind, assistantMessage, assertTurnTailOrdering, buildTurnedSession, textMessage } from './helpers.ts'
+import { applyRewind, assistantMessage, assertTurnTailOrdering, buildTurnedSession, newMeter, textMessage } from './helpers.ts'
 import { runScenario, SCENARIOS } from './scenarios.ts'
 
 /** I1: token-meter replay and resume-preflight (`Session.create`) accept the log. */
 function assertReplayable(session: Session): void {
-  expect(() => new TokenMeter(new Context()).measure(session)).not.toThrow()
-  expect(() => Session.create(session.id, session.events)).not.toThrow()
+  expect(() => newMeter().measure(session)).not.toThrow()
+  expect(() => Session.create(session.id, session.snapshotEvents())).not.toThrow()
 }
 
 /** I1: compaction bookkeeping events always close (start…end pairs). */
 function assertCompactionBalanced(session: Session): void {
   let starts = 0
   let ends = 0
-  for (const event of session.events) {
+  for (const event of session.snapshotEvents()) {
     if (event.type === 'compaction/start') starts += 1
     else if (event.type === 'compaction/end') ends += 1
   }
@@ -53,7 +53,7 @@ function assertSurfaceConsistent(session: Session, rewoundTargets: readonly numb
   const nodes = session.surface.nodes
   expect(new Set(nodes).size).toBe(nodes.length) // no duplicates
   for (const seq of nodes) {
-    expect(session.events.some(event => event.seq === seq)).toBe(true) // every node exists
+    expect(session.snapshotEvents().some(event => event.seq === seq)).toBe(true) // every node exists
   }
   for (const target of rewoundTargets) {
     expect(nodes).not.toContain(target) // a rewound target never returns to the surface
@@ -63,14 +63,14 @@ function assertSurfaceConsistent(session: Session, rewoundTargets: readonly numb
 
 /** I3: step/turn structure invariants over the whole log. */
 function assertStepTurnStructure(session: Session): void {
-  assertTurnTailOrdering(session.events)
+  assertTurnTailOrdering(session.snapshotEvents())
   const stepStarts = new Set<string>()
-  for (const event of session.events) {
+  for (const event of session.snapshotEvents()) {
     if (event.type === 'step/start') {
       stepStarts.add(`${event.data.turn}:${event.data.step}`)
     }
   }
-  for (const event of session.events) {
+  for (const event of session.snapshotEvents()) {
     if (event.type === 'step/end') {
       expect(stepStarts.has(`${event.data.turn}:${event.data.step}`)).toBe(true)
     }
@@ -107,7 +107,7 @@ describe('I1 log replayability (probe: token-meter + resume preflight)', () => {
     const cast = (s: Session) => s as unknown as { append(type: string, data: unknown): unknown }
     cast(session).append('plan/mode', { active: true }) // the session is in plan mode
     const target = session.surface.nodes.find(seq =>
-      session.events.find(e => e.seq === seq)?.type === 'user/message')!
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     applyRewind(session, target!)
     cast(session).append('plan/mode', { active: false }) // a later /plan off
     assertReplayable(session)
@@ -129,10 +129,10 @@ describe('I2 surface consistency (probe: deriveMessages + node legality)', () =>
   it('the marker is the surface tail right after a rewind', () => {
     const session = buildTurnedSession()
     const target = session.surface.nodes.find(seq =>
-      session.events.find(e => e.seq === seq)?.type === 'user/message')
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')
     applyRewind(session, target!)
     const last = session.surface.nodes.at(-1)!
-    const lastEvent = session.events.find(e => e.seq === last)!
+    const lastEvent = session.snapshotEvents().find(e => e.seq === last)!
     expect(lastEvent.type).toBe('assistant/message')
     const message = (lastEvent.data as { message?: { content?: unknown[] } }).message
     expect(message?.content).toEqual([])
@@ -157,19 +157,19 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
     const registry = ctx.sessionProjections
 
     // Fold the baseline log through a fresh registry cell (as a resume would).
-    const baseline = registry.snapshot(Session.create(session.id, session.events)).values.sessionStats!
+    const baseline = registry.snapshot(Session.create(session.id, session.snapshotEvents())).values.sessionStats!
     expect(baseline.turns).toBe(2)
     expect(baseline.steps).toBe(2)
 
     const target = session.surface.nodes.find(seq =>
-      session.events.find(e => e.seq === seq)?.type === 'user/message')!
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     applyRewind(session, target)
 
     // Rebuild the session from the rewound log and fold again: the ghost
     // step frame adds exactly one closed step; the reused turn number must
     // NOT create a phantom turn. llmMs stays non-negative and near zero for
     // the empty marker.
-    const after = registry.snapshot(Session.create(session.id, session.events)).values.sessionStats!
+    const after = registry.snapshot(Session.create(session.id, session.snapshotEvents())).values.sessionStats!
     expect(after.turns).toBe(2)
     expect(after.steps).toBe(3)
     expect(after.llmMs).toBeGreaterThanOrEqual(0)
@@ -179,17 +179,17 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
     const session = buildTurnedSession()
     session.append('session/title', {
       title: 'stable title',
-      messageSeqs: [2],
+      messageSeqs: [2 as SessionSeq],
       source: { kind: 'fallback' },
     })
-    const before = foldSessionTitle(session.events)
+    const before = foldSessionTitle(session.snapshotEvents())
     expect(before?.title).toBe('stable title')
 
     const target = session.surface.nodes.find(seq =>
-      session.events.find(e => e.seq === seq)?.type === 'user/message')!
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     applyRewind(session, target)
 
-    const after = foldSessionTitle(session.events)
+    const after = foldSessionTitle(session.snapshotEvents())
     expect(after?.title).toBe('stable title')
     expect(after?.eventSeq).toBe(before?.eventSeq)
   })
@@ -197,9 +197,9 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
   it('title fold over a marker-only tail returns undefined without throwing', () => {
     const session = buildTurnedSession()
     const target = session.surface.nodes.find(seq =>
-      session.events.find(e => e.seq === seq)?.type === 'user/message')!
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     applyRewind(session, target)
-    expect(foldSessionTitle(session.events)).toBeUndefined()
+    expect(foldSessionTitle(session.snapshotEvents())).toBeUndefined()
   })
 
   it('goal fold survives a rewind marker without disturbing the admitted rounds', () => {
@@ -213,7 +213,7 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
       createdAt: 1,
       updatedAt: 1,
     })
-    const before = foldGoal(session.events)
+    const before = foldGoal(session.snapshotEvents())
     expect(before.goal?.id).toBe(GoalId('g-1'))
 
     // One real conversation turn, then a rewind that shadows part of it.
@@ -229,8 +229,8 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
     session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
     applyRewind(session, session.surface.nodes[0]!)
 
-    expect(() => foldGoal(session.events)).not.toThrow()
-    const after = foldGoal(session.events)
+    expect(() => foldGoal(session.snapshotEvents())).not.toThrow()
+    const after = foldGoal(session.snapshotEvents())
     expect(after.goal?.id).toBe(GoalId('g-1'))
     expect(after.roundsStarted).toBe(before.roundsStarted)
   })

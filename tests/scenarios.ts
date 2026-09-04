@@ -12,11 +12,11 @@
  * Running a scenario IS the investigation: every op exercises a real DSH
  * consumer path, and a probe failure surfaces a compatibility gap.
  */
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import { appendToolTurn, appendTurn, applyRewind, simulateCompaction } from './helpers.ts'
+import { appendToolTurn, appendTurn, applyRewind, newMeter, simulateCompaction } from './helpers.ts'
 
 export type ScenarioOp =
   /** One complete conversation turn (auto turn number). */
@@ -47,7 +47,7 @@ export interface ScenarioResult {
 /** Turn numbering follows the harness: next real turn is last turn/start + 1. */
 function nextTurn(session: Session): number {
   let lastStarted = 0
-  for (const event of session.events) {
+  for (const event of session.snapshotEvents()) {
     if (event.type === 'turn/start' && event.data.turn > lastStarted) lastStarted = event.data.turn
   }
   return lastStarted + 1
@@ -56,8 +56,8 @@ function nextTurn(session: Session): number {
 /** Seq of the newest human `user/message` currently on the surface, if any. */
 function latestHumanUserSeq(session: Session): number | null {
   const surface = new Set(session.surface.nodes)
-  for (let i = session.events.length - 1; i >= 0; i--) {
-    const event = session.events[i]!
+  for (let i = session.snapshotEvents().length - 1; i >= 0; i--) {
+    const event = session.snapshotEvents()[i]!
     if (event.type === 'user/message' && event.data.source.kind === 'user' && surface.has(event.seq)) {
       return event.seq
     }
@@ -84,7 +84,7 @@ export function runScenario(ops: readonly ScenarioOp[], name = 'scenario'): Scen
           break
         case 'toolTurn':
           callCounter += 1
-          appendToolTurn(session, nextTurn(session), CallId(`call-${callCounter}`))
+          appendToolTurn(session, nextTurn(session), ToolCallId(`call-${callCounter}`))
           log.push('ok toolTurn')
           break
         case 'rewind': {
@@ -110,8 +110,8 @@ export function runScenario(ops: readonly ScenarioOp[], name = 'scenario'): Scen
           break
         }
         case 'probe': {
-          new TokenMeter(new Context()).measure(session)
-          Session.create(session.id, session.events)
+          newMeter().measure(session)
+          Session.create(session.id, session.snapshotEvents())
           log.push('ok probe')
           break
         }

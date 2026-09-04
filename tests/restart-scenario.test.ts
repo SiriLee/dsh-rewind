@@ -14,30 +14,30 @@
  */
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import { applyRewind, appendToolTurn, appendTurn, assertTurnTailOrdering, buildTurnedSession } from './helpers.ts'
+import { applyRewind, appendToolTurn, appendTurn, assertTurnTailOrdering, buildTurnedSession, newMeter } from './helpers.ts'
 
 /** Restart the host: replay the log through a fresh session (resume preflight). */
 function restart(session: Session): Session {
-  return Session.create(session.id, session.events)
+  return Session.create(session.id, session.snapshotEvents())
 }
 
 /** Probe the invariants over the current session log. */
 function probe(session: Session): void {
   // I1 replayability (token-meter + resume preflight)
-  expect(() => new TokenMeter(new Context()).measure(session)).not.toThrow()
-  expect(() => Session.create(session.id, session.events)).not.toThrow()
+  expect(() => newMeter().measure(session)).not.toThrow()
+  expect(() => Session.create(session.id, session.snapshotEvents())).not.toThrow()
   // I3 turn-tail ordering + step structure
-  expect(() => assertTurnTailOrdering(session.events)).not.toThrow()
+  expect(() => assertTurnTailOrdering(session.snapshotEvents())).not.toThrow()
 }
 
 /** Latest surface human user seq. */
 function latestUserSeq(session: Session): number {
   const surface = new Set(session.surface.nodes)
-  for (let i = session.events.length - 1; i >= 0; i--) {
-    const event = session.events[i]!
+  for (let i = session.snapshotEvents().length - 1; i >= 0; i--) {
+    const event = session.snapshotEvents()[i]!
     if (event.type === 'user/message'
       && (event.data as { source?: { kind?: string } }).source?.kind === 'user'
       && surface.has(event.seq)) return event.seq
@@ -52,7 +52,7 @@ describe('restart flow: rewind -> restart -> continue -> restart -> rewind', () 
 
     // Step 1: rewind to turn 1's question.
     const u1 = session.surface.nodes.find(seq =>
-      session.events.find(e => e.seq === seq)?.type === 'user/message')!
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     applyRewind(session, u1)
     probe(session)
 
@@ -74,10 +74,10 @@ describe('restart flow: rewind -> restart -> continue -> restart -> rewind', () 
 
     // The marker must have reused a turn number that can never collide with a
     // future real turn: the harness numbers the next real turn lastTurn/start+1.
-    const marker = [...session.events].reverse().find(e => e.type === 'assistant/message'
+    const marker = [...session.snapshotEvents()].reverse().find(e => e.type === 'assistant/message'
       && (e.data as { message?: { content?: unknown[] } }).message?.content?.length === 0)!
     const markerTurn = (marker.data as { turn: number }).turn
-    const lastStartedTurn = session.events.findLast(e => e.type === 'turn/start')?.data.turn ?? 0
+    const lastStartedTurn = session.snapshotEvents().findLast(e => e.type === 'turn/start')?.data.turn ?? 0
     expect(markerTurn).toBeLessThanOrEqual(lastStartedTurn)
 
     probe(session)
@@ -85,14 +85,14 @@ describe('restart flow: rewind -> restart -> continue -> restart -> rewind', () 
 
   it('tool-turn flow: rewind, restart, tool turn, restart, rewind', () => {
     let session = buildTurnedSession()
-    appendToolTurn(session, 3, CallId('restart-call'))
+    appendToolTurn(session, 3, ToolCallId('restart-call'))
     probe(session)
 
     applyRewind(session, latestUserSeq(session))
     probe(session)
 
     session = restart(session)
-    appendToolTurn(session, 4, CallId('restart-call-2'))
+    appendToolTurn(session, 4, ToolCallId('restart-call-2'))
     probe(session)
 
     session = restart(session)

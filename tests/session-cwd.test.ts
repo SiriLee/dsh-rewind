@@ -45,6 +45,7 @@ describe('execSessionCwd', () => {
       id: SessionId('cwd-test'),
       createdAt: Date.now(),
       cwd: BASE,
+      isSeeded: false,
     })
     const exec = { agent: { id: session.id, session }, name: 'write' } as unknown as ToolExecution
     expect(execSessionCwd(exec, 'rel.ts')).toBe(BASE)

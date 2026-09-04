@@ -42,15 +42,30 @@ import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
+import { planProjectionDefinition as planProjection } from '@deepseek-ai/dsh-plan-mode'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
 
 const aborted = () => new AbortController().signal
+
+/** Fold rc.1 plan-mode projection over the log: whether plan mode is active. */
+function foldPlanMode(events) {
+  let state = planProjection.init()
+  for (const event of events) state = planProjection.apply(state, event)
+  return planProjection.wire.view(state).active
+}
+
+/** Build a token meter whose context has the session-projections service. */
+function newMeter() {
+  const ctx = new Context()
+  new SessionProjectionRegistry(ctx)
+  return new TokenMeter(ctx)
+}
 
 const tmpRoot = await mkdtemp(join(tmpdir(), 'dsh-rewind-verify-'))
 const wsDir = join(tmpRoot, 'ws')
@@ -107,7 +122,7 @@ const assistant = text => createAssistantMessage({ content: [{ type: 'text', tex
 function buildSession(id, cwd, extra = {}) {
   const session = Session.create(SessionId(id), undefined,
     cwd !== undefined
-      ? { version: 0, id: SessionId(id), createdAt: Date.now(), cwd, ...extra }
+      ? { version: 0, id: SessionId(id), createdAt: Date.now(), cwd, isSeeded: false, ...extra }
       : undefined)
   session.append('user/message', user('first question'), { surfaceOp: 'append' })
   session.append('assistant/message', { turn: 0, step: 0, message: assistant('first answer') }, { surfaceOp: 'append' })
@@ -197,6 +212,7 @@ ctx.provide('sessions', { flush: async () => {} })
 // The real token-meter service (registers itself as ctx.tokenMeter) and a
 // real compaction backend whose ONLY hook is a stubbed summarize() — the
 // manual `/compact` command path needs no LLM.
+new SessionProjectionRegistry(ctx)
 new TokenMeter(ctx)
 class StubCompactionEngine extends BasicCompactionEngine {
   constructor() { super(ctx, { summarizationProvider: 'test', summarizationModel: 'test-model' }) }
@@ -249,7 +265,7 @@ check('bare /rewind succeeds', bareResult.kind === 'success', bareResult.text)
 check('bare /rewind withdraws the latest message', bareAfter.length === 3 && bareAfter[0] === 0 && bareAfter[1] === 1 && bareAfter[2] > 3, `before ${JSON.stringify(bareBefore)} -> after ${JSON.stringify(bareAfter)}`)
 // The marker rides a ghost-step frame (step/start + step/end) so the harness
 // token-meter replay accepts it (issue #2: bare markers break /compact).
-check('log stays append-only (7 events: 4 + marker frame)', session.events.length === 7, `events=${session.events.length}`)
+check('log stays append-only (7 events: 4 + marker frame)', session.snapshotEvents().length === 7, `events=${session.snapshotEvents().length}`)
 
 // 3. /rewind @<seq> chat (the button's exact call form) cuts the surface on a
 //    fresh session
@@ -261,7 +277,7 @@ const after = [...paramSession.surface.nodes]
 check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
 check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
 // Same ghost-step frame as above: 4 seed events + step/start + marker + step/end.
-check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.length === 7, `events=${paramSession.events.length}`)
+check('log stays append-only (7 events: 4 + marker frame)', paramSession.snapshotEvents().length === 7, `events=${paramSession.snapshotEvents().length}`)
 
 // 4. a tracked write commits a before-backup; rewinding both restores the
 //    real file and deletes files created after the target
@@ -272,7 +288,7 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   // dynamically: the shared session already carries the ghost-step marker
   // frame from the bare rewind above, so seqs are not contiguous from 4.
   session.append('user/message', user('third question'), { surfaceOp: 'append' })
-  const anchorSeq = session.events.findLast(event => event.type === 'user/message').seq
+  const anchorSeq = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
   await runWrite(agent, 'c1', aPath, 'rewritten') // before-capture: 'original content'
   const createdPath = join(wsDir, 'created.txt')
   await runWrite(agent, 'c2', createdPath, 'new') // file did not exist: before-capture = created
@@ -315,7 +331,7 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   const deniedSession = buildSession('verify-denied')
   const deniedAgent = makeAgent(deniedSession.id, deniedSession)
   deniedSession.append('user/message', user('denied anchor question'), { surfaceOp: 'append' })
-  const anchorSeq = deniedSession.events.findLast(event => event.type === 'user/message').seq
+  const anchorSeq = deniedSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
   const deniedPath = join(wsDir, 'denied.txt')
   await writeFile(deniedPath, 'x', 'utf8')
   const exec = { callId: 'c3', name: 'write', arguments: { file_path: deniedPath, content: 'denied write' }, agent: deniedAgent, signal: aborted() }
@@ -431,7 +447,7 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
   check('real /compact succeeds after rewind', compactResult.kind === 'success', JSON.stringify(compactResult))
 
-  const events = cs.events
+  const events = cs.snapshotEvents()
   const compStarts = events.filter(e => e.type === 'compaction/start').length
   const compEnds = events.filter(e => e.type === 'compaction/end').length
   check('compaction/start…end pair lands once', compStarts === 1 && compEnds === 1, `start=${compStarts} end=${compEnds}`)
@@ -439,8 +455,8 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   let meterOk = true
   let resumeOk = true
   let framesOk = hasNoDanglingFrames(events)
-  try { new TokenMeter(new Context()).measure(cs) } catch { meterOk = false }
-  try { Session.create(cs.id, cs.events) } catch { resumeOk = false }
+  try { newMeter().measure(cs) } catch { meterOk = false }
+  try { Session.create(cs.id, cs.snapshotEvents()) } catch { resumeOk = false }
   check('token-meter replays rewind+compact log', meterOk, '')
   check('resume preflight replays rewind+compact log', resumeOk, '')
   check('no dangling step/turn frames after rewind+compact', framesOk, '')
@@ -456,10 +472,10 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   const compactDef = commands.get('compact')
   const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
   check('small-surface /compact after rewind is a legal no-op', compactResult.kind === 'success' && /No compactable history/.test(compactResult.text), JSON.stringify(compactResult))
-  const starts = cs.events.filter(e => e.type === 'compaction/start').length
+  const starts = cs.snapshotEvents().filter(e => e.type === 'compaction/start').length
   check('no compaction transaction on the no-op path', starts === 0, `starts=${starts}`)
   let ok = true
-  try { new TokenMeter(new Context()).measure(cs); Session.create(cs.id, cs.events) } catch { ok = false }
+  try { newMeter().measure(cs); Session.create(cs.id, cs.snapshotEvents()) } catch { ok = false }
   check('no-op path stays replayable', ok, '')
 }
 
@@ -480,12 +496,12 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   const compactDef = commands.get('compact')
   const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
   check('second /compact after rewind+turn succeeds', compactResult.kind === 'success', JSON.stringify(compactResult))
-  const pairs = cs.events.filter(e => e.type === 'compaction/start').length === cs.events.filter(e => e.type === 'compaction/end').length
+  const pairs = cs.snapshotEvents().filter(e => e.type === 'compaction/start').length === cs.snapshotEvents().filter(e => e.type === 'compaction/end').length
   check('compaction bookkeeping stays balanced (stress)', pairs, '')
   let ok = true
-  try { new TokenMeter(new Context()).measure(cs); Session.create(cs.id, cs.events) } catch { ok = false }
+  try { newMeter().measure(cs); Session.create(cs.id, cs.snapshotEvents()) } catch { ok = false }
   check('rewind+turn+compact log replays (meter + resume)', ok, '')
-  check('no dangling step/turn frames (stress)', hasNoDanglingFrames(cs.events), '')
+  check('no dangling step/turn frames (stress)', hasNoDanglingFrames(cs.snapshotEvents()), '')
 }
 
 // 14. I5 probe — rewinding to a message shadowed by a compaction checkpoint
@@ -630,20 +646,20 @@ check('log stays append-only (7 events: 4 + marker frame)', paramSession.events.
   // The rewind never touches plan/mode: plan mode stays active after the rewind
   // (the plugin does not auto-cancel). A stray plan/mode{active:false} would
   // mean the rewind wrongly cancelled it.
-  check('plan rewind leaves plan mode active (no auto-cancel)', foldPlanMode(planSession.events) === true, `events=${JSON.stringify(planSession.events.filter(e => e.type === 'plan/mode'))}`)
-  check('plan rewind leaves no dangling step/turn frame', hasNoDanglingFrames(planSession.events), planSession.events.map(e => e.type).join(','))
+  check('plan rewind leaves plan mode active (no auto-cancel)', foldPlanMode(planSession.snapshotEvents()) === true, `events=${JSON.stringify(planSession.snapshotEvents().filter(e => e.type === 'plan/mode'))}`)
+  check('plan rewind leaves no dangling step/turn frame', hasNoDanglingFrames(planSession.snapshotEvents()), planSession.snapshotEvents().map(e => e.type).join(','))
 
   // A manual /plan off after the rewind must still commit (the marker created
   // no open turn, so set(false) is the idle-commit path). Simulate its log
   // effect: appending plan/mode{active:false} flips the fold to inactive.
   planSession.append('plan/mode', { active: false })
-  check('/plan off after rewind turns plan mode off', foldPlanMode(planSession.events) === false, 'post-off fold still active')
+  check('/plan off after rewind turns plan mode off', foldPlanMode(planSession.snapshotEvents()) === false, 'post-off fold still active')
 
   const plainSession = buildSession('verify-plain')
   const plainAgent = makeAgent(plainSession.id, plainSession)
   const plainResult = await call(plainAgent, '@2 chat')
   check('non-plan rewind succeeds', plainResult.kind === 'success', plainResult.text)
-  check('non-plan rewind appends no plan/mode event (no log pollution)', plainSession.events.filter(event => event.type === 'plan/mode').length === 0, plainSession.events.map(e => e.type).join(','))
+  check('non-plan rewind appends no plan/mode event (no log pollution)', plainSession.snapshotEvents().filter(event => event.type === 'plan/mode').length === 0, plainSession.snapshotEvents().map(e => e.type).join(','))
 }
 
 await rm(tmpRoot, { recursive: true, force: true })

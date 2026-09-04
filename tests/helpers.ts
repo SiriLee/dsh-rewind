@@ -6,9 +6,9 @@
  * failure means the plugin's mechanism is incompatible with a real DSH
  * consumer — not a bug in a mock.
  */
-import { CallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, UserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import {
   CompactionId,
   compactCheckpointSource,
@@ -16,6 +16,22 @@ import {
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
 import { markerStepOf, markerTurnOf, planRewind } from '../src/rewind.ts'
+import { Context } from '@deepseek-ai/cordis'
+import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
+import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
+
+/**
+ * Build a token meter whose context has the session-projections service
+ * registered. DSH 0.1.2 (0.1.2-rc.1) made TokenMeter a cordis service that
+ * requires `ctx.sessionProjections`; registering the projection registry on a
+ * fresh context satisfies that, so the probe can `measure()` a session the way
+ * a real harness consumer would.
+ */
+export function newMeter(): TokenMeter {
+  const ctx = new Context()
+  new SessionProjectionRegistry(ctx)
+  return new TokenMeter(ctx)
+}
 
 export function textMessage(text: string): UserMessage {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -54,7 +70,7 @@ export function appendTurn(session: Session, turn: number): void {
  * requires). Shape: user → assistant(tool-call) → tool/call → tool/result →
  * assistant(text) → step/end → turn/end.
  */
-export function appendToolTurn(session: Session, turn: number, callId: CallId): void {
+export function appendToolTurn(session: Session, turn: number, callId: ToolCallId): void {
   session.append('turn/start', { turn })
   session.append('step/start', { turn, step: 1 })
   session.append('user/message', textMessage(`tool question ${turn}`), { surfaceOp: 'append' })
@@ -92,13 +108,13 @@ export function buildTurnedSession(): Session {
  * @returns the marker's log seq.
  */
 export function applyRewind(session: Session, targetSeq: number): number {
-  const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const turn = markerTurnOf(session.events)
-  const step = markerStepOf(session.events, turn)
+  const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
+  const turn = markerTurnOf(session.snapshotEvents())
+  const step = markerStepOf(session.snapshotEvents(), turn)
   session.append('step/start', { turn, step })
   const event = session.append('assistant/message', { turn, step, message: emptyMarker() }, {
-    surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-    sourceEventSeqs: [...plan.shadowedSeqs],
+    surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+    sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
   session.append('step/end', { turn, step })
   return event.seq
@@ -113,15 +129,15 @@ export function applyRewind(session: Session, targetSeq: number): number {
 export function simulateCompaction(session: Session, start: number, end: number): void {
   expectBalance(session, start, end)
   const nodes = session.surface.nodes
-  const startIdx = nodes.indexOf(start)
-  const endIdx = nodes.indexOf(end)
+  const startIdx = nodes.indexOf(start as SessionSeq)
+  const endIdx = nodes.indexOf(end as SessionSeq)
   const shadowedSeqs = nodes.slice(startIdx, endIdx + 1)
   const compactionId = CompactionId(`comp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
   const startEvent = session.append('compaction/start', { compactionId, turn: null })
   const summaryEvent = session.append('compaction/summary', {
     compactionId,
     summary: [{ type: 'text', text: 'summarized' }],
-    shadowedRange: { start, end },
+    shadowedRange: { start: start as SessionSeq, end: end as SessionSeq },
     shadowedSeqs,
     shadowedTokenCount: 7,
     provider: 'test',
@@ -131,7 +147,7 @@ export function simulateCompaction(session: Session, start: number, end: number)
     content: [{ type: 'text', text: 'summary' }],
     source: compactCheckpointSource(compactionId),
   }), {
-    surfaceOp: { op: 'replace', start, end },
+    surfaceOp: { op: 'replace', start: start as SessionSeq, end: end as SessionSeq },
     sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs],
   })
   session.append('compaction/end', { compactionId, turn: null })
@@ -139,8 +155,8 @@ export function simulateCompaction(session: Session, start: number, end: number)
 
 /** Assert the tool-pairing balance the compaction region validator requires. */
 export function expectBalance(session: Session, start: number, end: number): void {
-  const before = toolPairingBalancedBefore(session, start)
-  const after = toolPairingBalancedAfter(session, end)
+  const before = toolPairingBalancedBefore(session, start as SessionSeq)
+  const after = toolPairingBalancedAfter(session, end as SessionSeq)
   if (before !== true || after !== true) {
     throw new Error(`tool-pairing balance violated at [${start}, ${end}]: before=${before} after=${after}`)
   }

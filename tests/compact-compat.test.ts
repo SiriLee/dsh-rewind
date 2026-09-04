@@ -21,7 +21,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import {
   CompactionId,
@@ -30,6 +30,7 @@ import {
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
 import { markerStepOf, markerTurnOf, planRewind } from '../src/rewind.ts'
+import { newMeter } from './helpers.ts'
 
 function textMessage(text: string) {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -73,13 +74,13 @@ function buildTurnedSession(): Session {
  * @returns the marker's log seq.
  */
 function applyRewind(session: Session, targetSeq: number): number {
-  const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const turn = markerTurnOf(session.events)
-  const step = markerStepOf(session.events, turn)
+  const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
+  const turn = markerTurnOf(session.snapshotEvents())
+  const step = markerStepOf(session.snapshotEvents(), turn)
   session.append('step/start', { turn, step })
   const event = session.append('assistant/message', { turn, step, message: emptyMarker() }, {
-    surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-    sourceEventSeqs: [...plan.shadowedSeqs],
+    surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+    sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
   session.append('step/end', { turn, step })
   return event.seq
@@ -92,18 +93,18 @@ function applyRewind(session: Session, targetSeq: number): number {
  * `validateSurfaceRegion` does.
  */
 function simulateCompaction(session: Session, start: number, end: number): void {
-  expect(toolPairingBalancedBefore(session, start)).toBe(true)
-  expect(toolPairingBalancedAfter(session, end)).toBe(true)
+  expect(toolPairingBalancedBefore(session, start as SessionSeq)).toBe(true)
+  expect(toolPairingBalancedAfter(session, end as SessionSeq)).toBe(true)
   const nodes = session.surface.nodes
-  const startIdx = nodes.indexOf(start)
-  const endIdx = nodes.indexOf(end)
+  const startIdx = nodes.indexOf(start as SessionSeq)
+  const endIdx = nodes.indexOf(end as SessionSeq)
   const shadowedSeqs = nodes.slice(startIdx, endIdx + 1)
   const compactionId = CompactionId(`comp-${Date.now()}`)
   const startEvent = session.append('compaction/start', { compactionId, turn: null })
   const summaryEvent = session.append('compaction/summary', {
     compactionId,
     summary: [{ type: 'text', text: 'summarized' }],
-    shadowedRange: { start, end },
+    shadowedRange: { start: start as SessionSeq, end: end as SessionSeq },
     shadowedSeqs,
     shadowedTokenCount: 7,
     provider: 'test',
@@ -113,7 +114,7 @@ function simulateCompaction(session: Session, start: number, end: number): void 
     content: [{ type: 'text', text: 'summary' }],
     source: compactCheckpointSource(compactionId),
   }), {
-    surfaceOp: { op: 'replace', start, end },
+    surfaceOp: { op: 'replace', start: start as SessionSeq, end: end as SessionSeq },
     sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs],
   })
   session.append('compaction/end', { compactionId, turn: null })
@@ -128,13 +129,13 @@ describe('compact compatibility (issue #2 regression)', () => {
   it('token-meter replay passes with the ghost-step marker (bare markers throw)', () => {
     const session = buildTurnedSession()
     applyRewind(session, 8) // rewind to turn 2's question (seq 8)
-    const meter = new TokenMeter(new Context())
+    const meter = newMeter()
     expect(() => meter.measure(session)).not.toThrow()
     const measurement = meter.measure(session)
     // Surface [user1, assistant1, marker]: the marker is empty → 0 tokens,
     // and the meter prices exactly the on-surface nodes.
-    expect(measurement.nodes.map(n => n.seq)).toEqual([2, 3, session.events.at(-2)!.seq])
-    expect(measurement.nodes.find(n => n.seq === session.events.at(-2)!.seq)!.tokens).toBe(0)
+    expect(measurement.nodes.map(n => n.seq)).toEqual([2, 3, session.snapshotEvents().at(-2)!.seq])
+    expect(measurement.nodes.find(n => n.seq === session.snapshotEvents().at(-2)!.seq)!.tokens).toBe(0)
   })
 
   it('agent context is byte-identical to the pre-v0.3.4 bare marker (same surface)', () => {
@@ -143,10 +144,10 @@ describe('compact compatibility (issue #2 regression)', () => {
     // The pre-v0.3.4 shape: the same marker WITHOUT the step frame. Same
     // surface → the model must see exactly the same messages.
     const bare = buildTurnedSession()
-    const plan = planRewind(bare.events, bare.surface.nodes, { kind: 'seq', seq: 8 })
-    bare.append('assistant/message', { turn: markerTurnOf(bare.events), step: 1, message: emptyMarker() }, {
-      surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-      sourceEventSeqs: [...plan.shadowedSeqs],
+    const plan = planRewind(bare.snapshotEvents(), bare.surface.nodes, { kind: 'seq', seq: 8 })
+    bare.append('assistant/message', { turn: markerTurnOf(bare.snapshotEvents()), step: 1, message: emptyMarker() }, {
+      surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+      sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
     })
     expect([...ghost.surface.nodes].length).toBe([...bare.surface.nodes].length)
     expect(contentOf(ghost.deriveMessages())).toEqual(contentOf(bare.deriveMessages()))
@@ -158,8 +159,8 @@ describe('compact compatibility (issue #2 regression)', () => {
     applyRewind(session, 8)
     const nodes = [...session.surface.nodes] // [user1, assistant1, marker]
     simulateCompaction(session, nodes[0]!, nodes[nodes.length - 1]!)
-    const measurement = new TokenMeter(new Context()).measure(session)
-    expect(measurement.nodes.map(n => n.seq)).toEqual([session.events.at(-2)!.seq])
+    const measurement = newMeter().measure(session)
+    expect(measurement.nodes.map(n => n.seq)).toEqual([session.snapshotEvents().at(-2)!.seq])
   })
 
   it('multi-rewind + interleaved real turns + compaction stays replayable', () => {
@@ -169,7 +170,7 @@ describe('compact compatibility (issue #2 regression)', () => {
     applyRewind(session, 2) // back to turn 1's question
     appendTurn(session, 4) // real turn 4
 
-    const meter = new TokenMeter(new Context())
+    const meter = newMeter()
     expect(() => meter.measure(session)).not.toThrow()
     const before = meter.measure(session)
 
@@ -186,7 +187,7 @@ describe('compact compatibility (issue #2 regression)', () => {
     appendTurn(session, 3)
     applyRewind(session, 2)
     const seen = new Set<string>()
-    for (const event of session.events) {
+    for (const event of session.snapshotEvents()) {
       if (event.type !== 'step/start') continue
       const key = `${event.data.turn}:${event.data.step}`
       expect(seen.has(key)).toBe(false)

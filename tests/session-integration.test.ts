@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionEvent, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { markerStepOf, markerTurnOf, planRewind } from '../src/rewind.ts'
 
 function textMessage(text: string) {
@@ -44,12 +44,12 @@ function emptyMarker(): AssistantMessage {
  * fail with "received more than one start Match".
  */
 function applyRewind(session: Session, plan: ReturnType<typeof planRewind>): number {
-  const turn = markerTurnOf(session.events)
-  const step = markerStepOf(session.events, turn)
+  const turn = markerTurnOf(session.snapshotEvents())
+  const step = markerStepOf(session.snapshotEvents(), turn)
   session.append('step/start', { turn, step })
   const event = session.append('assistant/message', { turn, step, message: emptyMarker() }, {
-    surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-    sourceEventSeqs: [...plan.shadowedSeqs],
+    surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+    sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
   session.append('step/end', { turn, step })
   return event.seq
@@ -72,7 +72,7 @@ function buildSession(): Session {
  * or the runtime throws "…turn-tail<T> received an update before its start
  * Match" and history load fails. Throws when the invariant is violated.
  */
-function assertTurnTailOrdering(events: Session['events']): void {
+function assertTurnTailOrdering(events: readonly SessionEvent[]): void {
   const firstRole = new Map<string, 'start' | 'update'>()
   for (const event of events) {
     let id: string | undefined
@@ -116,7 +116,7 @@ describe('in-place rewind over a real session', () => {
     const session = buildSession()
     expect([...session.surface.nodes]).toEqual([0, 1, 2, 3])
 
-    const plan = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
+    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'index', index: 1 })
     expect(plan.targetSeq).toBe(2)
     expect(plan.shadowedSeqs).toEqual([2, 3])
 
@@ -124,7 +124,7 @@ describe('in-place rewind over a real session', () => {
 
     // The log stays append-only (audit trail intact); the ghost step frame
     // adds step/start + step/end around the marker.
-    expect(session.events).toHaveLength(7)
+    expect(session.snapshotEvents()).toHaveLength(7)
     expect(markerSeq).toBe(5)
 
     // The surface ends at the (unrendered, empty) marker.
@@ -140,9 +140,9 @@ describe('in-place rewind over a real session', () => {
   it('regression: a rewind followed by the harness next turn never violates turn-tail ordering (history-load crash)', () => {
     const session = buildTurnedSession()
     // Rewind to the first user message (turn 1).
-    const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: 1 })
+    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: 1 })
     const markerSeq = applyRewind(session, plan)
-    const marker = session.events.find(event => event.seq === markerSeq)!
+    const marker = session.snapshotEvents().find(event => event.seq === markerSeq)!
     expect(marker.type).toBe('assistant/message')
     expect((marker as { data: { turn: number } }).data.turn).toBe(2)
 
@@ -159,7 +159,7 @@ describe('in-place rewind over a real session', () => {
     // The marker (turn 2) must never share a turn number with a later
     // turn/start — the ordering replay above must pass.
     expect((marker as { data: { turn: number } }).data.turn).not.toBe(3)
-    expect(() => assertTurnTailOrdering(session.events)).not.toThrow()
+    expect(() => assertTurnTailOrdering(session.snapshotEvents())).not.toThrow()
 
     // The rewind cut still holds on the model-visible surface: only the
     // follow-up turn remains (the marker derives to null).
@@ -170,13 +170,13 @@ describe('in-place rewind over a real session', () => {
 
   it('keeps rewinding after a rewind (rewind can itself be rewound)', () => {
     const session = buildSession()
-    const first = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
+    const first = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'index', index: 1 })
     applyRewind(session, first)
     expect([...session.surface.nodes]).toEqual([0, 1, 5])
 
     // Rewind again, to the first user message: everything (incl. the marker
     // and the first message itself) is withdrawn.
-    const second = planRewind(session.events, session.surface.nodes, { kind: 'index', index: 1 })
+    const second = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'index', index: 1 })
     expect(second.targetSeq).toBe(0)
     expect(second.shadowedSeqs).toEqual([0, 1, 5])
     const markerSeq = applyRewind(session, second)
@@ -190,7 +190,7 @@ describe('in-place rewind over a real session', () => {
     open.append('user/message', textMessage('oops, sent by mistake'), { surfaceOp: 'append' })
     expect([...open.surface.nodes]).toEqual([0, 1])
 
-    const withdraw = planRewind(open.events, open.surface.nodes, { kind: 'seq', seq: 1 })
+    const withdraw = planRewind(open.snapshotEvents(), open.surface.nodes, { kind: 'seq', seq: 1 })
     expect(withdraw.shadowedSeqs).toEqual([1])
     applyRewind(open, withdraw)
     expect([...open.surface.nodes]).toEqual([0, 3])
@@ -203,7 +203,7 @@ describe('in-place rewind over a real session', () => {
 
   it('survives a rewind followed by new user traffic', () => {
     const session = buildSession()
-    const plan = planRewind(session.events, session.surface.nodes, { kind: 'seq', seq: 0 })
+    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: 0 })
     const markerSeq = applyRewind(session, plan)
     session.append('user/message', textMessage('follow-up question'), { surfaceOp: 'append' })
     const messages = session.deriveMessages()

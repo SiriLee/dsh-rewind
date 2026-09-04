@@ -30,7 +30,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import type { AssistantMessage, Session, SessionEvent } from '@deepseek-ai/dsh-session'
+import type { AssistantMessage, Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
 // Namespace import (not a named import) so the host bundle links on BOTH ends
@@ -42,7 +42,7 @@ import * as dshSettings from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { eventsOf } from './session-events.ts'
-import { readSettingsSection } from './settings-locale.ts'
+import { readSettingsSection, type SettingsNamespaceBrand } from './settings-locale.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
@@ -535,8 +535,8 @@ async function executeRewind(
       agent.session.append('step/start', { turn, step })
       try {
         event = agent.session.append('assistant/message', { turn, step, message: marker }, {
-          surfaceOp: { op: 'replace', start: plan.surfaceStart, end: plan.surfaceEnd },
-          sourceEventSeqs: [...plan.shadowedSeqs],
+          surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+          sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
         })
       } catch (error) {
         // The step/start above already committed; close the ghost step so the
@@ -939,7 +939,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     const section = readSettingsSection(
       settingsCtx.settings as unknown as { get(ns: string): unknown },
       'locale',
-      dshSettings.settingsNamespace,
+      (dshSettings as unknown as { settingsNamespace?: SettingsNamespaceBrand }).settingsNamespace,
     ) as
       | { preference?: HostLocaleId }
       | undefined

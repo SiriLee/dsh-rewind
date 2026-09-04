@@ -18,12 +18,12 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { foldSurface } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { apply as applySessionStats } from '@deepseek-ai/dsh-session-stats'
-import { applyRewind, buildTurnedSession, textMessage } from './helpers.ts'
+import { applyRewind, buildTurnedSession, newMeter, textMessage } from './helpers.ts'
 
 /** A framed turn whose assistant step reports provider usage and a request header. */
 function appendUsageTurn(session: Session, turn: number, inputTokens: number, outputTokens: number): void {
@@ -54,7 +54,7 @@ function buildUsageSession(): Session {
 /** First human user-message seq on the surface (rewind target for turn 1). */
 function firstUserSeq(session: Session): number {
   const surface = new Set(session.surface.nodes)
-  for (const event of session.events) {
+  for (const event of session.snapshotEvents()) {
     if (event.type === 'user/message' && event.data.source.kind === 'user' && surface.has(event.seq)) {
       return event.seq
     }
@@ -68,12 +68,12 @@ describe('G1 surface classification (probe: foldSurface transitions)', () => {
     const target = firstUserSeq(session)
     const markerSeq = applyRewind(session, target)
 
-    const { nodes, replacements } = foldSurface(session.events)
+    const { nodes, replacements } = foldSurface(session.snapshotEvents())
     const current = new Set(nodes)
     const shadowed = new Set(replacements.flatMap(r => r.shadowedSeqs))
 
     // The marker is on the current surface.
-    expect(current.has(markerSeq)).toBe(true)
+    expect(current.has(markerSeq as SessionSeq)).toBe(true)
     // The rewound target and everything after it are shadowed.
     const surface = [...session.surface.nodes]
     for (const seq of surface) {
@@ -82,7 +82,7 @@ describe('G1 surface classification (probe: foldSurface transitions)', () => {
     }
     // Ghost-frame events (step/start, step/end) are neither current nor
     // shadowed — they classify as log-only in the session-query vocabulary.
-    const ghostEvents = session.events.filter(e =>
+    const ghostEvents = session.snapshotEvents().filter(e =>
       (e.type === 'step/start' || e.type === 'step/end') && e.seq > markerSeq - 3)
     expect(ghostEvents.length).toBeGreaterThan(0)
     for (const event of ghostEvents) {
@@ -104,12 +104,12 @@ describe('G2 projection checkpoint (probe: SessionProjectionRegistry.checkpoint)
     // or persisted-cache restore would). A seeded rebuild appends its own
     // `session/end-seed` marker, so the watermark is measured on the rebuilt
     // log.
-    const rebuilt = Session.create(session.id, session.events)
+    const rebuilt = Session.create(session.id, session.snapshotEvents())
     const rows = ctx.sessionProjections.checkpoint(rebuilt)
     const stats = rows.sessionStats!
     expect(stats).toBeDefined()
     expect(stats.ver).toBeGreaterThanOrEqual(0)
-    expect(stats.seq).toBe(rebuilt.events.length - 1)
+    expect(stats.seq).toBe(rebuilt.snapshotEvents().length - 1)
     // The state is plain JSON per the unit contract.
     expect(() => JSON.stringify(rows)).not.toThrow()
   })
@@ -118,7 +118,7 @@ describe('G2 projection checkpoint (probe: SessionProjectionRegistry.checkpoint)
 describe('G3 token-meter usage anchor (probe: baseline behavior around rewind)', () => {
   it('baseline is usage before, heuristic after a rewind, and restored by the next real turn', () => {
     const session = buildUsageSession()
-    const meter = new TokenMeter(new Context())
+    const meter = newMeter()
 
     expect(meter.measure(session).baseline.kind).toBe('usage')
 
