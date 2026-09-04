@@ -27,7 +27,6 @@ import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
 import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { apply as applySessionStats } from '@deepseek-ai/dsh-session-stats'
-import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { applyRewind, assistantMessage, assertTurnTailOrdering, buildTurnedSession, newMeter, textMessage } from './helpers.ts'
 import { runScenario, SCENARIOS } from './scenarios.ts'
 

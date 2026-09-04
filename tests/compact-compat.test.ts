@@ -19,10 +19,8 @@
  * number (`markerStepOf`).
  */
 import { describe, expect, it } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
-import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import {
   CompactionId,
   compactCheckpointSource,

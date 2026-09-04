@@ -13,9 +13,7 @@
  * consumer path, and a probe failure surfaces a compatibility gap.
  */
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { appendToolTurn, appendTurn, applyRewind, newMeter, simulateCompaction } from './helpers.ts'
 
 export type ScenarioOp =

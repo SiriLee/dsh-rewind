@@ -13,10 +13,8 @@
  *       turn-tail ordering and one-start-per-step rules.
  */
 import { describe, expect, it } from 'vitest'
-import { Context } from '@deepseek-ai/cordis'
 import { ToolCallId, createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { toolPairingBalancedAfter, toolPairingBalancedBefore } from '@deepseek-ai/dsh-compaction'
 import { RewindError, planRewind } from '../src/rewind.ts'
 import {
