@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  *
  * Composer-refill probes (SiriLee/dsh-rewind#9). v0.6.1's refill only wrote to
- * the rc.2 `<textarea>`; harness 0.1.2-alpha.1 replaced the composer with a
+ * the 0.1.1 `<textarea>`; on the 0.1.2 line the composer was replaced with a
  * Lexical `contenteditable` div, so the withdrawn target text silently never
  * reached the editor. These cases pin the dual-channel `fillComposer` /
  * `writeComposer` / `composerText` so both channels restore the text and the
@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composerText, fillComposer, writeComposer } from '../src/client/portals.tsx'
 
-/** Build the rc.2 `<textarea>` inside a `[data-input-scroll]` container. */
+/** Build the 0.1.1 `<textarea>` inside a `[data-input-scroll]` container. */
 function addTextarea(value = ''): HTMLTextAreaElement {
   const scroll = document.createElement('div')
   scroll.setAttribute('data-input-scroll', '')
@@ -26,7 +26,7 @@ function addTextarea(value = ''): HTMLTextAreaElement {
   return textarea
 }
 
-/** Build the alpha.1 `[data-composer-input]` contenteditable div. */
+/** Build the 0.1.2 `[data-composer-input]` contenteditable div. */
 function addEditable(text = ''): HTMLElement {
   const editable = document.createElement('div')
   editable.setAttribute('data-composer-input', '')
@@ -42,7 +42,7 @@ afterEach(() => {
 })
 
 describe('fillComposer (dual-channel DOM write)', () => {
-  it('writes the rc.2 <textarea> through the native setter, dispatches input, focuses', () => {
+  it('writes the 0.1.1 <textarea> through the native setter, dispatches input, focuses', () => {
     const textarea = addTextarea('old')
     const onInput = vi.fn()
     textarea.addEventListener('input', () => onInput())
@@ -53,7 +53,7 @@ describe('fillComposer (dual-channel DOM write)', () => {
     expect(document.activeElement).toBe(textarea)
   })
 
-  it('writes the alpha.1 contenteditable through execCommand insertText', () => {
+  it('writes the 0.1.2 contenteditable through execCommand insertText', () => {
     const editable = addEditable('old')
     if (typeof document.execCommand !== 'function') {
       Object.defineProperty(document, 'execCommand', { value: () => false, configurable: true })
@@ -109,12 +109,12 @@ describe('writeComposer (facade-aware dual channel)', () => {
 })
 
 describe('composerText (dual-channel draft read)', () => {
-  it('reads the rc.2 textarea value', () => {
+  it('reads the 0.1.1 textarea value', () => {
     addTextarea('draft')
     expect(composerText()).toBe('draft')
   })
 
-  it('reads the alpha.1 contenteditable textContent', () => {
+  it('reads the 0.1.2 contenteditable textContent', () => {
     addEditable('draft')
     expect(composerText()).toBe('draft')
   })

@@ -71,7 +71,7 @@ function fakeSession() {
 /**
  * A fake session that does NOT append the executed rewind node inside
  * `command`: the first check misses, and the refill only proceeds once the
- * chat-update `watch` fires (alpha.1+ signal path). Exposes a manual trigger.
+ * chat-update `watch` fires (0.1.2 signal path). Exposes a manual trigger.
  */
 function fakeSessionControlled() {
   let chat = makeChat([userNode(TARGET)])
@@ -155,7 +155,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     expect(setComposerText).not.toHaveBeenCalled()
   })
 
-  it('refills after the chat-update watch fires (alpha signal path: the first check misses)', async () => {
+  it('refills after the chat-update watch fires (0.1.2 signal path: the first check misses)', async () => {
     const { session, chatOf, command, watch, settleChat, getTrigger } = fakeSessionControlled()
     const setComposerText = vi.fn(() => true)
     const call = runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)

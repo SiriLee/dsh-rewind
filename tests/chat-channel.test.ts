@@ -1,30 +1,30 @@
 /**
- * Chat-channel compatibility probes (SiriLee/dsh-rewind#7). Since harness
- * 0.1.2-alpha.1 the chat snapshot moved off the session face into the
+ * Chat-channel compatibility probes (SiriLee/dsh-rewind#7). On the 0.1.2
+ * line the chat snapshot moved off the session face into the
  * `uiConversation` service's named "chat" view (contributed by
  * dsh-client-ui-chat). The plugin reads BOTH channels through
- * `chatSnapshotOf`; these probes lock the channel precedence and the alpha.1
+ * `chatSnapshotOf`; these probes lock the channel precedence and the 0.1.2
  * snapshot shape (Map-like nodes, extra `locations` field) flowing through
  * the hiding logic untouched.
  */
 import { describe, expect, it } from 'vitest'
 import { chatSnapshotOf, hiddenSeqsOf, type HiddenChat } from '../src/client/hidden.ts'
 
-/** A face whose snapshot carries the rc.2 `chat` field. */
+/** A face whose snapshot carries the 0.1.1 `chat` field. */
 const faceWith = (chat: unknown) => ({ getSnapshot: () => ({ chat }) })
 
-/** The alpha.1 face: the chat field is gone entirely (reads undefined). */
-const faceAlpha1 = faceWith(undefined)
+/** The 0.1.2 face: the chat field is gone entirely (reads undefined). */
+const face012 = faceWith(undefined)
 
-/** The alpha.1 EMPTY_CHAT_SNAPSHOT shape (dsh-client-ui-chat): Map-like nodes. */
-const EMPTY_CHAT_SNAPSHOT_ALPHA1 = {
+/** The 0.1.2 EMPTY_CHAT_SNAPSHOT shape (dsh-client-ui-chat): Map-like nodes. */
+const EMPTY_CHAT_SNAPSHOT_012 = {
   order: [],
   nodes: { get: () => undefined, values: () => [] },
   locations: { get: () => undefined },
 }
 
-/** A minimal populated chat snapshot in the same Map-like alpha.1 shape. */
-const chatAlpha1 = (order: string[], nodes: Map<string, unknown>) => ({
+/** A minimal populated chat snapshot in the same Map-like 0.1.2 shape. */
+const chat012 = (order: string[], nodes: Map<string, unknown>) => ({
   order,
   nodes: { get: (key: string) => nodes.get(key), values: () => [...nodes.values()] },
   locations: { get: () => undefined },
@@ -32,32 +32,32 @@ const chatAlpha1 = (order: string[], nodes: Map<string, unknown>) => ({
 
 const viewOf = (snapshot: unknown) => ({ getSnapshot: () => snapshot })
 
-describe('chat channel precedence (rc.2 face vs alpha.1+ uiConversation view)', () => {
-  it('reads the rc.2 session-face chat first', () => {
+describe('chat channel precedence (0.1.1 face vs 0.1.2 uiConversation view)', () => {
+  it('reads the 0.1.1 session-face chat first', () => {
     const chat: HiddenChat = { order: [], nodes: { get: () => undefined } }
-    expect(chatSnapshotOf(faceWith(chat), viewOf(EMPTY_CHAT_SNAPSHOT_ALPHA1))).toBe(chat)
+    expect(chatSnapshotOf(faceWith(chat), viewOf(EMPTY_CHAT_SNAPSHOT_012))).toBe(chat)
   })
 
-  it('falls through an alpha.1 face (chat === undefined) to the uiConversation view', () => {
+  it('falls through a 0.1.2 face (chat === undefined) to the uiConversation view', () => {
     const chat: HiddenChat = { order: [], nodes: { get: () => undefined } }
-    expect(chatSnapshotOf(faceAlpha1, viewOf(chat))).toBe(chat)
+    expect(chatSnapshotOf(face012, viewOf(chat))).toBe(chat)
   })
 
   it('falls through an unregistered view (getSnapshot() === undefined)', () => {
     const chat: HiddenChat = { order: [], nodes: { get: () => undefined } }
-    expect(chatSnapshotOf(faceAlpha1, viewOf(undefined))).toBe(undefined)
-    // rc.2 face + not-yet-registered view still serves the face snapshot.
+    expect(chatSnapshotOf(face012, viewOf(undefined))).toBe(undefined)
+    // 0.1.1 face + not-yet-registered view still serves the face snapshot.
     expect(chatSnapshotOf(faceWith(chat), viewOf(undefined))).toBe(chat)
   })
 
   it('degrades to undefined when no channel has a chat', () => {
-    expect(chatSnapshotOf(faceAlpha1, undefined)).toBe(undefined)
+    expect(chatSnapshotOf(face012, undefined)).toBe(undefined)
     expect(chatSnapshotOf(undefined, viewOf(undefined))).toBe(undefined)
     expect(chatSnapshotOf(undefined, undefined)).toBe(undefined)
   })
 
-  it('accepts the alpha.1 EMPTY_CHAT_SNAPSHOT shape (Map-like nodes, locations)', () => {
-    const snapshot = chatSnapshotOf(faceAlpha1, viewOf(EMPTY_CHAT_SNAPSHOT_ALPHA1))
+  it('accepts the 0.1.2 EMPTY_CHAT_SNAPSHOT shape (Map-like nodes, locations)', () => {
+    const snapshot = chatSnapshotOf(face012, viewOf(EMPTY_CHAT_SNAPSHOT_012))
     expect(snapshot).toBeDefined()
     expect(snapshot!.order).toEqual([])
     expect(snapshot!.nodes.get('missing')).toBeUndefined()
@@ -65,7 +65,7 @@ describe('chat channel precedence (rc.2 face vs alpha.1+ uiConversation view)', 
     expect(hiddenSeqsOf(snapshot!)).toEqual(new Set())
   })
 
-  it('runs the hiding logic over an alpha.1-shaped populated snapshot', () => {
+  it('runs the hiding logic over a 0.1.2-shaped populated snapshot', () => {
     // One executed /rewind @5 chat command (marker seq 7) + messages 1..9.
     const command = {
       kind: 'command',
@@ -77,7 +77,7 @@ describe('chat channel precedence (rc.2 face vs alpha.1+ uiConversation view)', 
     const nodes = new Map<string, unknown>(order.map(key => [key, node(Number(key[1]))]))
     nodes.set('c7', command)
     order.push('c7')
-    const snapshot = chatSnapshotOf(faceAlpha1, viewOf(chatAlpha1(order, nodes)))!
+    const snapshot = chatSnapshotOf(face012, viewOf(chat012(order, nodes)))!
     // Message anchors 5..7 sit inside the rewind's [target, marker] span.
     expect(hiddenSeqsOf(snapshot)).toEqual(new Set([5, 6, 7]))
   })

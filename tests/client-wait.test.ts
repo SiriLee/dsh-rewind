@@ -3,11 +3,11 @@
  *
  * `waitForCommand` wait-signal probes (SiriLee/dsh-rewind#14): a waiting caller
  * must be woken when the CHAT snapshot changes, not only by the session
- * face's `subscribe`. On alpha.1+ the chat moved off the session face into the
+ * face's `subscribe`. On the 0.1.2 line the chat moved off the session face into the
  * `uiConversation` view, so the face no longer fires on a chat update; the fix
  * lets a caller pass a `watch` bound to that view. These tests lock the four
- * behaviors: first-check hit, watch-triggered hit (the alpha signal path), the
- * default session face fallback (rc.2), and timeout.
+ * behaviors: first-check hit, watch-triggered hit (the 0.1.2 signal path), the
+ * default session face fallback (0.1.1), and timeout.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatConversationViewNode, CommandNode, SessionFace } from '../src/client/dsh-types.ts'
@@ -75,7 +75,7 @@ describe('waitForCommand wait signal', () => {
     expect(outcome).toEqual({ kind: 'success', text: OUTCOME_TEXT })
   })
 
-  it('is woken by the passed watch when the first check misses (alpha chat-update signal)', async () => {
+  it('is woken by the passed watch when the first check misses (0.1.2 chat-update signal)', async () => {
     const { session, chatOf, settleChatWithOutcome } = makeFake()
     const callbacks: Array<() => void> = []
     const watch = (cb: () => void): (() => void) => {
@@ -85,18 +85,18 @@ describe('waitForCommand wait signal', () => {
     // First check runs synchronously but finds no outcome yet -> waits on watch.
     const pending = waitForCommand(session, chatOf, matchExecuted, 8000, watch)
     expect(callbacks).toHaveLength(1)
-    // The chat snapshot updates (as on alpha.1+), then the watch fires.
+    // The chat snapshot updates (as on the 0.1.2 line), then the watch fires.
     settleChatWithOutcome()
     for (const cb of callbacks) cb()
     await expect(pending).resolves.toEqual({ kind: 'success', text: OUTCOME_TEXT })
   })
 
-  it('falls back to the session face subscribe when no watch is passed (rc.2 signal)', async () => {
+  it('falls back to the session face subscribe when no watch is passed (0.1.1 signal)', async () => {
     const { session, chatOf, settleChatWithOutcome, getSubscribeCb } = makeFake()
     const pending = waitForCommand(session, chatOf, matchExecuted, 8000)
     expect(session.subscribe).toHaveBeenCalledTimes(1)
     // The session-face subscription is the wait signal: fire its callback after
-    // the chat rolls in, mirroring rc.2 where a chat update invalidates the face.
+    // the chat rolls in, mirroring 0.1.1 where a chat update invalidates the face.
     settleChatWithOutcome()
     getSubscribeCb()?.()
     await expect(pending).resolves.toEqual({ kind: 'success', text: OUTCOME_TEXT })
