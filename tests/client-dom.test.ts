@@ -36,14 +36,14 @@ function chatWith(entries: Array<[string, unknown]>): HiddenChat {
 
 /** Append a user/steering row whose actions-root last child is an actions
  * container with a `<button>` — the shape the collector accepts. The wrapper
- * attribute is dual-channel: DSH ≤ 0.1.1-rc.x used `data-time-hover-root`,
- * 0.1.2-alpha.2+ uses `data-actions-reveal`. */
-function addRow(kind: string, key: string, withButton = true, actionsRootAttr = 'data-time-hover-root'): HTMLElement {
+ * attribute is `data-time-hover-root`, the rc.2 user-row channel; the rc.1
+ * structural channel is exercised by `addRowRc1`/`addRowRc1Image`. */
+function addRow(kind: string, key: string, withButton = true): HTMLElement {
   const row = document.createElement('div')
   row.dataset.chatFlowKind = kind
   row.dataset.chatAnchorKey = key
   const root = document.createElement('div')
-  root.setAttribute(actionsRootAttr, '')
+  root.setAttribute('data-time-hover-root', '')
   const bubble = document.createElement('div')
   bubble.textContent = 'bubble'
   const actions = document.createElement('div')
@@ -59,12 +59,12 @@ function addRow(kind: string, key: string, withButton = true, actionsRootAttr = 
   return actions
 }
 
-/** alpha.4 (0.1.2-alpha.4) seat shape: the user row carries NO
- * `data-actions-reveal` / `data-time-hover-root` marker (that marker now lives
- * only on the per-turn tail footer, `TurnTailNodeView`); the actions container
- * is the LAST child of the message row and directly holds the copy `<button>`.
- * `pending` marks the row `data-pending-steering` for the pending collector. */
-function addRowAlpha4(kind: string, key: string, opts: { withButton?: boolean; pending?: boolean } = {}): HTMLElement {
+/** rc.1 (0.1.2-rc.1) seat shape: the user row carries NO `data-time-hover-root`
+ * marker (that marker now lives only on the per-turn tail footer,
+ * `TurnTailNodeView`); the actions container is the LAST child of the message
+ * row and directly holds the copy `<button>`. `pending` marks the row
+ * `data-pending-steering` for the pending collector. */
+function addRowRc1(kind: string, key: string, opts: { withButton?: boolean; pending?: boolean } = {}): HTMLElement {
   const { withButton = true, pending = false } = opts
   const row = document.createElement('div')
   row.dataset.chatFlowKind = kind
@@ -86,12 +86,12 @@ function addRowAlpha4(kind: string, key: string, opts: { withButton?: boolean; p
   return actions
 }
 
-/** alpha.4 (0.1.2-alpha.4/5) IMAGE seat shape: the media gallery mounts the
+/** rc.1 (0.1.2-rc.1) IMAGE seat shape: the media gallery mounts the
  * thumbnail as a `<button>` (MessageImage's `.frame`, ui-attachment) and sits
  * in `.userStack` BEFORE `.actions` in document order. The old "first <button>
  * in the row" heuristic portaled the ↶ button into the gallery; the actions
  * container must still be located by the LAST button-bearing element. */
-function addRowAlpha4Image(kind: string, key: string, opts: { ownButtonInActions?: boolean } = {}): HTMLElement {
+function addRowRc1Image(kind: string, key: string, opts: { ownButtonInActions?: boolean } = {}): HTMLElement {
   const { ownButtonInActions = false } = opts
   const row = document.createElement('div')
   row.dataset.chatFlowKind = kind
@@ -172,28 +172,8 @@ describe('collectTargets (chat node × user action row → portal target)', () =
     expect(targets).toHaveLength(0)
   })
 
-  it('collects a durable target on the 0.1.2-alpha.2 data-actions-reveal root', () => {
-    const actions = addRow('user', 'm6', true, 'data-actions-reveal')
-    const targets = collectTargets(chatWith([['m6', userNode(11)]]), new Set())
-    expect(targets).toHaveLength(1)
-    expect(targets[0]).toEqual({
-      kind: 'durable',
-      key: 'm6',
-      container: actions,
-      seq: 11,
-      time: 11000,
-      preview: 'msg 11',
-    })
-  })
-
-  it('refuses an alpha.2 row whose actions container has no <button> (layout mismatch)', () => {
-    addRow('user', 'm7', false, 'data-actions-reveal')
-    const targets = collectTargets(chatWith([['m7', userNode(12)]]), new Set())
-    expect(targets).toHaveLength(0)
-  })
-
-  it('collects a durable target on the alpha.4 structural row (no actions-reveal marker)', () => {
-    const actions = addRowAlpha4('user', 'a1')
+  it('collects a durable target on the rc.1 structural row (no marker)', () => {
+    const actions = addRowRc1('user', 'a1')
     const targets = collectTargets(chatWith([['a1', userNode(21)]]), new Set())
     expect(targets).toHaveLength(1)
     expect(targets[0]).toEqual({
@@ -206,8 +186,8 @@ describe('collectTargets (chat node × user action row → portal target)', () =
     })
   })
 
-  it('collects an alpha.4 steering row via the structural fallback', () => {
-    const actions = addRowAlpha4('steering', 'a2')
+  it('collects an rc.1 steering row via the structural fallback', () => {
+    const actions = addRowRc1('steering', 'a2')
     const targets = collectTargets(
       chatWith([['a2', { kind: 'steering', anchorSeq: 23, data: { seq: 23, time: 23000, content: [{ type: 'text', text: 'st' }] } }]]),
       new Set(),
@@ -221,46 +201,41 @@ describe('collectTargets (chat node × user action row → portal target)', () =
     }
   })
 
-  it('refuses an alpha.4 row whose actions container has no <button> (layout mismatch)', () => {
-    addRowAlpha4('user', 'a3', { withButton: false })
+  it('refuses an rc.1 row whose actions container has no <button> (layout mismatch)', () => {
+    addRowRc1('user', 'a3', { withButton: false })
     const targets = collectTargets(chatWith([['a3', userNode(24)]]), new Set())
     expect(targets).toHaveLength(0)
   })
 })
 
-describe('actionsContainerOf (dual-channel finder: rc.2 attribute → alpha.4 structural)', () => {
+describe('actionsContainerOf (dual-channel finder: rc.2 attribute → rc.1 structural)', () => {
   it('finds the actions container on an rc.2 data-time-hover-root row', () => {
     const actions = addRow('user', 'r1')
     expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="r1"]')!)).toBe(actions)
   })
 
-  it('finds the actions container on an alpha.2 data-actions-reveal row', () => {
-    const actions = addRow('user', 'r2', true, 'data-actions-reveal')
-    expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="r2"]')!)).toBe(actions)
-  })
-
-  it('finds the actions container on an alpha.4 row via the copy-button parent (no marker)', () => {
-    const actions = addRowAlpha4('user', 'a4')
+  it('finds the actions container on an rc.1 row via the copy-button parent (no marker)', () => {
+    const actions = addRowRc1('user', 'a4')
     expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="a4"]')!)).toBe(actions)
   })
 
-  it('finds the actions container on an alpha.4 pending row (last child = actions, no marker)', () => {
-    const actions = addRowAlpha4('user', 'a5', { pending: true })
+  it('finds the actions container on an rc.1 pending row (last child = actions, no marker)', () => {
+    const actions = addRowRc1('user', 'a5', { pending: true })
     const pendingRow = document.querySelector('[data-pending-steering]')!
     expect(pendingRow).toBeInstanceOf(HTMLElement)
     expect(actionsContainerOf(pendingRow as HTMLElement)).toBe(actions)
   })
 
-  it('locates the actions container, NOT the media gallery, on an alpha.4/5 image row', () => {
+  it('locates the actions container, NOT the media gallery, on an rc.1 image row', () => {
     // The thumbnail `<button>` in `.gallery` precedes `.actions`; the finder
     // must skip it and land on the copy button's container (dsh-rewind#7 image
     // regression: the ↶ button was pinned at the image's top-right).
-    const actions = addRowAlpha4Image('user', 'img1')
+    const actions = addRowRc1Image('user', 'img1')
     expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="img1"]')!)).toBe(actions)
   })
 
   it('still locates the actions container when this plugin own button is already portaled there', () => {
-    const actions = addRowAlpha4Image('user', 'img2', { ownButtonInActions: true })
+    const actions = addRowRc1Image('user', 'img2', { ownButtonInActions: true })
     expect(actionsContainerOf(document.querySelector('[data-chat-anchor-key="img2"]')!)).toBe(actions)
   })
 

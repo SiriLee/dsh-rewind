@@ -360,13 +360,8 @@ const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
  *   no longer exists and `data-actions-reveal` now lives only on the per-turn
  *   tail footer (`TurnTailNodeView`). User-row actions are revealed via CSS
  *   `:has()` and located structurally by `actionsContainerOf` instead.
- *
- * @eliminate `[data-actions-reveal]` matched ONLY the intermediate 0.1.2-alpha.2/3
- * user rows; it is not present on either 0.1.1-rc.2 or 0.1.2-rc.1 user rows, so
- * it is a removal candidate (leaving `[data-time-hover-root]` for 0.1.1-rc.2
- * plus the structural fallback for 0.1.2-rc.1 = the clean dual channel).
  */
-const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root], [data-actions-reveal]'
+const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
 
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
 const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
@@ -386,10 +381,6 @@ const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
  *   container, which mounts that button as a direct child —
  *   `MessageIconActions.tsx:83,86`).
  *
- * The 0.1.2-alpha.2/3 `[data-actions-reveal]` attribute-marked rows (see
- * `ACTIONS_ROOT_SELECTOR`) are an intermediate state absorbed by the
- * attribute branch below; they are not needed by either endpoint.
- *
  * Returns undefined when no qualifying container is found; the caller refuses
  * to portal (never a crash, never a wrong attachment). Exported as a test seam
  * (see `collectTargets`) so the dual-channel finder is exercised directly for
@@ -399,7 +390,7 @@ export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | 
   const root = row?.matches(ACTIONS_ROOT_SELECTOR) ? row : row?.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
   const actions = root?.lastElementChild
   if (actions instanceof HTMLElement && actions.querySelector('button') !== null) return actions
-  // 0.1.2-rc.1 structural fallback (alpha.4/alpha.5, marker removed from user
+  // 0.1.2-rc.1 structural fallback (marker removed from user
   // rows — see the @dualmode note above): the copy button's own container. The
   // container is located by the LAST action `<button>`, NOT the first `<button>`
   // in the row: a user message with an image renders its thumbnail as a
