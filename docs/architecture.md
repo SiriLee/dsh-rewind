@@ -48,11 +48,9 @@ machine channels (see [Compatibility strategy](#compatibility-strategy)).
     user/message currently on the surface)
   → agent.cancel({ keepInbox: true }) if running; waitForAgentIdle
   → dropPendingSteering (next-step inbox only; queued messages untouched)
-  → append ghost step frame: step/start (turn = last started turn,
-    step = that turn's next unused number) … marker … step/end
-  → marker = empty assistant/message with
-    surfaceOp { op: 'replace', start, end } over every surface node
-    after the target (+ sourceEventSeqs = shadowed seqs)
+  → append the rewind marker = an empty user/message with surfaceOp
+    { op: 'replace', start, end } over every surface node after the
+    target (+ sourceEventSeqs = shadowed seqs)          [a single event]
   → if mode 'both': store.restoreAfter(targetSeq) + syncRestoreObservations
   → result text carries machine tokens (impact=<n>, restore:/delete: lines)
   → client: hides withdrawn rows (data-dsh-rewind-hidden), refills composer
@@ -63,14 +61,14 @@ Key invariants:
 
 - **The log is append-only.** The marker is the *only* mutation: it cuts the
   model-visible surface, never the raw history (search/export still see it).
-- **The marker is empty** (`content: []`, derives to `null` in the model
-  context) so it renders nothing and enters no model context.
-- **The ghost step frame exists for the token-meter**: replay requires every
-  `assistant/message` inside an open step of the same `(turn, step)`; a bare
-  marker appended while idle would throw on the next `measure()` and silently
-  break `/compact`. The turn/step numbers are chosen so they can never collide
-  with a future real turn (`markerTurnOf` / `markerStepOf` — see
-  `src/rewind.ts`).
+- **The marker is empty** (`content: []`) and carries the dsh-rewind plugin
+  source. It is a `user/message`, the only surface type that can cite the
+  shadowed seqs (`sourceEventSeqs`) — `assistant/message` can no longer carry
+  them (v2). It derives to itself, so it stays as a present-but-empty user
+  turn at the surface tail rather than entering model context as content.
+- **No ghost step frame is needed**: the token-meter step machine ignores
+  `user/message`, and the session invariant imposes no open-turn requirement
+  on it, so the marker is appended while idle, outside any turn, as one event.
 - **Restore is reconciled against the live disk** (`planRestore`), so repeated
   rewinds are idempotent and a rewind whose target state already matches is a
   no-op.

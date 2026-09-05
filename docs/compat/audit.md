@@ -41,30 +41,30 @@ legacy branch).
 |---|---|---|
 | I1 log replayability | A rewound log passes token-meter replay and `Session.create` (the resume-preflight validation) without throwing | `compat-invariants` I1, `verify-host` 12/13 |
 | I2 surface consistency | After a cut, the surface has no duplicate nodes, every node exists in the log, the withdrawn target never returns to the surface, and `deriveMessages()` is legal | `compat-invariants` I2 |
-| I3 step/turn structure | Client turn-tail ordering, unique `step/start`, every `step/end` and `assistant/message` has a paired `step/start`, no ghost turns | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
+| I3 step/turn structure | Client turn-tail ordering, unique `step/start` (real turns), no ghost turns; the `user/message` rewind marker adds no step frame | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
 | I4 fold-service safety | stats / title / goal / projection fold a marker-bearing log without throwing, with predictable values | `compat-invariants` I4 |
 | I5 compact interop | A tool-call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is explicitly refused; a rewind-then-compact transaction stays legal | `compat-interop` I5, `verify-host` 12/14 |
 | I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8); cancellation timing never hangs | `verify-host` 4–8, 15 |
-| I7 client ordering | A log carrying tool turns, rewind markers, and ghost steps satisfies the client builder ordering | `compat-interop` I7 |
+| I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
 | I8 runtime safety | `rewind`/`compact` combinations never leave a dangling step/turn frame | `verify-host` 15 |
 
 ## Verified-compatible surfaces (probes pass)
 
-- **token-meter replay** (marker + ghost-step frames + multiple rewinds + interleaved real turns + compact stacking).
+- **token-meter replay** (the empty `user/message` marker + multiple rewinds + interleaved real turns + compact stacking).
 - **compaction transactions**: `toolPairingBalancedBefore/After` stays balanced after a marker cut; the real `/compact` command (`command-compact` + `compaction-basic`, stub summarizer) can land `compaction/start…end` on top of a rewind marker and stay replayable; `/compact` is a legal no-op on a small surface.
 - **resume replay**: `Session.create(id, events)` replays a rewind/compact-bearing log.
-- **session-stats**: a ghost-step frame adds one step but no phantom turn (reuses the turn number).
+- **session-stats**: the `user/message` marker adds no step (the step count stays at the real turns' steps), no phantom turn.
 - **session-title / goal fold**: a marker does not disturb `foldSessionTitle` / `foldGoal`.
 - **client ordering**: turn-tail ordering + `step/start` uniqueness hold for tool turns + marker logs.
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
-- **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
+- **plan-mode**: the marker is a turn-less `user/message` (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
 - **settings-card registration**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject would keep the whole client plugin unmounted on a host without that service (card and rewind button would disappear). It reads `getSnapshot().value` + `set`, never the `mutate` write API.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 
-- **session-stats / session-telemetry fold the full log**: post-rewind stats do **not** rewind — `turns`/`steps`/`llmMs` still include withdrawn content; telemetry reports the marker and ghost-step frames one-by-one (under the reused old turn). This is the intended "fold the full log" semantics, pinned by probe.
-- **token-meter usage anchor briefly reverts** (G3): after a rewind, the baseline falls back to the heuristic `estimated` until the next real-usage call restores it. Confirmed expected behavior (a marker inherently carries no usage); pinned by `compat-gaps` G3.
+- **session-stats / session-telemetry fold the full log**: post-rewind stats do **not** rewind — `turns`/`steps`/`llmMs` still include withdrawn content; the empty `user/message` marker is folded as a present-but-empty user turn (it adds no step). This is the intended "fold the full log" semantics, pinned by probe.
+- **token-meter usage anchor stays stable** (G3): the empty `user/message` marker carries no usage, but because it is not an `assistant/message`, the baseline anchor does not drop to a heuristic estimate — it stays `usage` across a rewind. Pinned by `compat-gaps` G3.
 - **Withdrawn content stays searchable/exportable**: session-query full-text and `/export` read the raw log; a rewind cuts only the surface, so withdrawn messages remain (declared in the README).
 - **Session title auto-regeneration**: the title derives from the surface, so an automatically-derived title may change after a rewind.
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).
@@ -101,7 +101,7 @@ The plugin treats these as harness-side defects it does not compensate for. Each
   strings, e.g. `/goal` — so this behavior is consistent with the ecosystem, not a plugin
   deviation.)
 
-### R-OPENSTEP: an unclosed `step` in the log lets a rewind break token-meter replay (harness-side; plugin guard attempted and reverted)
+### R-OPENSTEP (rewind part resolved): an unclosed `step` in the log breaks token-meter replay; the rewind no longer compounds it
 
 > **Root cause (harness-side)**: an unclosed step left by a crash makes token-meter replay
 > reject any later step activity. DSH `0.1.1-rc.2` now auto-closes crash-left step/turn/tool
@@ -135,7 +135,7 @@ new turn at `phase.turn + 1` (`agent.ts:251-255`) **without closing the leftover
 - **The conversation itself is unaffected** (the request path does not call `tokenMeter.measure`; only compaction-basic does tree-wide).
 - **Manual `/compact` fails permanently** (`compactNow`'s first `measure()` throws the raw error).
 - **Automatic compaction silently stays disabled** (the `agent/pre-step` hook catches and warns; the conversation continues).
-- **rewind's role**: if the user rewinds first (rather than continuing), the ghost `step/start` becomes the first trip-wire, and the plugin has no defensive detection — upgrading a "locally abnormal log" into a "user-visible `/compact` failure."
+- **rewind's role (resolved)**: the v2 `user/message` rewind marker appends no `step/start`, so a rewind no longer introduces the first trip-wire and the R-OPENSTEP rewind amplifier is closed. The harness-side root cause (an unclosed step after a crash, tripped by continuing the conversation) remains.
 
 ## Uncovered boundaries (need an additional e2e layer; non-blocking)
 
