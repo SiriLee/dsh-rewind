@@ -37,7 +37,7 @@ npm version patch
 git push origin main --tags   # 触发 .github/workflows/publish.yml
 ```
 
-- **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release 可能只随 Desktop 捆绑、而不发到 npm，如 `0.1.2-alpha.1`；见 docs/compat/audit.md）。
+- **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release 可能只随 Desktop 捆绑、而不发到 npm；见 docs/compat/audit.md）。
 - workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整
   构建 + 产物验证，以 `--provenance`（Sigstore）发布并创建 GitHub Release。
   **幂等**——已发布的版本会跳过。
@@ -49,18 +49,18 @@ git push origin main --tags   # 触发 .github/workflows/publish.yml
 
 DSH 仍在 rc 阶段，npm 的 prerelease 匹配规则要求 peer 范围与宿主版本
 **同 `[major, minor, patch]` 元组**才能匹配。因此 peerDependencies 采用
-OR 并集覆盖 DSH 已发布的每个元组系列（如 `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2`），
+OR 并集覆盖 DSH 已发布的每个元组系列（如 `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1`），
 并随 DSH 发版追加。
 
 - **何时需要更新**：仅当 DSH 发布新元组（`0.1.1 → 0.1.2 → 0.2.x`）时；
   同元组内 rc 滚动（`0.1.1-rc.2 → rc.3`）无需动作。DSH 所有包同版本发布，
   `npm view @deepseek-ai/dsh version` 即权威信号。
-- **例外 —— `@deepseek-ai/dsh-client-runtime`**：它从未发布 `0.1.2-alpha.*`
+- **例外 —— `@deepseek-ai/dsh-client-runtime`**：它从未发布 `0.1.2`
   （npm `next` 为 `0.1.1-rc.2`）且仅被 `import type` 引用，保持
   `^0.1.0-rc.6 || ^0.1.1-rc.2` 即可（无 `0.1.2` 元组项）。
 - **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm `latest`
   dist-tag 版本对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读
-  `latest` tag**；发布在其它 tag（如 `alpha`）的 pre-release 走**手动发布前检查**
+  `latest` tag**；发布在其它 tag 的 pre-release 走**手动发布前检查**
   ——见上文"升版前手动确认"。
 - **更新步骤**：给每个 `@deepseek-ai/dsh-*` peer 追加 `|| ^<新元组>-rc.<n>`
   → devDependencies 同步升到最新 → `npm install` → `npm run check` → 发版。

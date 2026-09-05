@@ -7,35 +7,31 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.1-rc.2` (matches `package-lock.json`).
+> Targeted version: npm `@deepseek-ai/*@0.1.2-rc.1` (matches `package-lock.json`).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use an OR-union (e.g.
-> `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2`) covering each published tuple series. npm's
+> `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1`) covering each published tuple series. npm's
 > prerelease matching rules require a candidate to share the range comparator's
 > `[major, minor, patch]` tuple, so appending is needed only for a genuinely new
-> tuple (e.g. a future `0.2.x`); any prerelease within the SAME tuple (alpha → rc)
-> is a no-op. Signal: `npm view @deepseek-ai/dsh version`;
+> tuple (e.g. a future `0.2.x`); any prerelease within the SAME tuple is a no-op.
+> Signal: `npm view @deepseek-ai/dsh version`;
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
-> `-alpha` prerelease published under another tag, e.g. `0.1.2-alpha.2` under
-> `alpha`, is a manual pre-release check).
+> prerelease published under another tag is a manual pre-release check).
 >
-> `0.1.2-alpha.1` was never published to npm, so the peer OR-union is declared only from `0.1.2-alpha.2`; the plugin code still supports the `alpha.1`+ client.
->
-> `0.1.2-alpha.2` … `0.1.2-alpha.5` and `0.1.2-rc.1` verified-compatible; `rc.1` is
-> source-identical to `alpha.5`. They share the `0.1.2` tuple, so the single
-> `^0.1.2-alpha.2` peer member covers all six. `rc.2` (`latest`) stays the primary
-> baseline; verified: rc.2, alpha.2, alpha.3, alpha.4, alpha.5, rc.1.
+> Two version lines are supported — the `0.1.1` line (`0.1.1-rc.2`) and the
+> `0.1.2` line (`0.1.2-rc.1`). `0.1.2-rc.1` is the dev baseline; `0.1.1-rc.2` stays
+> compatible, and each line is a distinct channel.
 
-### Channeled seams (version × channel)
+### Channeled seams (version line × channel)
 
-| Seam | rc.2 (`0.1.1-rc.2`) | alpha.2 / alpha.3 | alpha.4 / alpha.5 / rc.1 |
-| --- | --- | --- | --- |
-| Host session log (`eventsOf`) | `Session.events` | `Session.events` | `session.snapshotEvents()` |
-| Client chat snapshot (`chatSnapshotOf`) | session-face `chat` field | `uiConversation` `chat` view | `uiConversation` `chat` view |
-| Client composer refill (`writeComposer`) | `<textarea>` DOM write | `conversation.input.setDraft` | `conversation.input.setDraft` |
-| Client settings card | nested `ctx.inject(['settingsScope'])` | nested `ctx.inject(['settingsScope'])` | nested `ctx.inject(['settingsScope'])` |
-| Client seat-button DOM (`actionsContainerOf`) | `[data-time-hover-root]` | `[data-actions-reveal]` | structural locate of the copy-`<button>` container |
+| Seam | 0.1.1 line (`0.1.1-rc.2`) | 0.1.2 line (`0.1.2-rc.1`) |
+| --- | --- | --- |
+| Host session log (`eventsOf`) | `Session.events` | `session.snapshotEvents()` |
+| Client chat snapshot (`chatSnapshotOf`) | session-face `chat` field | `uiConversation` `chat` view |
+| Client composer refill (`writeComposer`) | `<textarea>` DOM write | `conversation.input.setDraft` |
+| Client settings card | nested `ctx.inject(['settingsScope'])` | nested `ctx.inject(['settingsScope'])` |
+| Client seat-button DOM (`actionsContainerOf`) | `[data-time-hover-root]` | structural locate of the copy-`<button>` container |
 
 ## Definition of "fully compatible" (invariants)
 
@@ -61,7 +57,7 @@
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
 - **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
-- **settings-card cross-version reach**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject unmounts the whole client plugin on rc.2 (card and rewind button disappear). It uses only the rc.2↔alpha-common scope subset (`getSnapshot().value` + `set`), never the alpha-only `mutate`.
+- **settings-card cross-version reach**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject unmounts the whole client plugin on the 0.1.1 line (card and rewind button disappear). It uses only the scope subset common across version lines (`getSnapshot().value` + `set`), never the 0.1.2-added `mutate`.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 

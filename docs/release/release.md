@@ -40,7 +40,7 @@ git push origin main --tags   # triggers .github/workflows/publish.yml
 
 - **Before bumping, manually confirm there is no newer DSH version the plugin
   has not been verified against** (a pre-release can ship in DSH Desktop
-  without being on npm, e.g. `0.1.2-alpha.1`; see docs/compat/audit.md).
+  without being on npm; see docs/compat/audit.md).
 - The workflow verifies the tag matches `package.json`, runs typecheck + tests +
   a full build + artifact verification, publishes with `--provenance`
   (Sigstore), and creates a GitHub Release. It is **idempotent** — an already
@@ -55,19 +55,19 @@ git push origin main --tags   # triggers .github/workflows/publish.yml
 DSH is still in rc; npm's prerelease matching rules require a peer range to
 share the host version's `[major, minor, patch]` tuple. So `peerDependencies`
 uses an OR-union covering every published tuple series
-(e.g. `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-alpha.2`), extended as DSH releases new tuples.
+(e.g. `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1`), extended as DSH releases new tuples.
 
 - **When to update**: only when DSH releases a new tuple
   (`0.1.1 → 0.1.2 → 0.2.x`); rc rolling within a tuple (`0.1.1-rc.2 → rc.3`)
   needs nothing. All `@deepseek-ai/*` packages release together;
   `npm view @deepseek-ai/dsh version` is the authoritative signal.
 - **Exception — `@deepseek-ai/dsh-client-runtime`**: it never published a
-  `0.1.2-alpha.*` (npm `next` is `0.1.1-rc.2`) and is imported `import type`
+  `0.1.2` release (npm `next` is `0.1.1-rc.2`) and is imported `import type`
   only, so keep it at `^0.1.0-rc.6 || ^0.1.1-rc.2` (no `0.1.2` member).
 - **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
   compares the `latest` dist-tag version against the tuples the peers cover
   (exit 0 = nothing to do, exit 1 = update). It reads the `latest` tag only; a
-  pre-release published under another tag (e.g. `alpha`) or bundled without
+  pre-release published under another tag or bundled without
   going to npm is a manual pre-release check — see the "Before bumping" step above.
 - **Update steps**: append `|| ^<new-tuple>-rc.<n>` to every
   `@deepseek-ai/dsh-*` peer → bump devDependencies to the latest → `npm
