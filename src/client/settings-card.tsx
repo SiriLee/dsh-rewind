@@ -12,10 +12,9 @@
  *
  * It neither imports the client settings typed contract nor depends on the
  * 0.1.2-rc.1-only `mutate` write API: it reads `getSnapshot().value` and writes
- * via the `set(field, value)` method present on both 0.1.1-rc.2 and 0.1.2-rc.1,
- * and the card receives a tiny structural `CleanupCardApi` supplied by
- * `src/client/index.ts` so the component stays harness-agnostic and
- * unit-testable in isolation.
+ * via the `set(field, value)` method, and the card receives a tiny structural
+ * `CleanupCardApi` supplied by `src/client/index.ts` so the component stays
+ * harness-agnostic and unit-testable in isolation.
  *
  * @module dsh-rewind/client/settings-card
  */

@@ -167,10 +167,8 @@ export const STYLE = `
 }
 
 /* ---- Snapshot-cleanup settings card (mirrors the harness PluginCard look) ---- */
-/* Standardized on the 0.1.2 line of the harness card (border-radius 16px +
-   0.5px border-l4, 0.5px internal separators). The 0.1.1 line used 12px + 1px
-   border-l2; we deliberately follow 0.1.2 rather than dual-channeling a pixel
-   difference, so the card keeps one code path. */
+/* Standardized on the 0.1.2 harness card look (border-radius 16px + 0.5px
+   border-l4, 0.5px internal separators). */
 .dsh-rewind-cleanup-card {
   list-style: none;
   border: 0.5px solid var(--dsw-alias-border-l4);

@@ -15,62 +15,46 @@ export interface HiddenChat {
 }
 
 /**
- * Reader for one session's live chat snapshot. This is one of the plugin's
- * "0.1.1-rc.2 ↔ 0.1.2-rc.1" dual channels: 0.1.1-rc.2 serves the chat from the
- * session face snapshot, while 0.1.2-rc.1 (and the whole 0.1.2 line) serves it
- * from the `uiConversation` service's named "chat" view (contributed by
- * dsh-client-ui-chat through the uiSession slot hook). See
- * SiriLee/dsh-rewind#7.
+ * Reader for one session's live chat snapshot. On the 0.1.2-rc.1 line (the
+ * plugin's single baseline) the chat is served by the `uiConversation`
+ * service's named "chat" view (contributed by dsh-client-ui-chat through the
+ * uiSession slot hook).
  */
 export type ChatOf = (
-  session: { readonly sessionId: string; getSnapshot(): { chat?: unknown } } | undefined,
+  session: { readonly sessionId: string } | undefined,
 ) => HiddenChat | undefined
 
 /**
  * Subscribe to one session's live chat-update signal, for waiting on a chat
- * snapshot change without polling. Dual-channel, mirroring `chatOf`: the
- * 0.1.2-rc.1 `uiConversation` "chat" view when registered, else the session
- * face (0.1.1-rc.2, whose snapshot still carries `chat`, so its own
- * `subscribe` is the chat-update signal). `cb` fires whenever the chat
- * snapshot invalidates.
+ * snapshot change without polling. The 0.1.2-rc.1 `uiConversation` "chat"
+ * view's own `subscribe` is the chat-update signal; `cb` fires whenever the
+ * chat snapshot invalidates.
  */
 export type ChatWatch = (sessionId: string, cb: () => void) => () => void
 
 /**
- * Choose the chat-update subscription for `waitForCommand`: prefer the
- * `uiConversation` "chat" view's own `subscribe` when available (0.1.2-rc.1,
- * where the chat-update signal lives), else the session face's `subscribe`
- * (0.1.1-rc.2, whose snapshot still carries the chat, so its own subscribe is
- * the chat-update signal). Extracted as a pure channel-selection step so the
- * "view vs face" branch is unit-testable; the resolvers are injected by the
- * caller (see `watchChat` in index.ts). Never throws.
+ * Choose the chat-update subscription for `waitForCommand`: the
+ * `uiConversation` "chat" view's own `subscribe`. Extracted as a pure
+ * channel-selection step so the resolver is unit-testable; the resolver is
+ * injected by the caller (see `watchChat` in index.ts). Never throws.
  */
 export function resolveChatWatch(
   resolveView: (sessionId: string) => { subscribe?(cb: () => void): () => void } | undefined,
-  resolveFace: (sessionId: string) => { subscribe(cb: () => void): () => void } | undefined,
   sessionId: string,
   cb: () => void,
 ): () => void {
   const view = resolveView(sessionId)
-  if (view?.subscribe !== undefined) return view.subscribe(cb)
-  const face = resolveFace(sessionId)
-  return face?.subscribe(cb) ?? (() => {})
+  return view?.subscribe?.(cb) ?? (() => {})
 }
 
 /**
- * Resolve the chat snapshot across the two harness channels: the session-face
- * snapshot first (0.1.1-rc.2 — on 0.1.2-rc.1 the face no longer carries
- * `chat`, so the field reads `undefined`), then the `uiConversation` "chat"
- * view. The view's `getSnapshot()` returns undefined until the named view is
- * registered, so both channels missing degrades to `undefined` (no targets, no
- * hiding — never a crash).
+ * Resolve the chat snapshot from the `uiConversation` "chat" view. The view's
+ * `getSnapshot()` returns undefined until the named view is registered, which
+ * degrades to `undefined` (no targets, no hiding — never a crash).
  */
 export function chatSnapshotOf(
-  face: { getSnapshot(): { chat?: unknown } } | undefined,
   chatView: { getSnapshot(): unknown } | undefined,
 ): HiddenChat | undefined {
-  const legacy = face?.getSnapshot().chat as HiddenChat | undefined
-  if (legacy !== undefined) return legacy
   return (chatView?.getSnapshot() ?? undefined) as HiddenChat | undefined
 }
 

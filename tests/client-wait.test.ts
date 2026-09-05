@@ -2,12 +2,11 @@
  * @vitest-environment jsdom
  *
  * `waitForCommand` wait-signal probes (SiriLee/dsh-rewind#14): a waiting caller
- * must be woken when the CHAT snapshot changes, not only by the session
- * face's `subscribe`. On the 0.1.2 line the chat moved off the session face into the
- * `uiConversation` view, so the face no longer fires on a chat update; the fix
- * lets a caller pass a `watch` bound to that view. These tests lock the four
- * behaviors: first-check hit, watch-triggered hit (the 0.1.2 signal path), the
- * default session face fallback (0.1.1), and timeout.
+ * must be woken when the CHAT snapshot changes. On the 0.1.2 line the chat
+ * moved off the session face into the `uiConversation` view, so the face no
+ * longer fires on a chat update; the caller passes a `watch` bound to that
+ * view. These tests lock the three behaviors: first-check hit, watch-triggered
+ * hit, and timeout — plus the `resolveChatWatch` view-only channel selection.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChatConversationViewNode, CommandNode, SessionFace } from '../src/client/dsh-types.ts'
@@ -48,16 +47,14 @@ function makeChat(nodes: readonly ChatConversationViewNode[]): HiddenChat {
 /** A fake session + chat variable with a live-outcome roll-in helper. */
 function makeFake() {
   let chat = makeChat([userNode(TARGET)])
-  let subscribeCb: (() => void) | null = null
   const session = {
     sessionId: 's1',
-    subscribe: vi.fn((cb: () => void) => { subscribeCb = cb; return () => {} }),
   } as unknown as SessionFace
   const chatOf: ChatOf = () => chat
   const settleChatWithOutcome = (): void => {
     chat = makeChat([userNode(TARGET), executedRewind(COMMAND_SEQ, TARGET)])
   }
-  return { session, chatOf, settleChatWithOutcome, getSubscribeCb: (): (() => void) | null => subscribeCb }
+  return { session, chatOf, settleChatWithOutcome }
 }
 
 const matchExecuted = (node: CommandNode): boolean => isExecutedRewindCommand(node, TARGET)
@@ -68,10 +65,10 @@ afterEach(() => {
 })
 
 describe('waitForCommand wait signal', () => {
-  it('resolves immediately when the first check finds an outcome (no watch needed)', async () => {
+  it('resolves immediately when the first check finds an outcome', async () => {
     const { session, chatOf, settleChatWithOutcome } = makeFake()
     settleChatWithOutcome()
-    const outcome = await waitForCommand(session, chatOf, matchExecuted, 8000)
+    const outcome = await waitForCommand(session, chatOf, matchExecuted, 8000, () => () => {})
     expect(outcome).toEqual({ kind: 'success', text: OUTCOME_TEXT })
   })
 
@@ -91,21 +88,10 @@ describe('waitForCommand wait signal', () => {
     await expect(pending).resolves.toEqual({ kind: 'success', text: OUTCOME_TEXT })
   })
 
-  it('falls back to the session face subscribe when no watch is passed (0.1.1 signal)', async () => {
-    const { session, chatOf, settleChatWithOutcome, getSubscribeCb } = makeFake()
-    const pending = waitForCommand(session, chatOf, matchExecuted, 8000)
-    expect(session.subscribe).toHaveBeenCalledTimes(1)
-    // The session-face subscription is the wait signal: fire its callback after
-    // the chat rolls in, mirroring 0.1.1 where a chat update invalidates the face.
-    settleChatWithOutcome()
-    getSubscribeCb()?.()
-    await expect(pending).resolves.toEqual({ kind: 'success', text: OUTCOME_TEXT })
-  })
-
   it('resolves null on timeout when nothing ever signals', async () => {
     vi.useFakeTimers()
     const { session, chatOf } = makeFake()
-    const pending = waitForCommand(session, chatOf, matchExecuted, 5000)
+    const pending = waitForCommand(session, chatOf, matchExecuted, 5000, () => () => {})
     await vi.advanceTimersByTimeAsync(5000)
     await expect(pending).resolves.toBeNull()
   })
@@ -113,30 +99,21 @@ describe('waitForCommand wait signal', () => {
 
 describe('resolveChatWatch channel selection', () => {
   const viewOf = (subscribe?: (cb: () => void) => () => void) => ({ subscribe })
-  const faceOf = (subscribe: (cb: () => void) => () => void) => ({ subscribe })
 
-  it('prefers the uiConversation view subscribe when it is reachable', () => {
+  it('subscribes to the uiConversation view subscribe when it is reachable', () => {
     const viewSub = vi.fn(() => () => {})
-    const faceSub = vi.fn(() => () => {})
-    resolveChatWatch(() => viewOf(viewSub), () => faceOf(faceSub), 's1', () => {})
+    resolveChatWatch(() => viewOf(viewSub), 's1', () => {})
     expect(viewSub).toHaveBeenCalledTimes(1)
-    expect(faceSub).not.toHaveBeenCalled()
   })
 
-  it('falls back to the session face when the view has no subscribe', () => {
-    const faceSub = vi.fn(() => () => {})
-    resolveChatWatch(() => viewOf(undefined), () => faceOf(faceSub), 's1', () => {})
-    expect(faceSub).toHaveBeenCalledTimes(1)
+  it('returns a no-op unsubscriber when the view is unreachable', () => {
+    const unsub = resolveChatWatch(() => undefined, 's1', () => {})
+    expect(typeof unsub).toBe('function')
+    expect(() => unsub()).not.toThrow()
   })
 
-  it('falls back to the session face when the view is unreachable', () => {
-    const faceSub = vi.fn(() => () => {})
-    resolveChatWatch(() => undefined, () => faceOf(faceSub), 's1', () => {})
-    expect(faceSub).toHaveBeenCalledTimes(1)
-  })
-
-  it('returns a no-op when neither the view nor the face is available', () => {
-    const unsub = resolveChatWatch(() => undefined, () => undefined, 's1', () => {})
+  it('returns a no-op unsubscriber when the view has no subscribe', () => {
+    const unsub = resolveChatWatch(() => viewOf(undefined), 's1', () => {})
     expect(typeof unsub).toBe('function')
     expect(() => unsub()).not.toThrow()
   })

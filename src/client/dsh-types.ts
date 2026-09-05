@@ -1,15 +1,8 @@
 /**
- * Version-neutral client-side structural faces replacing the
- * `@deepseek-ai/dsh-client-runtime` types the client half reads.
- *
- * `dsh-client-runtime` never published a `0.1.2` release (it stops at
- * `0.1.1-rc.2`), and it is a host-injected peer — not a package the build
- * should pin. It would also break a strict `npm ci` at `0.1.2-rc.1`: its
- * `^0.1.1-rc.2` peers refuse the `0.1.2-rc.1` prerelease, so an rc.1 dev tree
- * cannot co-install it. The plugin reads only a small set of members, so these
- * local faces (matching the plugin's existing structural-face strategy —
- * `SlotsLike`, `UiConversationLike`, …) keep the bundle typechecking without
- * coupling to that package's version.
+ * Client-side structural faces over the harness-conversation types the client
+ * half reads. Typed locally so the plugin never imports the conversation UI
+ * packages' types (which drift between harness versions) and survives harness
+ * version drift.
  *
  * Only `import type` consumers use these; they are erased at build time.
  *
@@ -40,7 +33,7 @@ export interface UserMessageNode {
   readonly source?: unknown
 }
 
-/** The live session face the client plugin reads (dual-channel chat/composer). */
+/** The live session face the client plugin reads (chat/composer). */
 export interface SessionFace {
   readonly sessionId: string
   command(command: string): Promise<{ ok: boolean; value?: { matched?: boolean } }>

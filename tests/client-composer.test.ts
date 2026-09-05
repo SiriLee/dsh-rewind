@@ -1,12 +1,11 @@
 /**
  * @vitest-environment jsdom
  *
- * Composer-refill probes (SiriLee/dsh-rewind#9). v0.6.1's refill only wrote to
- * the 0.1.1 `<textarea>`; on the 0.1.2 line the composer was replaced with a
- * Lexical `contenteditable` div, so the withdrawn target text silently never
- * reached the editor. These cases pin the dual-channel `fillComposer` /
- * `writeComposer` / `composerText` so both channels restore the text and the
- * facade path stays correct.
+ * Composer-refill probes (SiriLee/dsh-rewind#9). On the 0.1.2 line the
+ * composer is a Lexical `contenteditable` div, so the withdrawn target text is
+ * written through the harness `setDraft` facade when reachable, else the DOM
+ * `contenteditable` fill. These cases pin `fillComposer` / `writeComposer` /
+ * `composerText` on that single 0.1.2 channel.
  *
  * Compilation: typechecked by `tsconfig.client-test.json` (client surface +
  * JSX), excluded from `tsconfig.json` (host, no JSX) — see the neighbouring
@@ -14,17 +13,6 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composerText, fillComposer, writeComposer } from '../src/client/portals.tsx'
-
-/** Build the 0.1.1 `<textarea>` inside a `[data-input-scroll]` container. */
-function addTextarea(value = ''): HTMLTextAreaElement {
-  const scroll = document.createElement('div')
-  scroll.setAttribute('data-input-scroll', '')
-  const textarea = document.createElement('textarea')
-  textarea.value = value
-  scroll.appendChild(textarea)
-  document.body.appendChild(scroll)
-  return textarea
-}
 
 /** Build the 0.1.2 `[data-composer-input]` contenteditable div. */
 function addEditable(text = ''): HTMLElement {
@@ -36,29 +24,23 @@ function addEditable(text = ''): HTMLElement {
   return editable
 }
 
+/** Make sure `document.execCommand` exists (jsdom may omit it) and return `ok`. */
+function mockExecCommand(ok: boolean) {
+  if (typeof document.execCommand !== 'function') {
+    Object.defineProperty(document, 'execCommand', { value: () => false, configurable: true })
+  }
+  return vi.spyOn(document, 'execCommand').mockReturnValue(ok)
+}
+
 afterEach(() => {
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
 
-describe('fillComposer (dual-channel DOM write)', () => {
-  it('writes the 0.1.1 <textarea> through the native setter, dispatches input, focuses', () => {
-    const textarea = addTextarea('old')
-    const onInput = vi.fn()
-    textarea.addEventListener('input', () => onInput())
-    const ok = fillComposer('rewound text')
-    expect(ok).toBe(true)
-    expect(textarea.value).toBe('rewound text')
-    expect(onInput).toHaveBeenCalledTimes(1)
-    expect(document.activeElement).toBe(textarea)
-  })
-
-  it('writes the 0.1.2 contenteditable through execCommand insertText', () => {
+describe('fillComposer (0.1.2 contenteditable DOM write)', () => {
+  it('writes the contenteditable through execCommand insertText', () => {
     const editable = addEditable('old')
-    if (typeof document.execCommand !== 'function') {
-      Object.defineProperty(document, 'execCommand', { value: () => false, configurable: true })
-    }
-    const exec = vi.spyOn(document, 'execCommand').mockReturnValue(true)
+    const exec = mockExecCommand(true)
     const ok = fillComposer('rewound text')
     expect(ok).toBe(true)
     expect(exec).toHaveBeenCalledWith('insertText', false, 'rewound text')
@@ -67,10 +49,7 @@ describe('fillComposer (dual-channel DOM write)', () => {
 
   it('falls back to a direct text write when execCommand is unavailable', () => {
     const editable = addEditable('old')
-    if (typeof document.execCommand !== 'function') {
-      Object.defineProperty(document, 'execCommand', { value: () => false, configurable: true })
-    }
-    vi.spyOn(document, 'execCommand').mockReturnValue(false)
+    mockExecCommand(false)
     const onInput = vi.fn()
     editable.addEventListener('input', () => onInput())
     const ok = fillComposer('rewound text')
@@ -84,7 +63,7 @@ describe('fillComposer (dual-channel DOM write)', () => {
   })
 })
 
-describe('writeComposer (facade-aware dual channel)', () => {
+describe('writeComposer (facade-aware write)', () => {
   it('prefers the harness facade setDraft when reachable', () => {
     const setDraft = vi.fn()
     const ok = writeComposer('rewound text', { setDraft })
@@ -94,27 +73,25 @@ describe('writeComposer (facade-aware dual channel)', () => {
   })
 
   it('degrades to the DOM channel when no facade is given', () => {
-    const textarea = addTextarea()
+    const editable = addEditable()
+    // execCommand fails -> the contenteditable path writes textContent directly.
+    mockExecCommand(false)
     const ok = writeComposer('rewound text', undefined)
     expect(ok).toBe(true)
-    expect(textarea.value).toBe('rewound text')
+    expect(editable.textContent).toBe('rewound text')
   })
 
   it('degrades to the DOM channel when the facade throws (session teardown)', () => {
-    const textarea = addTextarea()
+    const editable = addEditable()
+    mockExecCommand(false)
     const ok = writeComposer('rewound text', { setDraft: () => { throw new Error('teardown') } })
     expect(ok).toBe(true)
-    expect(textarea.value).toBe('rewound text')
+    expect(editable.textContent).toBe('rewound text')
   })
 })
 
-describe('composerText (dual-channel draft read)', () => {
-  it('reads the 0.1.1 textarea value', () => {
-    addTextarea('draft')
-    expect(composerText()).toBe('draft')
-  })
-
-  it('reads the 0.1.2 contenteditable textContent', () => {
+describe('composerText (0.1.2 draft read)', () => {
+  it('reads the contenteditable textContent', () => {
     addEditable('draft')
     expect(composerText()).toBe('draft')
   })

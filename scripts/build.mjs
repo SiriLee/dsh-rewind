@@ -115,17 +115,13 @@ for (const needle of ['name', 'inject', 'apply']) {
   if (!exportBlock.includes(needle)) throw new Error(`host bundle missing export ${needle}`)
 }
 // The host bundle must NOT statically import the `settingsNamespace` named
-// export: DSH 0.1.2-alpha.2 removed that helper, so a static
+// export: DSH 0.1.2 removed that helper, so a static
 // `import { settingsNamespace } from '@deepseek-ai/dsh-settings'` would fail to
-// link the whole host plugin on alpha.2 (ESM link error). The version-neutral
-// read (src/settings-locale.ts) uses a namespace import + optional chaining,
-// which links on both rc.2 and alpha.2. Guard both facts so the artifact stays
-// cross-generation link-safe even if someone reverts the read.
+// link the whole host plugin (ESM link error). The locale read uses the raw
+// namespace string instead. Guard it so the artifact stays link-safe even if
+// someone reverts the read.
 if (/import\s*\{[^}]*settingsNamespace[^}]*\}\s*from\s*["']@deepseek-ai\/dsh-settings["']/.test(host)) {
-  throw new Error('host bundle statically imports settingsNamespace (would fail to link on DSH 0.1.2-alpha.2)')
-}
-if (!/import\s*\*\s*as\s+\w+\s+from\s*["']@deepseek-ai\/dsh-settings["']/.test(host)) {
-  throw new Error('host bundle missing the namespace import of dsh-settings (version-neutral locale read lost)')
+  throw new Error('host bundle statically imports settingsNamespace (removed in DSH 0.1.2; use the raw namespace string)')
 }
 for (const needle of ['window.__ModuleLoader__.load', `id: ${JSON.stringify(pkg.name)}`]) {
   if (!bundle.includes(needle)) throw new Error(`client bundle missing ${needle}`)

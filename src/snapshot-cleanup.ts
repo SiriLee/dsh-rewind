@@ -60,9 +60,9 @@ export const CleanupConfigSchema: z<CleanupConfig> = z.object({
 /**
  * Structural face of the settings scope the host needs for the policy: a
  * resolved read and a validated write. Kept local (never imports the settings
- * contract) so the host bundle links on both 0.1.1-rc.2 and 0.1.2-rc.1 — the
- * settings API drift (0.1.2 adds `mutate`, 0.1.1 does not) is confined to the
- * seam the host passes in, never to this module.
+ * contract) so the host bundle does not type-couple on the client settings
+ * API (0.1.2 adds `mutate`; it is unused here), and the seam the host passes
+ * in isolates the drift to this module.
  */
 export interface CleanupSettingsScope {
   /** The resolved policy: schema defaults, then base, then the user layer. */

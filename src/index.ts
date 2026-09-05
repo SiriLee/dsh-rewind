@@ -33,16 +33,8 @@ import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
-// Namespace import (not a named import) so the host bundle links on BOTH ends
-// of this dual channel — 0.1.1-rc.2 (exports `settingsNamespace`) and the
-// 0.1.2 line, 0.1.2-rc.1 (removed it): a static `import { settingsNamespace }`
-// would fail to link on 0.1.2. The symbol is read through optional chaining in
-// `readSettingsSection` instead.
-import * as dshSettings from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { eventsOf } from './session-events.ts'
-import { readSettingsSection, type SettingsNamespaceBrand } from './settings-locale.ts'
 import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
@@ -153,7 +145,7 @@ interface AnchorCacheEntry {
  * recycled id would hand back another session's anchor.
  */
 function anchorSeqOf(session: Session, cache: WeakMap<Session, AnchorCacheEntry>): number | undefined {
-  const events = eventsOf(session)
+  const events = session.snapshotEvents()
   const cached = cache.get(session)
   if (cached !== undefined && cached.eventsLength === events.length) return cached.anchor
   let anchor: number | undefined = cached?.anchor
@@ -510,7 +502,7 @@ async function executeRewind(
     }
     let plan: RewindPlan
     try {
-      plan = resolveOrError(eventsOf(agent.session), agent.session.surface.nodes, rawTarget)
+      plan = resolveOrError(agent.session.snapshotEvents(), agent.session.surface.nodes, rawTarget)
     } catch (error) {
       return rewindErrorResult(error)
     }
@@ -530,8 +522,8 @@ async function executeRewind(
       // (every real step already closed). Without the frame, the first
       // measure() after the rewind throws "no matching step/start event" and
       // /compact (and automatic compaction) stay broken for the session.
-      const turn = markerTurnOf(eventsOf(agent.session))
-      const step = markerStepOf(eventsOf(agent.session), turn)
+      const turn = markerTurnOf(agent.session.snapshotEvents())
+      const step = markerStepOf(agent.session.snapshotEvents(), turn)
       agent.session.append('step/start', { turn, step })
       try {
         event = agent.session.append('assistant/message', { turn, step, message: marker }, {
@@ -626,7 +618,7 @@ async function handleRewind(
     // is a defensive fallback for non-composer callers: it withdraws the most
     // recent user message (time-travel back one turn; the text is offered
     // back in the composer).
-    const candidates = listRewindCandidates(eventsOf(session), session.surface.nodes, 1)
+    const candidates = listRewindCandidates(session.snapshotEvents(), session.surface.nodes, 1)
     if (candidates.length === 0) {
       return { kind: 'error', text: t('noUserMessages') }
     }
@@ -639,7 +631,7 @@ async function handleRewind(
     if (target === undefined) return { kind: 'error', text: usage() }
     let plan: RewindPlan
     try {
-      plan = resolveOrError(eventsOf(session), session.surface.nodes, target)
+      plan = resolveOrError(session.snapshotEvents(), session.surface.nodes, target)
     } catch (error) {
       return rewindErrorResult(error)
     }
@@ -652,7 +644,7 @@ async function handleRewind(
   // can render every reachable rewind target — not just the already-loaded
   // history window. Side-effect free: no event is appended, nothing rewound.
   if (parts[0] === '__candidates') {
-    const candidates = listRewindCandidates(eventsOf(session), session.surface.nodes)
+    const candidates = listRewindCandidates(session.snapshotEvents(), session.surface.nodes)
     return { kind: 'success', text: formatCandidateList(candidates) }
   }
 
@@ -930,17 +922,21 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // was never set) leaves the default English — the ecosystem's neutral
   // fallback — without failing the plugin load.
   ctx.inject(['settings'], (settingsCtx) => {
-    // Read the durable locale preference via `readSettingsSection`, which
-    // tolerates the settings-namespace brand across the dual channel: on
-    // 0.1.1-rc.2 it calls the removed-in-0.1.2 `settingsNamespace('locale')`
-    // helper (which returns `'locale'` at runtime), on 0.1.2-rc.1 it falls back
-    // to the raw `'locale'` string. Same runtime call on both, so one compiled
-    // host bundle links and runs on 0.1.1-rc.2 and 0.1.2-rc.1.
-    const section = readSettingsSection(
-      settingsCtx.settings as unknown as { get(ns: string): unknown },
-      'locale',
-      (dshSettings as unknown as { settingsNamespace?: SettingsNamespaceBrand }).settingsNamespace,
-    ) as
+    // Structural face of the injected settings service: the 0.1.2-rc.1
+    // provider reads sections by raw namespace string. Kept local so the host
+    // bundle never type-couples on the settings contract.
+    const settings = settingsCtx as unknown as {
+      settings: {
+        get(ns: string): unknown
+        register(ns: string, schema: unknown, opts: { base: CleanupConfig }): {
+          get(): unknown
+          update(patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+        }
+      }
+    }
+    // Read the durable locale preference. The 0.1.2-rc.1 settings provider
+    // accepts the raw namespace string ('locale'); no brand helper is needed.
+    const section = settings.settings.get('locale') as
       | { preference?: HostLocaleId }
       | undefined
     if (section?.preference === 'zh' || section?.preference === 'en') {
@@ -951,17 +947,13 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     // it. `base` is the defaults layer (below the user layer), so the resolved
     // policy is always schema-valid. The namespace is hyphenated (the settings
     // grammar rejects dots). The register's returned scope is read/written
-    // through a structural face so neither 0.1.1-rc.2 nor 0.1.2-rc.1
-    // type-couples the host bundle; the client settings API drift (0.1.2 adds
-    // `mutate`) never reaches this module.
-    const cleanupScope = (
-      settingsCtx.settings as unknown as {
-        register(ns: string, schema: unknown, opts: { base: CleanupConfig }): {
-          get(): unknown
-          update(patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
-        }
-      }
-    ).register(CLEANUP_SETTINGS_NAMESPACE, CleanupConfigSchema, { base: DEFAULT_CLEANUP_CONFIG }) as unknown as CleanupSettingsScope
+    // through a structural face so the host bundle does not type-couple on the
+    // client settings API (0.1.2 adds `mutate`; it is unused here).
+    const cleanupScope = settings.settings.register(
+      CLEANUP_SETTINGS_NAMESPACE,
+      CleanupConfigSchema,
+      { base: DEFAULT_CLEANUP_CONFIG },
+    ) as unknown as CleanupSettingsScope
     cleanupStore = settingsCleanupStore(cleanupScope)
     // One-time, idempotent migration of the pre-GUI file (see the module doc in
     // snapshot-cleanup.ts); every startup this is a cheap ENOENT read once the

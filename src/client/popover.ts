@@ -33,16 +33,15 @@ export interface PopoverOptions {
   readonly onRetract?: () => void
   readonly preview: string
   /**
-   * Dual-channel chat reader (0.1.1-rc.2 session face / 0.1.2-rc.1
-   * uiConversation view): the durable variant's command probes scan the chat
-   * through it. Unused by the pending-retract variant.
+   * Chat reader on the 0.1.2-rc.1 `uiConversation` "chat" view: the durable
+   * variant's command probes scan the chat through it. Unused by the
+   * pending-retract variant.
    */
   readonly chatOf: ChatOf
   /**
    * Subscribe to one session's live chat-update signal, so a probe waiting on
-   * a command's chat node can be woken when the chat snapshot changes (0.1.2-rc.1
-   * the session face no longer fires on a chat update). Passed straight through
-   * to `waitForCommand`.
+   * a command's chat node can be woken when the chat snapshot changes. Passed
+   * straight through to `waitForCommand`.
    */
   readonly watchChat: ChatWatch
   /** The button that opened the popover (outside-click ignore target). */
@@ -144,7 +143,7 @@ export function waitForCommand(
   chatOf: ChatOf,
   match: (node: CommandNode) => boolean,
   timeoutMs = 8000,
-  watch?: (cb: () => void) => () => void,
+  watch: (cb: () => void) => () => void,
 ): Promise<{ kind: 'success' | 'error'; text?: string } | null> {
   return new Promise(resolve => {
     let settled = false
@@ -161,12 +160,11 @@ export function waitForCommand(
         settle({ kind: node.outcome.kind, text: node.outcome.text })
       }
     }
-    // The chat-update signal: on 0.1.2-rc.1 the session face's `subscribe` no
-    // longer fires when the chat snapshot changes (the chat moved to the
-    // `uiConversation` view), so a waiting caller passes a watch bound to that
-    // view. Otherwise fall back to the session face's own `subscribe`, which on
-    // 0.1.1-rc.2 IS the chat-update signal (its snapshot still carries the chat).
-    const unsubscribe = (watch ?? ((cb: () => void) => session.subscribe(cb)))(check)
+    // The chat-update signal: on 0.1.2-rc.1 the session face's `subscribe` does
+    // not fire when the chat snapshot changes (the chat moved to the
+    // `uiConversation` view), so the waiting caller passes a watch bound to
+    // that view.
+    const unsubscribe = watch(check)
     const timer = setTimeout(() => settle(null), timeoutMs)
     check()
   })
@@ -189,7 +187,7 @@ async function previewImpact(
   session: SessionFace,
   chatOf: ChatOf,
   seq: number,
-  watch?: (cb: () => void) => () => void,
+  watch: (cb: () => void) => () => void,
 ): Promise<PreviewOutcome> {
   // Exclude preview nodes that already exist: a second popover on the same
   // message must wait for THIS command's node, not settle on the previous

@@ -74,26 +74,23 @@ export type PortalTarget =
 export interface RewindBridgeDeps {
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   /**
-   * Dual-channel chat reader (0.1.1-rc.2 session face / 0.1.2-rc.1
-   * uiConversation "chat" view): every chat snapshot read goes through it. See
-   * `chatSnapshotOf` in hidden.ts for the channel precedence.
+   * Chat reader on the 0.1.2-rc.1 `uiConversation` "chat" view: every chat
+   * snapshot read goes through it. See `chatSnapshotOf` in hidden.ts.
    */
   readonly chatOf: ChatOf
   /**
    * Subscribe to one session's live chat-update signal, so the composer refill
    * waiting on an executed rewind's chat node can be woken when the chat
-   * snapshot changes (0.1.2-rc.1 the session face no longer fires on a chat
-   * update). Passed through to `waitForCommand`.
+   * snapshot changes. Passed through to `waitForCommand`.
    */
   readonly watchChat: ChatWatch
   readonly currentSessionId: () => string | undefined
   readonly t: Translate
   readonly subscribeLocale: (cb: () => void) => () => void
   /**
-   * Session-aware dual-channel composer writer (see `writeComposer`): the
-   * 0.1.2-rc.1 `conversation.input` facade `setDraft` when reachable, else the
-   * 0.1.1-rc.2/0.1.2-rc.1 DOM fill. Session-scoped so the refill only lands in
-   * the session that just rewound.
+   * Session-aware composer writer (see `writeComposer`): the 0.1.2-rc.1
+   * `conversation.input` facade `setDraft` when reachable, else the DOM fill.
+   * Session-scoped so the refill only lands in the session that just rewound.
    */
   readonly setComposerText: (sessionId: string, text: string) => boolean
 }
@@ -128,29 +125,13 @@ interface ComposerDraftWriter {
 }
 
 /**
- * Write `text` into the 0.1.1-rc.2 `<textarea>` composer (React-controlled: use
- * the native setter so the value change is seen, then dispatch an input event,
- * then focus). This is the 0.1.1-rc.2 channel of the composer-write dual path.
- */
-function fillComposerTextarea(text: string): boolean {
-  const textarea = document.querySelector<HTMLTextAreaElement>(COMPOSER_TEXTAREA_SELECTOR)
-  if (textarea === null) return false
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
-  setter?.call(textarea, text)
-  textarea.dispatchEvent(new Event('input', { bubbles: true }))
-  textarea.focus()
-  return true
-}
-
-/**
  * Write `text` into the 0.1.2-rc.1 Lexical `contenteditable` composer
  * (`[data-composer-input]`) through the native editing pipeline: set a
  * full-content selection, then `insertText`. That fires `beforeinput`, which
  * the harness's plain-text Lexical editor adopts into its model, exactly like
  * a user typing. Falls back to a direct text-node write when `execCommand` is
- * unavailable (non-Chromium only); best-effort. This is the 0.1.2-rc.1 DOM
- * fallback channel of the composer-write dual path (the primary 0.1.2-rc.1
- * channel is the `setDraft` facade).
+ * unavailable (non-Chromium only); best-effort. This is the DOM fallback of
+ * the composer write (the primary channel is the `setDraft` facade).
  */
 function fillComposerEditable(text: string): boolean {
   const editable = document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
@@ -176,24 +157,21 @@ function fillComposerEditable(text: string): boolean {
 }
 
 /**
- * Fill the dsh composer with `text`. DOM dual-channel fallback: the 0.1.1-rc.2
- * `<textarea>` path, then the 0.1.2-rc.1 `contenteditable` path. Used by
- * `setComposerText` (the harness-facade-aware writer) as the last-resort and
- * by `runRewindAndFill` to put the withdrawn target message back into the
- * composer after a rewind. Best-effort — no composer match means false,
- * never a throw.
+ * Fill the dsh composer with `text` through the 0.1.2-rc.1 `contenteditable`
+ * DOM path. Used by `setComposerText` (the harness-facade-aware writer) as the
+ * last-resort and by `runRewindAndFill` to put the withdrawn target message
+ * back into the composer after a rewind. Best-effort — no composer match means
+ * false, never a throw.
  */
 export function fillComposer(text: string): boolean {
-  if (fillComposerTextarea(text)) return true
   return fillComposerEditable(text)
 }
 
 /**
- * Dual-channel composer write, mirroring `chatSnapshotOf`: prefer the harness
- * facade's `setDraft` (0.1.2-rc.1, correct whole-draft replace), then degrade
- * to the DOM `fillComposer` (0.1.1-rc.2 textarea / 0.1.2-rc.1 contenteditable).
- * A facade that throws (session teardown) is treated as absent so the DOM path
- * still restores the text. Never throws.
+ * Composer write: prefer the harness facade's `setDraft` (0.1.2-rc.1, correct
+ * whole-draft replace), then degrade to the DOM `fillComposer` (0.1.2-rc.1
+ * contenteditable). A facade that throws (session teardown) is treated as
+ * absent so the DOM path still restores the text. Never throws.
  * @param text - the withdrawn target message text.
  * @param facade - the 0.1.2-rc.1 session input draft writer, when reachable.
  * @returns whether a channel applied the text.
@@ -307,13 +285,12 @@ export async function runRewindAndFill(
 }
 
 /**
- * The composer's text-holding element: 0.1.1-rc.2 `<textarea>` first, then
- * 0.1.2-rc.1 `contenteditable` (the 0.1.2-rc.1 facade `setDraft` is preferred
- * in `writeComposer`; this DOM path is the fallback).
+ * The composer's text-holding element: the 0.1.2-rc.1 Lexical `contenteditable`
+ * div `[data-composer-input]` (the 0.1.2-rc.1 facade `setDraft` is preferred in
+ * `writeComposer`; this DOM path is the fallback).
  */
 function composerSurface(): HTMLElement | null {
-  return document.querySelector<HTMLTextAreaElement>(COMPOSER_TEXTAREA_SELECTOR)
-    ?? document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
+  return document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
 }
 
 /** Transient status toast above the composer (rewind-failure notification). */
@@ -334,14 +311,10 @@ function showHint(text: string): void {
 }
 
 /**
- * The composer's text surface, whichever harness version is running. 0.1.1-rc.2
- * renders a `<textarea>` under `[data-input-scroll]`; 0.1.2-rc.1 replaced it
- * with a Lexical `contenteditable` div (`[data-composer-input]`). The refill
- * must write to whichever exists, so the withdrawn text reaches the composer on
- * both channels. (`textarea[data-phase]` is a redundant 0.1.1-rc.2 latitude
- * kept for safety; `[data-input-scroll] textarea` alone matches the same node.)
+ * The composer's text surface: the 0.1.2-rc.1 `contenteditable` div
+ * (`[data-composer-input]` uses a Lexical editor). The refill writes to this
+ * node via the `setDraft` facade when reachable, else the DOM fallback.
  */
-const COMPOSER_TEXTAREA_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
 const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
 
 /** Both durable user messages and durable steering inputs render user-style rows. */
@@ -350,19 +323,6 @@ const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"][data-chat-anchor-key], 
 /** Every conversation seat row (hidden rows included). */
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 
-/**
- * The row container whose hover reveals the actions (and the time).
- *
- * @dualmode 0.1.1-rc.2 ↔ 0.1.2-rc.1
- * - 0.1.1-rc.2: the user row is attribute-marked `[data-time-hover-root]` and
- *   mounts the actions row as its LAST child.
- * - 0.1.2-rc.1: the marker is gone from user rows entirely — `data-time-hover-root`
- *   no longer exists and `data-actions-reveal` now lives only on the per-turn
- *   tail footer (`TurnTailNodeView`). User-row actions are revealed via CSS
- *   `:has()` and located structurally by `actionsContainerOf` instead.
- */
-const ACTIONS_ROOT_SELECTOR = '[data-time-hover-root]'
-
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
 const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
 
@@ -370,30 +330,21 @@ const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
  * Locate the actions container of a user/steering seat row — the element the
  * ↶ button portals into (the copy/branch IconActions row).
  *
- * @dualmode 0.1.1-rc.2 ↔ 0.1.2-rc.1
- * - 0.1.1-rc.2: the hover-reveal root is attribute-marked
- *   `[data-time-hover-root]` and mounts the actions row as its LAST child. A
- *   pending row IS that root; a durable row CONTAINS it as a descendant.
- * - 0.1.2-rc.1: the marker was removed from user rows (it now lives only on the
- *   per-turn tail footer, `TurnTailNodeView`), and the user action row is
- *   revealed via CSS `:has()`. The container is instead located structurally:
- *   the direct holder of the copy `<button>` (the `MessageIconActions`
- *   container, which mounts that button as a direct child —
- *   `MessageIconActions.tsx:83,86`).
+ * On the 0.1.2-rc.1 line the `data-time-hover-root` marker lives only on the
+ * per-turn tail footer (`TurnTailNodeView`), and the user action row is
+ * revealed via CSS `:has()`. The container is located structurally: the direct
+ * holder of the copy `<button>` (the `MessageIconActions` container, which
+ * mounts that button as a direct child — `MessageIconActions.tsx:83,86`).
  *
  * Returns undefined when no qualifying container is found; the caller refuses
  * to portal (never a crash, never a wrong attachment). Exported as a test seam
- * (see `collectTargets`) so the dual-channel finder is exercised directly for
+ * (see `collectTargets`) so the row-shape finder is exercised directly for
  * both durable and pending row shapes without a full React portal render.
  */
 export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | undefined {
-  const root = row?.matches(ACTIONS_ROOT_SELECTOR) ? row : row?.querySelector<HTMLElement>(ACTIONS_ROOT_SELECTOR)
-  const actions = root?.lastElementChild
-  if (actions instanceof HTMLElement && actions.querySelector('button') !== null) return actions
-  // 0.1.2-rc.1 structural fallback (marker removed from user
-  // rows — see the @dualmode note above): the copy button's own container. The
-  // container is located by the LAST action `<button>`, NOT the first `<button>`
-  // in the row: a user message with an image renders its thumbnail as a
+  // The copy button's own container on the 0.1.2-rc.1 line (see the note
+  // above): located by the LAST action `<button>`, NOT the first `<button>` in
+  // the row — a user message with an image renders its thumbnail as a
   // `<button>` (MessageImage's frame, ui-attachment) inside the media gallery,
   // which precedes the actions row in document order — `row.querySelector('button')`
   // would portal the ↶ button into the gallery (pinned at the image's
@@ -491,9 +442,8 @@ function collectPendingTargets(snapshot: QueueLike): readonly PortalTarget[] {
     if (row === undefined) continue
     // Unlike durable rows, the pending bubble row IS the hover/actions root
     // (no outer seat wrapper); its actions row is the last child and holds the
-    // copy IconAction — refuse to portal when the DOM does not match. 0.1.2-rc.1
-    // dropped the attribute marker from this row too, so the same dual-channel
-    // finder (with the structural fallback) is reused.
+    // copy IconAction — refuse to portal when the DOM does not match. The same
+    // structural finder is reused.
     const actions = actionsContainerOf(row)
     if (actions === undefined) continue
     const item = steering[i]!
@@ -553,10 +503,9 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
         return
       }
       const snapshot = session.getSnapshot()
-      // Since 0.1.2-rc.1 the chat snapshot no longer rides the session face;
-      // `chatOf` picks the 0.1.1-rc.2 face channel or the 0.1.2-rc.1
-      // `uiConversation` "chat" view. undefined = no channel available yet:
-      // skip the durable path entirely (pending targets stay collectible).
+      // `chatOf` serves the 0.1.2-rc.1 `uiConversation` "chat" view; undefined
+      // = no view registered yet: skip the durable path entirely (pending
+      // targets stay collectible).
       const chat = chatOf(session)
       const hiddenSeqs = chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
@@ -699,14 +648,12 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, current
   )
 }
 
-/** The current composer draft, on whichever channel: 0.1.1-rc.2 textarea
- * `.value`, 0.1.2-rc.1 contenteditable `textContent`. Empty when the composer
- * is absent. Exported as a test seam (the empty-composer guard in
- * `retractPending`). */
+/** The current composer draft: the 0.1.2-rc.1 contenteditable `textContent`.
+ * Empty when the composer is absent. Exported as a test seam (the
+ * empty-composer guard in `retractPending`). */
 export function composerText(): string {
   const surface = composerSurface()
   if (surface === null) return ''
-  if (surface instanceof HTMLTextAreaElement) return surface.value
   return surface.textContent ?? ''
 }
 

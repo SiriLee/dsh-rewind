@@ -7,9 +7,10 @@
  *
  * npm's prerelease matching rule only accepts a prerelease candidate when the
  * range contains a comparator on the SAME [major, minor, patch] tuple, so a
- * peer range like "^0.1.0-rc.6 || ^0.1.1-rc.2" silently stops matching the day
- * DSH bumps to a new tuple (0.1.2-rc.x, 0.2.x, …) — while same-tuple rc rolls
- * (0.1.1-rc.2 → rc.3) keep working and need no action.
+ * peer range like "^0.1.2-rc.1" silently stops matching the day DSH bumps to a
+ * new tuple (0.2.x, …) — while same-tuple rc rolls (0.1.2-rc.1 → rc.2) keep
+ * working and need no action. The single-line model replaces the tuple rather
+ * than appending an OR term.
  *
  * This script compares the current DSH tuple against the tuples covered by the
  * first @deepseek-ai/dsh-* peer range in package.json and exits:

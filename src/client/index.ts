@@ -57,18 +57,16 @@ import {
 
 export const name = 'dsh-rewind'
 // NOTE: deliberately NOT injecting the 0.1.2-rc.1 `uiConversation` service
-// here. Cordis inject entries are REQUIRED services; the name does not exist on
-// harness 0.1.1-rc.2, so declaring it would stall this plugin forever on DSH
-// Desktop 2.0.3. The service is resolved lazily per read instead (see
-// `uiConversation` in apply), the same optional `ctx.get` pattern the
-// harness's own consumer plugins use on 0.1.2.
+// here as a required dependency. The service is resolved lazily per read
+// instead (see `uiConversation` in apply), the optional `ctx.get` pattern the
+// harness's own consumer plugins use.
 //
 // `settingsScope` is likewise NOT a module-level inject. Following the
 // dsh-market template (see src/client/index.ts below), the settings surface is
 // reached through a NESTED `ctx.inject(['settingsScope'], ...)`: naming it at
 // the module level would keep this whole plugin unmounted on a host without
-// that service, costing the rewind feature a settings card that a 0.1.1-rc.2
-// host cannot render. Nested, the card simply never appears there.
+// that service, costing the rewind feature its settings card. Nested, the card
+// simply never registers there.
 export const inject = ['slots', 'sessions', 'locale', 'commandUi']
 
 const NS = 'rewind'
@@ -76,10 +74,8 @@ const NS = 'rewind'
 /**
  * Structural face of the 0.1.2-rc.1 `uiConversation` service: per-session
  * conversation bindings exposing named view targets (the "chat" view carries
- * the chat snapshot). This is the 0.1.2-rc.1 channel of the `chatSnapshotOf`
- * dual reader (the 0.1.1-rc.2 channel is the session-face `chat` field).
- * Typed locally so the plugin never imports the conversation UI package's types
- * and survives harness version drift.
+ * the chat snapshot). Typed locally so the plugin never imports the
+ * conversation UI package's types and survives harness version drift.
  */
 interface UiConversationLike {
   binding(source: string | { readonly sessionId: string }): {
@@ -91,10 +87,8 @@ interface UiConversationLike {
  * Structural face of the 0.1.2-rc.1 `conversation.input` session-input resolver
  * (`SessionInputResolver`): resolves a per-session input shell whose
  * `setDraft` replaces the whole composer draft through the harness's Lexical
- * editor. This is the 0.1.2-rc.1 channel of the composer-write dual path (the
- * 0.1.1-rc.2 channel is the `<textarea>` DOM fill). Typed locally so the
- * plugin never imports the conversation UI package and survives harness
- * version drift. Absent on 0.1.1-rc.2.
+ * editor. Typed locally so the plugin never imports the conversation UI
+ * package and survives harness version drift.
  */
 interface SessionInputResolverLike {
   for(actx: unknown): { setDraft(text: string): void }
@@ -105,8 +99,7 @@ interface SessionInputResolverLike {
  * binds (the `settingsScope.bind({namespace})` result). Only the subset the
  * card uses — a resolved-value snapshot, a per-field write, and a change
  * subscription — typed locally so the plugin never imports the client settings
- * typed contract (which drifts 0.1.1-rc.2 ↔ 0.1.2-rc.1: 0.1.2 adds `mutate`,
- * not used here).
+ * typed contract (0.1.2 adds `mutate`; it is not used here).
  */
 interface CleanupSettingsScopeLike {
   getSnapshot(): {
@@ -116,7 +109,7 @@ interface CleanupSettingsScopeLike {
     /** Whether the Host document accepts writes (the harness's own writable signal). */
     writable: boolean
   }
-  /** Write one field's user-layer value (present on 0.1.1-rc.2 and 0.1.2-rc.1). */
+  /** Write one field's user-layer value. */
   set(field: string, value: unknown): Promise<void>
   /** Observe snapshot replacements; returns the disposer. */
   subscribe(cb: () => void): () => void
@@ -126,12 +119,9 @@ interface CleanupSettingsScopeLike {
 const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
 /**
- * The composer's text surface, whichever harness version is running: 0.1.1-rc.2
- * is a `<textarea>`, 0.1.2-rc.1 is a Lexical `contenteditable` div. The
- * `/rewind` text-flow anchor must point at whichever exists, so the popup
- * positions correctly on both channels.
+ * The composer's text surface: the 0.1.2-rc.1 Lexical `contenteditable` div
+ * `[data-composer-input]`. The `/rewind` text-flow anchor points at it.
  */
-const COMPOSER_TEXTAREA_SELECTOR = '[data-input-scroll] textarea, textarea[data-phase]'
 const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
 
 /**
@@ -169,10 +159,9 @@ export function apply(ctx: ClientContext): void {
      * The 0.1.2-rc.1 chat channel: the `uiConversation` service (contributed by
      * dsh-client-ui-conversation; dsh-client-ui-chat registers its named
      * "chat" view through the uiSession slot hook). Resolved lazily through
-     * `ctx.get` — the harness's own consumer pattern — so the read returns
-     * undefined on 0.1.1-rc.2, where the service does not exist (see the
-     * `inject` note above for why it is not a declared dependency). Re-read on
-     * every call: services restart under the live-reload profile patcher.
+     * `ctx.get` — the harness's own consumer pattern — so the read is undefined
+     * before the service registers. Re-read on every call: services restart
+     * under the live-reload profile patcher.
      */
     const uiConversation = (): UiConversationLike | undefined =>
       (ctx as { get(name: string): unknown }).get('uiConversation') as UiConversationLike | undefined
@@ -180,9 +169,8 @@ export function apply(ctx: ClientContext): void {
     /** The named chat view in the 0.1.2-rc.1 uiConversation registry. */
     const CHAT_VIEW = 'chat'
     /**
-     * The live chat snapshot of a session, or undefined when unavailable.
-     * Dual channel (see `chatSnapshotOf`): the 0.1.1-rc.2 session-face snapshot
-     * first, then the 0.1.2-rc.1 `uiConversation` "chat" view.
+     * The live chat snapshot of a session, or undefined when unavailable. Served
+     * by the 0.1.2-rc.1 `uiConversation` "chat" view (see `chatSnapshotOf`).
      * `uiConversation.binding` throws for a session it does not know (a
      * teardown window) — degrade to "no chat" instead of failing the caller.
      */
@@ -190,22 +178,19 @@ export function apply(ctx: ClientContext): void {
       if (session === undefined) return undefined
       try {
         const view = uiConversation()?.binding(session.sessionId).target(CHAT_VIEW)
-        return chatSnapshotOf(session, view)
+        return chatSnapshotOf(view)
       } catch {
         return undefined
       }
     }
 
     /**
-     * The 0.1.2-rc.1 composer channel: the `conversation` service's `input`
+     * The 0.1.2-rc.1 composer writer: the `conversation` service's `input`
      * resolver (`SessionInputResolver`) through which `setDraft` replaces the
      * whole composer draft (the harness's own Lexical editor — the correct
-     * semantics, not a DOM hack). Resolved lazily through `ctx.get` so the
-     * read is undefined on 0.1.1-rc.2, where the service does not exist;
-     * `sessions.scope` is likewise absent on 0.1.1-rc.2. Wrapped in the
-     * `writeComposer` dual channel: the 0.1.2-rc.1 facade when reachable, else
-     * the 0.1.1-rc.2 textarea / 0.1.2-rc.1 contenteditable DOM fill. Never
-     * throws.
+     * semantics, not a DOM hack). Resolved lazily through `ctx.get`; `scope` is
+     * reached via `sessions.scope`. Wrapped in `writeComposer` (the facade when
+     * reachable, else the contenteditable DOM fill). Never throws.
      */
     const setComposerText = (sessionId: string, text: string): boolean => {
       try {
@@ -228,11 +213,8 @@ export function apply(ctx: ClientContext): void {
 
     /**
      * Subscribe to one session's live chat-update signal (the wait signal for
-     * `waitForCommand`). Channel selection mirrors the chat's residence (see
-     * `resolveChatWatch`): on 0.1.2-rc.1 prefer the `uiConversation` "chat"
-     * view's `subscribe`; when that view is unreachable (0.1.1-rc.2, or before
-     * it registers) fall back to the session face's own `subscribe`. Never
-     * throws.
+     * `waitForCommand`): the 0.1.2-rc.1 `uiConversation` "chat" view's
+     * `subscribe` (see `resolveChatWatch`). Never throws.
      */
     const watchChat: ChatWatch = (sessionId, cb) => resolveChatWatch(
       id => {
@@ -242,7 +224,6 @@ export function apply(ctx: ClientContext): void {
           return undefined
         }
       },
-      id => sessionOf(id),
       sessionId,
       cb,
     )
@@ -261,15 +242,14 @@ export function apply(ctx: ClientContext): void {
 
     // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
     // Reach the settings surface through a NESTED inject (the dsh-market
-    // template, proven on 0.1.1-rc.2 ↔ 0.1.2-rc.1): do NOT name settingsScope in the
-    // module-level inject, or a host without it leaves this whole plugin
-    // unmounted (costing the rewind feature a card it cannot render). Nested,
-    // the card simply never registers there. The nested scope inherits the
-    // module 'slots' and 'locale', and gains 'settingsScope'; only then is the
-    // namespace bound and the card registered under `settings.plugin.item`
-    // keyed by the SAME namespace the Host half serves. The card reads/writes
-    // through a structural scope face (the 0.1.2-rc.1-only `mutate`
-    // deliberately unused).
+    // template): do NOT name settingsScope in the module-level inject, or a
+    // host without it leaves this whole plugin unmounted (costing the rewind
+    // feature a card it cannot render). Nested, the card simply never registers
+    // there. The nested scope inherits the module 'slots' and 'locale', and
+    // gains 'settingsScope'; only then is the namespace bound and the card
+    // registered under `settings.plugin.item` keyed by the SAME namespace the
+    // Host half serves. The card reads/writes through a structural scope face
+    // (the 0.1.2-rc.1-only `mutate` deliberately unused).
     const clientCtx = ctx as unknown as {
       inject(services: string[], callback: (scoped: {
         slots: SlotsLike
@@ -403,10 +383,9 @@ export function apply(ctx: ClientContext): void {
       yield commandUi.decorate({ name, ...rewindPopupSpec })
     }
 
-    /** The composer's text-holding element: 0.1.1-rc.2 `<textarea>` or 0.1.2-rc.1 contenteditable. */
+    /** The composer's text-holding element: the 0.1.2-rc.1 `contenteditable` div. */
     const composerSurface = (): HTMLElement | null =>
-      document.querySelector<HTMLTextAreaElement>(COMPOSER_TEXTAREA_SELECTOR)
-        ?? document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
+      document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
 
     yield () => {
       style.remove()
