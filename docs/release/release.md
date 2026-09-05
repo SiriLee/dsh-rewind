@@ -49,6 +49,11 @@ The line being released determines the branch and the bump:
 
 Each release is `git push <branch>` followed by `git push <branch> --tags`.
 
+- The tag is the **lightweight `npm version` tag** (on the `chore: release …`
+  commit). Push it as-is — **do not** create the tag or the release beforehand
+  with `gh release create <tag>`: that tags the remote's current `main` head, so
+  an unpushed version bump leaves the tag on the wrong commit and the
+  tag/version match check fails.
 - **Before bumping, manually confirm there is no newer DSH version the plugin
   has not been verified against** (a pre-release can ship in DSH Desktop
   without being on npm; see docs/compat/audit.md).
@@ -61,6 +66,10 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
   build + artifact verification + a `npm pack --dry-run` — on every push / PR
   across both Node engines boundary versions; the tarball layout is guarded by
   `tests/package-layout.test.ts`.
+- The GitHub Release body is auto-created with `--generate-notes` as a
+  **placeholder** (`--latest` / `--prerelease` per version). After the publish
+  run succeeds, overwrite the body by hand in the repo's bilingual style
+  (Chinese first, then English) — never keep the auto text as the final note.
 
 ## DSH version alignment (single peer tuple)
 

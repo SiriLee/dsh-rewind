@@ -46,6 +46,10 @@ npm publish --access public
 
 每次发布为 `git push <分支>`，再 `git push <分支> --tags`。
 
+- tag 即 `npm version` 生成的**轻量 tag**（落在 `chore: release …` 提交上）。
+  直接原样 push 即可——**不要**用 `gh release create <tag>` 事先建 tag 或
+  release：它会给远端当前 `main` 的 HEAD 打 tag，若版本 bump 尚未 push，tag
+  就会落在错误提交上，导致 tag/版本一致性校验失败。
 - **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release
   可能只随 Desktop 捆绑、而不发到 npm；见 docs/compat/audit.md）。
 - workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整
@@ -55,6 +59,9 @@ npm publish --access public
 - CI（`.github/workflows/ci.yml`）在每次 push / PR 跑 `npm run check`——
   typecheck + 测试 + 构建 + 产物验证 + `npm pack --dry-run`，且覆盖
   engines 两个边界版本；tarball 布局由 `tests/package-layout.test.ts` 守护。
+- GitHub Release 正文由 workflow 以 `--generate-notes` 自动生成，仅是**占位**
+  （按版本取 `--latest` / `--prerelease`）。发布运行成功后，请用**手写双语**
+  正文（中文在前、英文在后）覆盖——切勿把自动文本当作最终发布说明。
 
 ## DSH 版本适配（单一 peer 元组）
 
