@@ -6,7 +6,18 @@
  * @module dsh-rewind/client/hidden
  */
 
-import type { ChatConversationViewNode, CommandNode } from './dsh-types.ts'
+import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+
+/** A chat-snapshot view node as the hiding / composer-refill logic reads it.
+ * The harness's view node shape plus the `anchorSeq` the chat snapshot carries
+ * (the plugin reads `anchorSeq` off each node; it is not declared on the
+ * harness's `ConversationViewNode`). */
+export interface ChatConversationViewNode {
+  readonly key: string
+  readonly kind?: string
+  readonly data?: unknown
+  readonly anchorSeq: number
+}
 
 /** Minimal chat snapshot reader the hiding logic needs. */
 export interface HiddenChat {

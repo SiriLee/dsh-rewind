@@ -16,7 +16,7 @@
  * `client-contract.test.ts` comment.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import type { ChatConversationViewNode } from '../src/client/dsh-types.ts'
+import type { ChatConversationViewNode } from '../src/client/hidden.ts'
 import { actionsContainerOf, collectTargets } from '../src/client/portals.tsx'
 import type { HiddenChat } from '../src/client/hidden.ts'
 

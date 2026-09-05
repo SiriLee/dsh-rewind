@@ -14,7 +14,8 @@
  * @module dsh-rewind/client/popover
  */
 
-import type { SessionFace, CommandNode } from './dsh-types.ts'
+import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { hasFileImpact, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'

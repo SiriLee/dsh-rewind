@@ -27,8 +27,8 @@
  * @module dsh-rewind/client
  */
 
-import type { ClientContext, SessionFace } from './dsh-types.ts'
-import type { SessionId } from '@deepseek-ai/dsh-client-connection/client'
+import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
@@ -123,6 +123,25 @@ const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
  * `[data-composer-input]`. The `/rewind` text-flow anchor points at it.
  */
 const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
+
+/**
+ * The client plugin root context read by `apply(ctx)`. Local structural face:
+ * the harness client context is a cordis `Context` augmented by runtime
+ * services, so the plugin declares the subset it reads. `sessions` is the real
+ * `ISessions` from `@deepseek-ai/dsh-api-session-controller`.
+ */
+export interface ClientContext {
+  effect(execute: () => Iterable<unknown>, label?: string): unknown
+  locale: {
+    register(namespace: string, messages: Record<string, Record<string, string>>): unknown
+    bind(namespace: string): (key: string) => string
+    subscribe(cb: () => void): () => void
+  }
+  sessions: ISessions
+  get(name: string): unknown
+  slots: unknown
+  commandUi: unknown
+}
 
 /**
  * Client plugin body: command decoration + parameterized guard + locale + the

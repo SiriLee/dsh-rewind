@@ -9,7 +9,9 @@
  * hit, and timeout — plus the `resolveChatWatch` view-only channel selection.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChatConversationViewNode, CommandNode, SessionFace } from '../src/client/dsh-types.ts'
+import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { ChatConversationViewNode } from '../src/client/hidden.ts'
 import { waitForCommand } from '../src/client/popover.ts'
 import { isExecutedRewindCommand, resolveChatWatch, type ChatOf, type HiddenChat } from '../src/client/hidden.ts'
 

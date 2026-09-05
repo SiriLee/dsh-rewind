@@ -5,8 +5,8 @@
  * LATER point must keep rows cut by an earlier rewind hidden.
  */
 import { describe, expect, it } from 'vitest'
-import type { ChatConversationViewNode, CommandNode } from '../src/client/dsh-types.ts'
-import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, targetSeqOfArgs, type HiddenChat } from '../src/client/hidden.ts'
+import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, targetSeqOfArgs, type ChatConversationViewNode, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A chat view node for one row; only fields the hiding logic reads are real. */
 function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = null): ChatConversationViewNode {

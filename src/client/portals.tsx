@@ -34,7 +34,8 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
-import type { SessionFace, UserMessageNode } from './dsh-types.ts'
+import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
+import type { UserMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
