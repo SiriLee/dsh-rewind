@@ -70,13 +70,12 @@ describe('restart flow: rewind -> restart -> continue -> restart -> rewind', () 
     applyRewind(session, latestUserSeq(session))
     probe(session)
 
-    // The marker must have reused a turn number that can never collide with a
-    // future real turn: the harness numbers the next real turn lastTurn/start+1.
-    const marker = [...session.snapshotEvents()].reverse().find(e => e.type === 'assistant/message'
-      && (e.data as { message?: { content?: unknown[] } }).message?.content?.length === 0)!
-    const markerTurn = (marker.data as { turn: number }).turn
-    const lastStartedTurn = session.snapshotEvents().findLast(e => e.type === 'turn/start')?.data.turn ?? 0
-    expect(markerTurn).toBeLessThanOrEqual(lastStartedTurn)
+    // The marker is a turn-less `user/message` (v2 surface replace), so it
+    // can never collide with a future real turn number.
+    const marker = [...session.snapshotEvents()].reverse().find(e => e.type === 'user/message'
+      && (e.data as { source?: { kind?: string }; content?: unknown[] }).source?.kind === 'plugin'
+      && (e.data as { content?: unknown[] })?.content?.length === 0)
+    expect(marker).toBeDefined()
 
     probe(session)
   })

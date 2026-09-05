@@ -15,7 +15,7 @@ import {
   toolPairingBalancedAfter,
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
-import { markerStepOf, markerTurnOf, planRewind } from '../src/rewind.ts'
+import { planRewind } from '../src/rewind.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
@@ -44,9 +44,9 @@ export function assistantMessage(text: string): AssistantMessage {
   })
 }
 
-/** The empty-content marker the host appends: derives to null (no model noise). */
-export function emptyMarker(): AssistantMessage {
-  return createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } })
+/** The empty-content `user/message` rewind marker the host appends. */
+export function emptyMarker(): UserMessage {
+  return createUserMessage({ content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' } })
 }
 
 /**
@@ -102,21 +102,17 @@ export function buildTurnedSession(): Session {
 }
 
 /**
- * Apply a rewind exactly like `executeRewind` does since v0.3.4: plan against
- * the live surface, then append the ghost-step marker frame
- * (step/start → empty assistant/message → step/end).
+ * Apply a rewind exactly like `executeRewind` does on the v0.1.3/v2 line: plan
+ * against the live surface, then append the single empty `user/message`
+ * replace marker (no ghost step frame).
  * @returns the marker's log seq.
  */
 export function applyRewind(session: Session, targetSeq: number): number {
   const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const turn = markerTurnOf(session.snapshotEvents())
-  const step = markerStepOf(session.snapshotEvents(), turn)
-  session.append('step/start', { turn, step })
-  const event = session.append('assistant/message', { turn, step, message: emptyMarker() }, {
+  const event = session.append('user/message', emptyMarker(), {
     surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
-  session.append('step/end', { turn, step })
   return event.seq
 }
 

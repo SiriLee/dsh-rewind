@@ -4,11 +4,17 @@
  * lives in `src/client/`).
  *
  * Rewind mechanism: planning is pure (`src/rewind.ts`); execution appends a
- * marker `assistant/message` into the session log whose `surfaceOp` replaces
- * every surface node after the target message with the marker. The
- * append-only log (and the rendered transcript) is untouched — only the
- * model-visible surface is cut, so the next request derives its context from
- * the target onward.
+ * marker `user/message` into the session log whose `surfaceOp` replaces every
+ * surface node after the target message with the marker. The append-only log
+ * (and the rendered transcript) is untouched — only the model-visible surface
+ * is cut, so the next request derives its context from the target onward.
+ * The marker is an EMPTY `user/message`: v2 reserves surface `replace` to a
+ * node that cites every shadowed seq (`sourceEventSeqs`), and
+ * `assistant/message` can no longer carry those — so the replacement node is
+ * a `user/message`, exactly as /compact's checkpoint is. An empty
+ * `user/message` derives to itself (a present-but-empty user turn), so the
+ * marker stays as the surface-tail cut point rather than vanishing.
+ *
  *
  * File restore (mode `both`) follows Claude Code's checkpointing: the plugin
  * backs up each tracked write-class edit BEFORE it happens (at the
@@ -29,13 +35,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
-import { createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import type { AssistantMessage, Session, SessionEvent, SessionSeq } from '@deepseek-ai/dsh-session'
+import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { Session, SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { unlink } from 'node:fs/promises'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { formatCandidateList, listRewindCandidates, markerStepOf, markerTurnOf, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
@@ -258,30 +264,30 @@ async function commitEntry(
 }
 
 /**
- * Build the rewind marker: an EMPTY-content assistant message. Deriving an
- * empty assistant/message to `null` (harness behavior), so the marker never
- * enters the model context and never renders as conversation content — the
- * agent and the user both see the conversation as it was at the target. The
- * marker only exists as the surface-replacement carrier in the append-only
- * log (audit).
- *
- * The marker's turn comes from `markerTurnOf` — the LAST STARTED turn, never
- * `lastTurn + 1`: the harness numbers its next real turn exactly `lastTurn
- * turn/start + 1`, so a `maxTurn + 1` marker collides with the following
- * `turn/start` and breaks history replay (see `markerTurnOf`).
- *
- * The marker is appended inside a GHOST STEP frame (`step/start` …
- * `step/end` with the marker between them, step number from `markerStepOf`):
- * the harness token-meter replays the log and rejects any `assistant/message`
- * that does not sit inside an open step of the same `(turn, step)` — a bare
- * marker (appended while idle, every step already closed) would make every
- * later measure() throw, silently disabling /compact and automatic
- * compaction. See `markerStepOf` for why the step number must be fresh.
+ * The rewind-marker content: empty. v2 requires the surface `replace` node to
+ * be a `user/message` (assistant/message can no longer cite shadowed seqs),
+ * and an empty user/message is the closest to "invisible" — it derives to
+ * itself, so it remains a present-but-empty user turn at the surface tail.
+ * Left as a module constant so a provider that rejects `content: []` can flip
+ * to a minimal localized note in one place (see the compat audit).
  */
-function buildMarker(): AssistantMessage {
-  return createAssistantMessage({
-    content: [],
-    source: { provider: 'dsh-rewind', model: 'rewind-marker' },
+const REWIND_MARKER_CONTENT: ContentBlock[] = []
+
+/**
+ * Build the rewind marker: an EMPTY-content `user/message` carrying the
+ * surface-replace op. v2 keeps surface `replace` for the node that cites the
+ * shadowed seqs via `sourceEventSeqs`; a `user/message` is the only surface
+ * type that can do so (assistant/message embeds its stream and cannot cite
+ * sources; tool/result is restricted to single-node rewrites). The marker is
+ * appended while idle, outside any turn — no ghost `step/start`…`step/end`
+ * frame is needed, because the token-meter's step machine ignores
+ * `user/message` and the session invariant imposes no open-turn requirement
+ * on it.
+ */
+function buildMarker(): UserMessage {
+  return createUserMessage({
+    content: REWIND_MARKER_CONTENT,
+    source: { kind: 'plugin', plugin: 'dsh-rewind' },
   })
 }
 
@@ -510,35 +516,21 @@ async function executeRewind(
     const marker = buildMarker()
     let event: ReturnType<Session['append']>
     try {
-      // The marker is an EMPTY assistant/message: it derives to null in the
-      // model context and renders nothing, so the surface simply ends before
-      // the withdrawn messages — agent and user both see the conversation as
-      // it was before the target.
-      //
-      // It is wrapped in a ghost step frame (`step/start` … `step/end`, fresh
-      // step number) so the harness token-meter replay accepts the marker:
-      // token-meter requires every `assistant/message` to sit inside an open
-      // step of the same (turn, step), and the marker is appended while idle
-      // (every real step already closed). Without the frame, the first
-      // measure() after the rewind throws "no matching step/start event" and
-      // /compact (and automatic compaction) stay broken for the session.
-      const turn = markerTurnOf(agent.session.snapshotEvents())
-      const step = markerStepOf(agent.session.snapshotEvents(), turn)
-      agent.session.append('step/start', { turn, step })
-      try {
-        event = agent.session.append('assistant/message', { turn, step, message: marker }, {
-          surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
-          sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
-        })
-      } catch (error) {
-        // The step/start above already committed; close the ghost step so the
-        // log never carries a dangling open step (a later token-meter replay
-        // would reject the first step/end it sees). Only the surface-replace
-        // append can fail here (range validation); step/end itself cannot.
-        agent.session.append('step/end', { turn, step })
-        throw error
-      }
-      agent.session.append('step/end', { turn, step })
+      // The marker is an EMPTY `user/message` carrying the surface-replace op.
+      // v2 keeps surface `replace` for the one node that cites every shadowed
+      // seq via `sourceEventSeqs`; `assistant/message` can no longer carry
+      // those (it now embeds its provider stream), so the replacement node
+      // must be a `user/message` — exactly as /compact's checkpoint is. The
+      // marker is appended while idle, outside any turn, with NO ghost step
+      // frame: the token-meter's step machine ignores `user/message`, and the
+      // session invariant imposes no open-turn requirement on it. The empty
+      // content derives to itself (a present-but-empty user turn), so it stays
+      // only as the surface-tail cut point — the model-visible surface ends
+      // before the withdrawn messages.
+      event = agent.session.append('user/message', marker, {
+        surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+        sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
+      })
     } catch (error) {
       return {
         kind: 'error',

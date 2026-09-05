@@ -115,18 +115,18 @@ describe('G2 projection checkpoint (probe: SessionProjectionRegistry.checkpoint)
 })
 
 describe('G3 token-meter usage anchor (probe: baseline behavior around rewind)', () => {
-  it('baseline is usage before, heuristic after a rewind, and restored by the next real turn', () => {
+  it('baseline stays usage around a rewind (the user/message marker leaves the anchor intact)', () => {
     const session = buildUsageSession()
     const meter = newMeter()
 
     expect(meter.measure(session).baseline.kind).toBe('usage')
 
     applyRewind(session, firstUserSeq(session))
-    // The rewind marker is the last assistant/message and carries no usage:
-    // it resets the anchor to a heuristic estimate. Recorded behavior
-    // difference (docs/compat/audit.md) — the provider usage anchor returns
-    // on the next real usage-carrying call.
-    expect(meter.measure(session).baseline.kind).toBe('estimated')
+    // The marker is a `user/message`, not an `assistant/message` without
+    // usage — so the meter's baseline anchor is NOT reset to a heuristic
+    // estimate. It stays 'usage' across the rewind, and the next real
+    // usage-carrying turn keeps it there.
+    expect(meter.measure(session).baseline.kind).toBe('usage')
 
     appendUsageTurn(session, 3, 3000, 1200)
     expect(meter.measure(session).baseline.kind).toBe('usage')

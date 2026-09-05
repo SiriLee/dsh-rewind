@@ -132,9 +132,10 @@ describe('I2 surface consistency (probe: deriveMessages + node legality)', () =>
     applyRewind(session, target!)
     const last = session.surface.nodes.at(-1)!
     const lastEvent = session.snapshotEvents().find(e => e.seq === last)!
-    expect(lastEvent.type).toBe('assistant/message')
-    const message = (lastEvent.data as { message?: { content?: unknown[] } }).message
-    expect(message?.content).toEqual([])
+    expect(lastEvent.type).toBe('user/message')
+    const data = lastEvent.data as { content?: unknown[]; source?: { kind?: string } }
+    expect(data.content).toEqual([])
+    expect(data.source?.kind).toBe('plugin')
   })
 })
 
@@ -164,13 +165,14 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
       session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     applyRewind(session, target)
 
-    // Rebuild the session from the rewound log and fold again: the ghost
-    // step frame adds exactly one closed step; the reused turn number must
-    // NOT create a phantom turn. llmMs stays non-negative and near zero for
-    // the empty marker.
+    // Rebuild the session from the rewound log and fold again: the marker is
+    // a `user/message` (not an `assistant/message`), so it adds NO ghost step
+    // frame — the step count stays at the real turns' steps, and the reused
+    // turn number creates no phantom turn. llmMs stays non-negative and near
+    // zero for the empty marker.
     const after = registry.snapshot(Session.create(session.id, session.snapshotEvents())).values.sessionStats!
     expect(after.turns).toBe(2)
-    expect(after.steps).toBe(3)
+    expect(after.steps).toBe(2)
     expect(after.llmMs).toBeGreaterThanOrEqual(0)
   })
 

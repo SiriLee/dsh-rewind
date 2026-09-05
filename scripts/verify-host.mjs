@@ -263,9 +263,9 @@ const bareResult = await call(agent, '')
 const bareAfter = [...session.surface.nodes]
 check('bare /rewind succeeds', bareResult.kind === 'success', bareResult.text)
 check('bare /rewind withdraws the latest message', bareAfter.length === 3 && bareAfter[0] === 0 && bareAfter[1] === 1 && bareAfter[2] > 3, `before ${JSON.stringify(bareBefore)} -> after ${JSON.stringify(bareAfter)}`)
-// The marker rides a ghost-step frame (step/start + step/end) so the harness
-// token-meter replay accepts it (issue #2: bare markers break /compact).
-check('log stays append-only (7 events: 4 + marker frame)', session.snapshotEvents().length === 7, `events=${session.snapshotEvents().length}`)
+// The marker is a single user/message surface replace (v2): no ghost step
+// frame, so 4 seed events + 1 marker = 5.
+check('log stays append-only (5 events: 4 + user/message marker)', session.snapshotEvents().length === 5, `events=${session.snapshotEvents().length}`)
 
 // 3. /rewind @<seq> chat (the button's exact call form) cuts the surface on a
 //    fresh session
@@ -276,8 +276,8 @@ const chatResult = await call(paramAgent, '@2 chat')
 const after = [...paramSession.surface.nodes]
 check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
 check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
-// Same ghost-step frame as above: 4 seed events + step/start + marker + step/end.
-check('log stays append-only (7 events: 4 + marker frame)', paramSession.snapshotEvents().length === 7, `events=${paramSession.snapshotEvents().length}`)
+// Same single user/message marker: 4 seed events + 1 = 5.
+check('log stays append-only (5 events: 4 + user/message marker)', paramSession.snapshotEvents().length === 5, `events=${paramSession.snapshotEvents().length}`)
 
 // 4. a tracked write commits a before-backup; rewinding both restores the
 //    real file and deletes files created after the target

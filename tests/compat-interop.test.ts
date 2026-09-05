@@ -137,19 +137,15 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
     expect(() => Session.create(session.id, session.snapshotEvents())).not.toThrow()
   })
 
-  it('DISCOVERY R-OPENSTEP: a dangling open step in the log breaks token-meter replay after a rewind', () => {
+  it('R-OPENSTEP is no longer triggered: a dangling open step no longer breaks token-meter replay after a rewind', () => {
     // A log carrying an UNCLOSED step/start (abnormal log — manual edit,
     // crash between step/start and the finally-closing step/end, or a buggy
-    // third-party plugin) is accepted by Session.append. The plugin appends
-    // its ghost-step frame unaware, and the harness token-meter then rejects
-    // the rewind's step/start: "step/start at seq N arrived before turn
-    // T/step S ended". Every later measure() throws, so /compact and
-    // automatic compaction stay broken for the session.
-    //
-    // This test PINS the current incompatible behavior as a recorded finding
-    // (docs/compat/audit.md, R-OPENSTEP). The intended fix — reject the
-    // rewind up front when the log holds an open step — will invert this
-    // assertion into "planRewind throws RewindError('open-step')".
+    // third-party plugin) was previously tripped by the ghost-step rewind
+    // marker: its `step/start` collided with the dangling one ("step/start at
+    // seq N arrived before turn T/step S ended"), so every later measure()
+    // threw and /compact stayed broken. The v2 user/message marker appends NO
+    // step frame, so it introduces no conflicting step/start — the meter now
+    // accepts the rewound log.
     const session = Session.create(SessionId('interop-openstep'))
     appendTurn(session, 1)
     session.append('turn/start', { turn: 2 })
@@ -168,10 +164,9 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
     const target = lastSurfaceSeqOf(session, 'user/message')
     // The plugin executes the rewind successfully…
     expect(() => applyRewind(session, target)).not.toThrow()
-    // …but the ghost step frame it appended makes the token-meter replay
-    // reject the log (the discovered incompatibility).
-    expect(() => newMeter().measure(session))
-      .toThrow(/step\/start at seq \d+ arrived before turn 2\/step 1 ended/)
+    // …and, without a ghost step frame, the token-meter replay accepts the
+    // log (the previously-pinned R-OPENSTEP incompatibility is gone).
+    expect(() => newMeter().measure(session)).not.toThrow()
     expect(() => Session.create(session.id, session.snapshotEvents())).not.toThrow()
   })
 })

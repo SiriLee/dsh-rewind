@@ -1,155 +1,36 @@
 /**
- * Compaction compatibility (issue #2 regression protection): the rewind
- * marker's ghost-step frame must keep the session log replayable by the
- * harness compression pipeline.
+ * Compaction compatibility: the rewind marker — a single empty `user/message`
+ * surface replace on the v0.1.3/v2 line — must keep the session log replayable
+ * by the harness compression pipeline.
  *
- * These tests drive the REAL packages — dsh-session, dsh-token-meter,
- * dsh-compaction — exactly the way the harness does:
- *   - `/compact` (manual or automatic) measures the session through the
- *     token-meter's replay (`measure()`), which throws
- *     "assistant/message at seq N has no matching step/start event" on a bare
- *     (pre-v0.3.4) marker — the issue #2 failure;
- *   - the compaction transaction then selects a surface range and replaces it
- *     with a checkpoint (`user/message` + replace), after which the meter
- *     replays the log again.
- *
- * Every case here must pass for the fix to hold. The marker shape under test
- * is exactly what `executeRewind` appends: an empty `assistant/message`
- * wrapped in its own `step/start` … `step/end` frame with a fresh step
- * number (`markerStepOf`).
+ * These drive the REAL packages (dsh-session, dsh-token-meter,
+ * dsh-compaction) the way the harness does: `/compact` measures the session
+ * through the token-meter's replay and then replaces a surface range with a
+ * checkpoint. Because the marker is a `user/message` (not an
+ * `assistant/message`), it needs no ghost `step/start`…`step/end` frame: the
+ * token-meter's step machine ignores `user/message`, and the session invariant
+ * imposes no open-turn requirement on it.
  */
 import { describe, expect, it } from 'vitest'
-import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
-import {
-  CompactionId,
-  compactCheckpointSource,
-  toolPairingBalancedAfter,
-  toolPairingBalancedBefore,
-} from '@deepseek-ai/dsh-compaction'
-import { markerStepOf, markerTurnOf, planRewind } from '../src/rewind.ts'
-import { newMeter } from './helpers.ts'
+import { applyRewind, appendTurn, buildTurnedSession, newMeter, simulateCompaction } from './helpers.ts'
 
-function textMessage(text: string) {
-  return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+/** The marker is the last appended event: the empty `user/message` replace. */
+function markerSeqOf(session: ReturnType<typeof buildTurnedSession>): number {
+  return session.snapshotEvents().at(-1)!.seq
 }
 
-function assistantMessage(text: string) {
-  return createAssistantMessage({
-    content: [{ type: 'text', text }],
-    source: { provider: 'test', model: 'test-model' },
-  })
-}
-
-function emptyMarker() {
-  return createAssistantMessage({ content: [], source: { provider: 'dsh-rewind', model: 'rewind-marker' } })
-}
-
-/**
- * One real-shape harness turn: turn/start → step/start(1) → user → assistant
- * → step/end → turn/end (the agent loop's exact ordering; steps start at 1).
- */
-function appendTurn(session: Session, turn: number): void {
-  session.append('turn/start', { turn })
-  session.append('step/start', { turn, step: 1 })
-  session.append('user/message', textMessage(`question ${turn}`), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn, step: 1, message: assistantMessage(`answer ${turn}`) }, { surfaceOp: 'append' })
-  session.append('step/end', { turn, step: 1 })
-  session.append('turn/end', { turn, reason: { kind: 'completed' } })
-}
-
-/** A session shaped exactly like a real harness session: two completed turns. */
-function buildTurnedSession(): Session {
-  const session = Session.create(SessionId('compact-compat'))
-  appendTurn(session, 1)
-  appendTurn(session, 2)
-  return session
-}
-
-/**
- * Apply a rewind exactly like `executeRewind` does since v0.3.4: plan against
- * the live surface, then append the ghost-step marker frame.
- * @returns the marker's log seq.
- */
-function applyRewind(session: Session, targetSeq: number): number {
-  const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const turn = markerTurnOf(session.snapshotEvents())
-  const step = markerStepOf(session.snapshotEvents(), turn)
-  session.append('step/start', { turn, step })
-  const event = session.append('assistant/message', { turn, step, message: emptyMarker() }, {
-    surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
-    sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
-  })
-  session.append('step/end', { turn, step })
-  return event.seq
-}
-
-/**
- * Simulate the compaction transaction (`compactSurfaceRegion`'s commit
- * shape): replace the given surface range with a checkpoint. Asserts the
- * tool-pairing balance at both cut points first, like
- * `validateSurfaceRegion` does.
- */
-function simulateCompaction(session: Session, start: number, end: number): void {
-  expect(toolPairingBalancedBefore(session, start as SessionSeq)).toBe(true)
-  expect(toolPairingBalancedAfter(session, end as SessionSeq)).toBe(true)
-  const nodes = session.surface.nodes
-  const startIdx = nodes.indexOf(start as SessionSeq)
-  const endIdx = nodes.indexOf(end as SessionSeq)
-  const shadowedSeqs = nodes.slice(startIdx, endIdx + 1)
-  const compactionId = CompactionId(`comp-${Date.now()}`)
-  const startEvent = session.append('compaction/start', { compactionId, turn: null })
-  const summaryEvent = session.append('compaction/summary', {
-    compactionId,
-    summary: [{ type: 'text', text: 'summarized' }],
-    shadowedRange: { start: start as SessionSeq, end: end as SessionSeq },
-    shadowedSeqs,
-    shadowedTokenCount: 7,
-    provider: 'test',
-    model: 'test-model',
-  })
-  session.append('user/message', createUserMessage({
-    content: [{ type: 'text', text: 'summary' }],
-    source: compactCheckpointSource(compactionId),
-  }), {
-    surfaceOp: { op: 'replace', start: start as SessionSeq, end: end as SessionSeq },
-    sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs],
-  })
-  session.append('compaction/end', { compactionId, turn: null })
-}
-
-/** Compare two derived contexts ignoring random message ids. */
-function contentOf(messages: readonly { role: string; content: readonly { type: string; text?: unknown }[] }[]): string[] {
-  return messages.map(m => `${m.role}:${(m.content[0] as { text?: string })?.text ?? ''}`)
-}
-
-describe('compact compatibility (issue #2 regression)', () => {
-  it('token-meter replay passes with the ghost-step marker (bare markers throw)', () => {
+describe('compact compatibility (rewind + compaction replay)', () => {
+  it('token-meter replay passes with the user/message marker', () => {
     const session = buildTurnedSession()
     applyRewind(session, 8) // rewind to turn 2's question (seq 8)
     const meter = newMeter()
     expect(() => meter.measure(session)).not.toThrow()
     const measurement = meter.measure(session)
-    // Surface [user1, assistant1, marker]: the marker is empty → 0 tokens,
-    // and the meter prices exactly the on-surface nodes.
-    expect(measurement.nodes.map(n => n.seq)).toEqual([2, 3, session.snapshotEvents().at(-2)!.seq])
-    expect(measurement.nodes.find(n => n.seq === session.snapshotEvents().at(-2)!.seq)!.tokens).toBe(0)
-  })
-
-  it('agent context is byte-identical to the pre-v0.3.4 bare marker (same surface)', () => {
-    const ghost = buildTurnedSession()
-    applyRewind(ghost, 8)
-    // The pre-v0.3.4 shape: the same marker WITHOUT the step frame. Same
-    // surface → the model must see exactly the same messages.
-    const bare = buildTurnedSession()
-    const plan = planRewind(bare.snapshotEvents(), bare.surface.nodes, { kind: 'seq', seq: 8 })
-    bare.append('assistant/message', { turn: markerTurnOf(bare.snapshotEvents()), step: 1, message: emptyMarker() }, {
-      surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
-      sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
-    })
-    expect([...ghost.surface.nodes].length).toBe([...bare.surface.nodes].length)
-    expect(contentOf(ghost.deriveMessages())).toEqual(contentOf(bare.deriveMessages()))
-    expect(contentOf(ghost.deriveMessages())).toEqual(['user:question 1', 'assistant:answer 1'])
+    // Surface [user1, assistant1, marker]: the marker is an empty user/message
+    // and is priced at the surface — no language tokens, just small framing.
+    const markerSeq = markerSeqOf(session)
+    expect(measurement.nodes.map(n => n.seq)).toEqual([2, 3, markerSeq])
+    expect(measurement.nodes.find(n => n.seq === markerSeq)!.tokens).toBeLessThanOrEqual(4)
   })
 
   it('the compaction transaction works and the meter replays the post-compaction log', () => {
@@ -158,15 +39,16 @@ describe('compact compatibility (issue #2 regression)', () => {
     const nodes = [...session.surface.nodes] // [user1, assistant1, marker]
     simulateCompaction(session, nodes[0]!, nodes[nodes.length - 1]!)
     const measurement = newMeter().measure(session)
-    expect(measurement.nodes.map(n => n.seq)).toEqual([session.snapshotEvents().at(-2)!.seq])
+    // One checkpoint node remains on the surface.
+    expect(measurement.nodes).toHaveLength(1)
   })
 
   it('multi-rewind + interleaved real turns + compaction stays replayable', () => {
     const session = buildTurnedSession()
     applyRewind(session, 8) // back to turn 2's question
-    appendTurn(session, 3) // real turn 3 continues
+    appendTurn(session, 3) // a real turn 3 continues
     applyRewind(session, 2) // back to turn 1's question
-    appendTurn(session, 4) // real turn 4
+    appendTurn(session, 4) // a real turn 4
 
     const meter = newMeter()
     expect(() => meter.measure(session)).not.toThrow()
@@ -179,7 +61,7 @@ describe('compact compatibility (issue #2 regression)', () => {
     expect(before.nodes.length).toBeGreaterThan(1)
   })
 
-  it('every step/start in the log is unique (client "more than one start Match" immunity)', () => {
+  it('every step/start the marker leaves untouched is unique (client "more than one start Match" immunity)', () => {
     const session = buildTurnedSession()
     applyRewind(session, 8)
     appendTurn(session, 3)

@@ -9,23 +9,22 @@
  * transcript) is untouched; only the model-visible surface is cut, so the
  * next request derives its context from the target message onward.
  *
- * Marker shape (v0.3.4+): the marker is an EMPTY `assistant/message` with a
- * replace `surfaceOp`, wrapped in its own step frame —
+ * Marker shape (v0.1.3/v2): the marker is an EMPTY `user/message` carrying a
+ * replace `surfaceOp` — a single event:
  *
- *   step/start (turn, step) → assistant/message (marker) → step/end (turn, step)
+ *   user/message (marker, empty content) → { surfaceOp {replace, start, end} }
  *
- * The step frame exists because the harness token-meter replays the log and
- * requires every `assistant/message` to sit inside an OPEN step whose
- * `(turn, step)` matches exactly (`token meter: assistant/message at seq N
- * has no matching step/start event` otherwise) — a bare marker appended while
- * idle (every step already closed) makes every later measure() call throw,
- * which disables /compact and automatic compaction. The frame's `turn` is the
- * LAST STARTED turn (`markerTurnOf`) and `step` is that turn's next unused
- * step number (`markerStepOf`): never a reused one, or the client
- * conversation assembler sees a duplicate `step/start` and rejects the log
- * with "received more than one start Match". The agent loop numbers its own
- * steps from memory (each new turn restarts at 1), so the ghost step can
- * never collide with a future real step.
+ * v2 reserves surface `replace` to a node that cites every shadowed seq via
+ * `sourceEventSeqs`, and `assistant/message` can no longer carry
+ * `sourceEventSeqs` (it now embeds its provider stream instead) — so the
+ * replacement node must be a `user/message`, exactly as /compact's checkpoint
+ * is. No ghost `step/start`…`step/end` frame is needed: the token-meter's
+ * step state machine ignores `user/message`, and the session invariant
+ * (`invariant.ts`) imposes no open-turn requirement on it, so the marker is
+ * appended while idle, outside any turn. The empty content means the marker
+ * carries no language; it sits at the surface tail as the model-visible
+ * "cut point" (an empty `user/message` derives to itself, so it remains a
+ * present-but-empty user turn in derived history).
  *
  * @module dsh-rewind/rewind
  */
@@ -99,66 +98,6 @@ export const CANDIDATE_PREVIEW_CHARS = 80
  * still pass an explicit `limit`.
  */
 export const DEFAULT_CANDIDATE_LIMIT = 100
-
-/**
- * Turn number for the rewind marker.
- *
- * The marker MUST NOT reuse the harness's next-turn number. The agent loop
- * numbers its next real turn `lastTurn/start + 1` (dsh-agent-loop), so a
- * marker numbered `maxTurn + 1` collides: the log then holds an
- * `assistant/message` (the marker) BEFORE the `turn/start` of the same turn,
- * and the client conversation-context builder rejects that ordering with
- * `conversation Context …:turn-tail… received an update before its start
- * Match` — history load fails and the whole conversation disappears from the
- * UI (reproduced across real sessions).
- *
- * The marker therefore reuses the LAST STARTED turn's number: the harness has
- * already consumed it (its next turn is strictly larger), so it can never be
- * reused by a future `turn/start`, and the marker lands as a harmless
- * trailing update on that turn's already-closed tail context (its `turn/end`
- * is already matched) — no new context, no reordering, nothing rendered, and
- * the empty content still derives to `null` in the model context.
- *
- * @param events - the full session event log.
- * @returns a turn number the harness can never reuse for a future `turn/start`.
- */
-export function markerTurnOf(events: readonly SessionEvent[]): number {
-  let lastStarted = 0
-  for (const event of events) {
-    if (event.type === 'turn/start' && event.data.turn > lastStarted) {
-      lastStarted = event.data.turn
-    }
-  }
-  return lastStarted
-}
-
-/**
- * Step number for the rewind marker's ghost step frame.
- *
- * The marker's `assistant/message` must be wrapped in `step/start` …
- * `step/end` of the SAME `(turn, step)` so the harness token-meter replay
- * accepts it (see the module doc). The step number MUST be a step this turn
- * has never started: the client conversation assembler treats `step/start`
- * as the start of an `assistant-step` context keyed `turn:step`, so reusing
- * an already-started step number makes the log replay throw "received more
- * than one start Match" and the history disappears from the UI. Reusing
- * `lastStep + 1` is always safe: the harness numbers a turn's steps from
- * memory (each new turn restarts at 1), so the ghost step can never collide
- * with a future real step of this turn.
- *
- * @param events - the full session event log.
- * @param turn - the marker's turn (normally `markerTurnOf(events)`).
- * @returns the smallest step number this turn has never started (≥ 1).
- */
-export function markerStepOf(events: readonly SessionEvent[], turn: number): number {
-  let lastStarted = 0
-  for (const event of events) {
-    if (event.type === 'step/start' && event.data.turn === turn && event.data.step > lastStarted) {
-      lastStarted = event.data.step
-    }
-  }
-  return lastStarted + 1
-}
 
 /** Narrow an event to a user message. */
 export function isUserMessageEvent(
