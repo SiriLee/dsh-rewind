@@ -12,7 +12,7 @@ import { execSessionCwd, sessionCwd } from '../src/session-cwd.ts'
 
 /** A real existing directory (canonicalPath realpaths it) with a `..` alias. */
 const BASE = join(tmpdir(), 'dsh-rewind-session-cwd-test')
-const ALIAS = join(BASE, '..', basename(BASE))
+const ALIAS = `${BASE}/../${basename(BASE)}`
 mkdirSync(BASE, { recursive: true })
 
 describe('sessionCwd', () => {
@@ -30,7 +30,7 @@ describe('sessionCwd', () => {
   })
 
   it('canonicalizes a cwd that itself contains parent traversal', () => {
-    expect(sessionCwd(ALIAS, 'a.ts')).toBe(realpathSync(BASE))
+    expect(sessionCwd(ALIAS, 'a.ts')).toBe(realpathSync.native(ALIAS))
   })
 
   it('keeps absolute requested paths untouched (cwd irrelevant)', () => {
