@@ -42,6 +42,7 @@ function scanFrames(buf) {
     if ((descriptor & 0x18) !== 0) throw new Error(`corrupt zstd: reserved header bit @${off - 1}`)
     const csf = descriptor >>> 6
     const single = (descriptor & 0x20) !== 0
+    const checksum = (descriptor & 0x04) !== 0
     const dict = descriptor & 0x03
     const dictBytes = dict === 3 ? 4 : dict
     const csBytes = csf === 0 ? (single ? 1 : 0) : 1 << csf
@@ -60,6 +61,10 @@ function scanFrames(buf) {
       if (buf.length - off < payload) return { frames, tornStart: start }
       off += payload
       if (last) break
+    }
+    if (checksum) {
+      if (buf.length - off < 4) return { frames, tornStart: start }
+      off += 4
     }
     frames.push({ start, end: off })
   }
