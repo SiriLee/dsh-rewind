@@ -39,8 +39,8 @@ Also under `docs/` at the repo root: `persistence-catalog.md` (full
 | `tools/pre-execute` / `execute` / `post-execute` | [packages/core/tools/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/index.ts) |
 | Client DOM anchors (`data-chat-flow-kind` / `data-chat-anchor-key`) | [packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx) |
 | User bubble rendering | [packages/client/ui-conversation/src/client/chat/MessageItem.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-conversation/src/client/chat/MessageItem.tsx) |
-| Client `SessionFace` (`command` / `cancel`) | [packages/client/runtime/src/client/contract/session.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/runtime/src/client/contract/session.ts) |
-| Client `PendingWait` (`respond`) | [packages/client/runtime/src/client/sessions/pending.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/runtime/src/client/sessions/pending.ts) |
+| Client `SessionFace` (`command` / `cancel`) | [packages/api/session-controller/src/client/contract/session.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/api/session-controller/src/client/contract/session.ts) |
+| Client pending interaction (SessionPendingInteraction) | [packages/client/ui-session/src/client/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-session/src/client/index.ts) |
 
 ## Plugin source layout
 

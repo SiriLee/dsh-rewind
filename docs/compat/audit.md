@@ -10,28 +10,30 @@
 > Targeted version: npm `@deepseek-ai/*@0.1.2-rc.1` (matches `package-lock.json`).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
-> Version alignment: `peerDependencies` use an OR-union (e.g.
-> `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1`) covering each published tuple series. npm's
-> prerelease matching rules require a candidate to share the range comparator's
-> `[major, minor, patch]` tuple, so appending is needed only for a genuinely new
-> tuple (e.g. a future `0.2.x`); any prerelease within the SAME tuple is a no-op.
-> Signal: `npm view @deepseek-ai/dsh version`;
+> Version alignment: `peerDependencies` use one tuple per DSH line
+> (e.g. `^0.1.2-rc.1`). npm's prerelease matching rules require a candidate to
+> share the range comparator's `[major, minor, patch]` tuple, so a new DSH tuple
+> replaces the peer tuple (single-line model); any prerelease within the SAME
+> tuple is a no-op. Signal: `npm view @deepseek-ai/dsh version`;
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
 > prerelease published under another tag is a manual pre-release check).
 >
-> Two version lines are supported — the `0.1.1` line (`0.1.1-rc.2`) and the
-> `0.1.2` line (`0.1.2-rc.1`). `0.1.2-rc.1` is the dev baseline; `0.1.1-rc.2` stays
-> compatible, and each line is a distinct channel.
+> The plugin targets a single DSH version line (`0.1.2-rc.1`); compatibility
+> with earlier lines is not kept.
 
-### Channeled seams (version line × channel)
+### Single channel (`0.1.2-rc.1`)
 
-| Seam | 0.1.1 line (`0.1.1-rc.2`) | 0.1.2 line (`0.1.2-rc.1`) |
-| --- | --- | --- |
-| Host session log (`eventsOf`) | `Session.events` | `session.snapshotEvents()` |
-| Client chat snapshot (`chatSnapshotOf`) | session-face `chat` field | `uiConversation` `chat` view |
-| Client composer refill (`writeComposer`) | `<textarea>` DOM write | `conversation.input.setDraft` |
-| Client settings card | nested `ctx.inject(['settingsScope'])` | nested `ctx.inject(['settingsScope'])` |
-| Client seat-button DOM (`actionsContainerOf`) | `[data-time-hover-root]` | structural locate of the copy-`<button>` container |
+The plugin targets one DSH channel. Each seam below reads the 0.1.2-rc.1 shape
+only (no `Session.events` / `[data-time-hover-root]` / `<textarea>` / face-`chat`
+legacy branch).
+
+| Seam | 0.1.2-rc.1 implementation |
+| --- | --- |
+| Host session log | `session.snapshotEvents()` |
+| Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
+| Client composer refill | `conversation.input.setDraft` facade |
+| Client settings card | nested `ctx.inject(['settingsScope'])` |
+| Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
 
 ## Definition of "fully compatible" (invariants)
 
@@ -57,7 +59,7 @@
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
 - **plan-mode**: a marker reuses the last started turn (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
-- **settings-card cross-version reach**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject unmounts the whole client plugin on the 0.1.1 line (card and rewind button disappear). It uses only the scope subset common across version lines (`getSnapshot().value` + `set`), never the 0.1.2-added `mutate`.
+- **settings-card registration**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject would keep the whole client plugin unmounted on a host without that service (card and rewind button would disappear). It reads `getSnapshot().value` + `set`, never the `mutate` write API.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 
@@ -76,7 +78,7 @@ The plugin treats these as harness-side defects it does not compensate for. Each
 ### RU-I18N: host-side locale preference is not reliably readable at command registration (harness-side structural timing defect; plugin reads once, never retries)
 
 - **Root cause (harness-side)**: the plugin resolves `activeLocale` in an
-  `ctx.inject(['settings'])` callback that reads `settings.get(settingsNamespace('locale')).preference`
+  `ctx.inject(['settings'])` callback that reads `settings.get('locale').preference`
   **once, with no retry** (`src/index.ts`). `dsh-client-locale`'s host half
   registers that `locale` settings section **through its own `ctx.inject(['settings'])`**
   (`packages/client/locale/src/index.ts`). Both callbacks wait only on `settings` and are

@@ -62,28 +62,25 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
   across both Node engines boundary versions; the tarball layout is guarded by
   `tests/package-layout.test.ts`.
 
-## DSH version alignment (peer range maintenance)
+## DSH version alignment (single peer tuple)
 
 DSH is still in rc; npm's prerelease matching rules require a peer range to
 share the host version's `[major, minor, patch]` tuple. So `peerDependencies`
-uses an OR-union covering every published tuple series
-(e.g. `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1`), extended as DSH releases new tuples.
+uses one peer tuple per DSH line (e.g. `^0.1.2-rc.1`), replaced (never
+appended) when DSH releases a new tuple.
 
-- **When to update**: only when DSH releases a new tuple
-  (`0.1.1 → 0.1.2 → 0.2.x`); rc rolling within a tuple (`0.1.1-rc.2 → rc.3`)
-  needs nothing. All `@deepseek-ai/*` packages release together;
-  `npm view @deepseek-ai/dsh version` is the authoritative signal.
-- **Exception — `@deepseek-ai/dsh-client-runtime`**: it never published a
-  `0.1.2` release (npm `next` is `0.1.1-rc.2`) and is imported `import type`
-  only, so keep it at `^0.1.0-rc.6 || ^0.1.1-rc.2` (no `0.1.2` member).
+- **When to update**: only when DSH releases a new tuple (`0.1.2 → 0.1.3 →
+  0.2.x`); rc rolling within a tuple (`0.1.2-rc.1 → rc.2`) needs nothing. All
+  `@deepseek-ai/*` packages release together; `npm view @deepseek-ai/dsh version`
+  is the authoritative signal.
 - **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
-  compares the `latest` dist-tag version against the tuples the peers cover
+  compares the `latest` dist-tag version against the tuple the peers cover
   (exit 0 = nothing to do, exit 1 = update). It reads the `latest` tag only; a
   pre-release published under another tag or bundled without
   going to npm is a manual pre-release check — see the "Before bumping" step above.
-- **Update steps**: append `|| ^<new-tuple>-rc.<n>` to every
-  `@deepseek-ai/dsh-*` peer → bump devDependencies to the latest → `npm
-  install` → `npm run check` → release.
+- **Update steps**: replace every `@deepseek-ai/dsh-*` peer's tuple with
+  `^<latest>` → bump devDependencies to the latest → `npm install` →
+  `npm run check` → release.
 - **After DSH goes final**: final releases are not bound by the prerelease
   tuple rule, so the peers can converge to a single stable range (e.g.
   `^0.1.x`); this section can then be deleted.
@@ -123,5 +120,5 @@ the line is EOL, frozen, and receives no further patches. Here `0.8.x`
 lines is applied on `main` first, then backported to each still-supported
 release branch. A fix specific to one line is applied only on that line.
 
-The OR-union peer range documented in the previous section is the legacy
-multi-line practice; the single-line model uses one peer tuple per release.
+The single-line model uses one peer tuple per release (see DSH version
+alignment above); the OR-union multi-line practice it replaced is not used.

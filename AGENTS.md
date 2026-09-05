@@ -43,9 +43,9 @@ them at runtime, so the published tarball does not carry them.
   check`, then commit and push before starting the next change.
 - Every change must pass `npm run check` before it is committed.
 - When DSH interfaces change, maintain the peer version ranges (see `docs/release/release.md`).
-- DSH compatibility is expressed by version line (`0.1.1` vs `0.1.2`), never by a
-  specific alpha release: no cross-alpha compatibility is kept, and comments/docs
-  name only the line, not `0.1.2-alpha.N`.
+- DSH compatibility is pinned to a single version line (the `0.1.2` line),
+  never a specific alpha release: no cross-alpha compatibility is kept, and
+  comments/docs name only the line, not `0.1.2-alpha.N`.
 
 ## Further reading
 - Interfaces / compatibility: `docs/harness-reference.md`, `docs/compat/audit.md`
