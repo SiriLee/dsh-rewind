@@ -49,11 +49,9 @@ The line being released determines the branch and the bump:
 
 Each release is `git push <branch>` followed by `git push <branch> --tags`.
 
-- The tag is the **lightweight `npm version` tag** (on the `chore: release …`
-  commit). Push it as-is — **do not** create the tag or the release beforehand
-  with `gh release create <tag>`: that tags the remote's current `main` head, so
-  an unpushed version bump leaves the tag on the wrong commit and the
-  tag/version match check fails.
+- The release commit is **`chore: release vX.Y.Z`**; the **lightweight `vX.Y.Z`
+  tag** sits on it. Do **not** create tag/release first with `gh release create
+  <tag>` (it tags the remote `main` head and breaks the tag/version match).
 - **Before bumping, manually confirm there is no newer DSH version the plugin
   has not been verified against** (a pre-release can ship in DSH Desktop
   without being on npm; see docs/compat/audit.md).

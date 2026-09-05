@@ -46,10 +46,9 @@ npm publish --access public
 
 每次发布为 `git push <分支>`，再 `git push <分支> --tags`。
 
-- tag 即 `npm version` 生成的**轻量 tag**（落在 `chore: release …` 提交上）。
-  直接原样 push 即可——**不要**用 `gh release create <tag>` 事先建 tag 或
-  release：它会给远端当前 `main` 的 HEAD 打 tag，若版本 bump 尚未 push，tag
-  就会落在错误提交上，导致 tag/版本一致性校验失败。
+- 发布提交为 **`chore: release vX.Y.Z`**，**轻量 `vX.Y.Z` tag** 落在该提交上。
+  **不要**用 `gh release create <tag>` 事先建 tag/release（会打到远端 `main`
+  HEAD，导致 tag/版本校验失败）。
 - **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release
   可能只随 Desktop 捆绑、而不发到 npm；见 docs/compat/audit.md）。
 - workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整
