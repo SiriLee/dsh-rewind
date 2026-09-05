@@ -75,8 +75,14 @@ if (covered.has(tuple)) {
 }
 
 console.log('ACTION NEEDED: DSH moved to a new version tuple.')
-console.log('  1. Append "|| ^<tuple>-rc.<n>" to every @deepseek-ai/dsh-* peer range in package.json')
-console.log('     (or a verified stable range once DSH ships a final release).')
+if (probe.includes('||')) {
+  // Multi-line (OR-union) peer: a new tuple is appended.
+  console.log('  1. Append "|| ^<tuple>-rc.<n>" to every @deepseek-ai/dsh-* peer range in package.json')
+  console.log('     (or a verified stable range once DSH ships a final release).')
+} else {
+  // Single-line peer (one release = one DSH line): the tuple is replaced.
+  console.log(`  1. Update every @deepseek-ai/dsh-* peer range to "^${latest}" (single-line model: replace the tuple, do not append).`)
+}
 console.log('  2. Bump the @deepseek-ai/dsh-* devDependencies to ^' + latest + '.')
 console.log('  3. npm install, rerun typecheck / tests / scripts/verify-host.mjs, then release.')
 process.exit(1)

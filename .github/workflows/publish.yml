@@ -88,23 +88,51 @@ jobs:
             echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Version-driven dist-tag routing (trunk-based; one release = one DSH
+      # line): the published version determines the npm dist-tag, independent
+      # of branch. A stable version goes to `latest`; a pre-release goes to the
+      # dist-tag named by its pre-release identifier (0.9.0-alpha.1 -> alpha,
+      # 0.9.0-rc.1 -> rc). A pre-release never occupies `latest`.
+      - name: Determine npm dist-tag from version
+        id: dist
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-'; then
+            PRERELEASE=$(echo "$VERSION" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-([A-Za-z]+).*/\1/')
+            TAG="${PRERELEASE:-next}"
+          else
+            TAG="latest"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "::notice::publishing $VERSION to npm dist-tag '$TAG'"
+
       # OIDC handles authentication; --provenance emits Sigstore attestation
-      # (available because the job carries the GitHub OIDC token).
+      # (available because the job carries the GitHub OIDC token). The dist-tag
+      # is passed explicitly so a pre-release never lands on `latest`.
       - name: Publish to npm via OIDC
         if: steps.check.outputs.already_published == 'false'
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --tag "${{ steps.dist.outputs.tag }}"
 
       - name: Create GitHub Release (if missing)
         if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ steps.dist.outputs.tag != 'latest' }}
         run: |
           if gh release view "${GITHUB_REF_NAME}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "Release ${GITHUB_REF_NAME} already exists — leaving it alone."
           else
-            gh release create "${GITHUB_REF_NAME}" \
-              --repo "${{ github.repository }}" \
-              --title "${GITHUB_REF_NAME}" \
-              --generate-notes \
-              --latest
+            if [ "$PRERELEASE" = "true" ]; then
+              gh release create "${GITHUB_REF_NAME}" \
+                --repo "${{ github.repository }}" \
+                --title "${GITHUB_REF_NAME}" \
+                --generate-notes \
+                --prerelease
+            else
+              gh release create "${GITHUB_REF_NAME}" \
+                --repo "${{ github.repository }}" \
+                --title "${GITHUB_REF_NAME}" \
+                --generate-notes \
+                --latest
+            fi
           fi

@@ -32,14 +32,25 @@ npm publish --access public
 
 ## 后续发布（CI 自动）
 
-```sh
-npm version patch
-git push origin main --tags   # 触发 .github/workflows/publish.yml
-```
+发布 workflow 为**版本驱动**：npm dist-tag 由 `package.json` 中的版本号决定、与分支无关。
+稳定版发 `latest`；pre-release 发到与其 pre-release 标识符同名的 dist-tag
+（如 `0.9.0-alpha.1` → `alpha`、`0.9.0-rc.1` → `rc`）。dist-tag 无需手传。
 
-- **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release 可能只随 Desktop 捆绑、而不发到 npm；见 docs/compat/audit.md）。
+按要发布的版本线选择分支与版本步进：
+
+| 发布类型 | 分支 | 版本步进 | dist-tag |
+| --- | --- | --- | --- |
+| 当前线稳定补丁 | `release/0.8.x` | `npm version patch` | `latest` |
+| 下一线 pre-release | `main` | `npm version prerelease --preid=alpha` | `alpha` |
+| 下一线正式版 | `main` | `npm version 0.9.0` | `latest` |
+
+每次发布为 `git push <分支>`，再 `git push <分支> --tags`。
+
+- **升版前手动确认**：确认无插件未针对其验证过的更新 DSH 版本（pre-release
+  可能只随 Desktop 捆绑、而不发到 npm；见 docs/compat/audit.md）。
 - workflow 校验 tag 与 `package.json` 版本一致，跑 typecheck + 测试 + 完整
-  构建 + 产物验证，以 `--provenance`（Sigstore）发布并创建 GitHub Release。
+  构建 + 产物验证，以 `--provenance`（Sigstore）发布到版本推导出的 dist-tag，
+  并创建 GitHub Release（pre-release 会建成 GitHub pre-release，而非 `latest`）。
   **幂等**——已发布的版本会跳过。
 - CI（`.github/workflows/ci.yml`）在每次 push / PR 跑 `npm run check`——
   typecheck + 测试 + 构建 + 产物验证 + `npm pack --dry-run`，且覆盖
@@ -66,3 +77,34 @@ OR 并集覆盖 DSH 已发布的每个元组系列（如 `^0.1.0-rc.6 || ^0.1.1-
   → devDependencies 同步升到最新 → `npm install` → `npm run check` → 发版。
 - **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则
   限制，peer 可收敛为稳定的 `^0.1.x` 单范围，此节即可删除。
+
+## 发布版本线模型
+
+**一个发布对准一条 DSH 版本线。** 插件自身版本号与宿主解耦；某发布所对准的
+DSH 线由 peer 约束（单一 companion 元组）声明，而非插件版本号。
+
+| 插件版本 | DSH 线 | 说明 |
+| --- | --- | --- |
+| `0.7.x` | `0.1.1` + `0.1.2`（广兼容） | 冻结 / EOL |
+| `0.8.x` | `0.1.2-rc.1`（单线） | 当前稳定 |
+| `0.9.x` | `0.1.3`（单线） | 下一线 |
+
+**版本号。** DSH 版本线破坏性变更 ＝ MAJOR 升版（与更早 DSH 线向后不兼容）。
+同一线内 MINOR/PATCH 保持向后兼容。
+
+**分支（主干开发）。** `main` 是唯一集成与发布线，始终可发版。当前已发布
+稳定版从发布提交点切出短命 `release/<版本>.x` 维护分支；该分支承接
+backport 修复，同时 `main` 前进到下一线。更早的（广兼容）线冻结成 tag，无分支。
+
+**dist-tag 路由。** 发布 workflow 按版本号取 npm dist-tag：稳定版发 `latest`；
+pre-release 发到与其 pre-release 标识符同名的 dist-tag（`0.9.0-alpha.1` →
+`alpha`、`0.9.0-rc.1` → `rc`）。pre-release 不占据 `latest`。
+
+**支持窗口 / EOL。** 一条 DSH 线仅在声明的窗口内受支持。默认窗口到下一
+DSH 线作为 `latest` 发布为止；此后该线 EOL、冻结、不再发补丁。此处 `0.8.x`
+（`0.1.2-rc.1`）支持到 `0.9.x`（`0.1.3`）作为 `latest` 发布为止。
+
+**Bug 修复流程（先向前修，再回迁）。** 跨多条支持线的修复，先在 `main` 上
+修复，再回迁到各仍受支持的 release 分支。仅特定线的修复，只在对应线修复。
+
+上一节 OR 并集 peer 为旧的多线做法；上述单线模型使用单一 peer 元组。

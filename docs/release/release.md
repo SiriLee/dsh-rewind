@@ -33,18 +33,30 @@ Open `https://www.npmjs.com/package/dsh-rewind-plugin` → package **settings** 
 
 ## Subsequent releases (CI, automatic)
 
-```sh
-npm version patch
-git push origin main --tags   # triggers .github/workflows/publish.yml
-```
+The release workflow is **version-driven**: it derives the npm dist-tag from the
+version in `package.json`, independent of branch. A stable version publishes to
+`latest`; a pre-release publishes to the dist-tag named by its pre-release
+identifier (e.g. `0.9.0-alpha.1` → `alpha`, `0.9.0-rc.1` → `rc`). The dist-tag is
+never passed by hand.
+
+The line being released determines the branch and the bump:
+
+| Release | Branch | Bump | dist-tag |
+| --- | --- | --- | --- |
+| Stable patch (current line) | `release/0.8.x` | `npm version patch` | `latest` |
+| Pre-release (next line) | `main` | `npm version prerelease --preid=alpha` | `alpha` |
+| Stable (next line) | `main` | `npm version 0.9.0` | `latest` |
+
+Each release is `git push <branch>` followed by `git push <branch> --tags`.
 
 - **Before bumping, manually confirm there is no newer DSH version the plugin
   has not been verified against** (a pre-release can ship in DSH Desktop
   without being on npm; see docs/compat/audit.md).
 - The workflow verifies the tag matches `package.json`, runs typecheck + tests +
-  a full build + artifact verification, publishes with `--provenance`
-  (Sigstore), and creates a GitHub Release. It is **idempotent** — an already
-  published version is skipped.
+  a full build + artifact verification, publishes with `--provenance` (Sigstore)
+  to the version-derived dist-tag, and creates a GitHub Release (a pre-release
+  is created as a GitHub pre-release, not `latest`). It is **idempotent** — an
+  already published version is skipped.
 - CI (`.github/workflows/ci.yml`) runs `npm run check` — typecheck + tests +
   build + artifact verification + a `npm pack --dry-run` — on every push / PR
   across both Node engines boundary versions; the tarball layout is guarded by
@@ -75,3 +87,41 @@ uses an OR-union covering every published tuple series
 - **After DSH goes final**: final releases are not bound by the prerelease
   tuple rule, so the peers can converge to a single stable range (e.g.
   `^0.1.x`); this section can then be deleted.
+
+## Versioned-line release model
+
+**One release targets one DSH version line.** The plugin's own version is
+independent of the host; a release declares its DSH line through the peer
+constraint (a single companion tuple), never through the plugin version.
+
+| Plugin version | DSH line | Notes |
+| --- | --- | --- |
+| `0.7.x` | `0.1.1` + `0.1.2` (broad) | frozen / EOL |
+| `0.8.x` | `0.1.2-rc.1` (single) | current stable |
+| `0.9.x` | `0.1.3` (single) | next line |
+
+**Versioning.** A DSH version-line break is a MAJOR bump (incompatible with the
+prior DSH line). Within a line, MINOR/PATCH remain compatible.
+
+**Branching (trunk-based).** `main` is the single integration and release line
+and is always releasable. The currently-shipped stable is cut into a short-lived
+`release/<version>.x` maintenance branch from its release commit; that branch
+receives backported fixes while `main` advances to the next line. The prior
+(broad-compat) line is frozen as a tag, with no branch.
+
+**dist-tag routing.** The release workflow derives the npm dist-tag from the
+version: a stable version publishes to `latest`; a pre-release publishes to the
+dist-tag named by its pre-release identifier (`0.9.0-alpha.1` → `alpha`,
+`0.9.0-rc.1` → `rc`). A pre-release never occupies `latest`.
+
+**Support window / EOL.** A DSH line is supported within a declared window. By
+default the window runs until the next DSH line ships as `latest`; after that
+the line is EOL, frozen, and receives no further patches. Here `0.8.x`
+(`0.1.2-rc.1`) is supported until `0.9.x` (`0.1.3`) ships as `latest`.
+
+**Bug-fix flow (forward-fix then backport).** A fix affecting multiple supported
+lines is applied on `main` first, then backported to each still-supported
+release branch. A fix specific to one line is applied only on that line.
+
+The OR-union peer range documented in the previous section is the legacy
+multi-line practice; the single-line model uses one peer tuple per release.
