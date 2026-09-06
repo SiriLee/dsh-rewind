@@ -172,6 +172,30 @@ describe('rewind-marker-repair', () => {
     expect(events[0]!.seq).toBe(0)
   })
 
+  it('renumbers an input form-C marker whose refs shift under a later B removal', () => {
+    // turn(0..5), B marker at 6..10 (removes seq 7,9), turn(11..16), then an
+    // ALREADY-form-C marker at 17 whose surfaceOp/sourceEventSeqs cite seqs 11..16.
+    const input = [
+      ...turn(0, 1),
+      ...ghostMarker(6, 'm-1', 2, 5, [2, 5]),
+      ...turn(11, 2),
+      ev({
+        type: 'user/message', seq: 17, time: 9,
+        data: buildRewindMarkerData('existing-c'),
+        surfaceOp: { op: 'replace', start: 11, end: 16 },
+        sourceEventSeqs: [11, 14, 16],
+      }),
+    ]
+    const { events, stats } = repairRewindMarkers(input)
+    expect(stats).toEqual({ a: 0, b: 1, c: 1, removedGhosts: 2 })
+    // The pre-existing C marker survives and its references are remapped (11→9, 14→12, 16→14).
+    const c = events.find(e => isFormCMarker(e) && (e.data as Record<string, unknown>)['id'] === 'existing-c')!
+    expect(c.seq).toBe(15)
+    expect((c as { surfaceOp?: unknown }).surfaceOp).toEqual({ op: 'replace', start: 9, end: 14 })
+    expect((c as { sourceEventSeqs?: number[] }).sourceEventSeqs).toEqual([9, 12, 14])
+    events.forEach((e, i) => expect(e.seq).toBe(i))
+  })
+
   it('does not mutate deep-frozen input (decoded events are frozen)', () => {
     const input = [
       ...turn(0, 1),

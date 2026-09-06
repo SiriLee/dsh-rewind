@@ -33,7 +33,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
-import { copyFile, rename, unlink, writeFile, open } from 'node:fs/promises'
+import { copyFile, rename, unlink, writeFile, readFile, open } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
 import { repairRewindMarkers, isLegacyRewindMarker, type RepairOutput } from './rewind-marker-repair.ts'
 import { decodeEventBody, encodeSessionLog, splitSession } from './session-log-io.ts'
@@ -269,12 +269,10 @@ async function executeSession(
   const tmpPath = `${path}.rewind-fix.tmp`
   const bakPath = `${path}.rewind-fix.bak`
 
-  // Cross-process mutual exclusion on this ONE session (O_EXCL).
-  let lock: Awaited<ReturnType<typeof open>> | undefined
-  try {
-    lock = await open(lockPath, 'wx')
-  } catch (error) {
-    return { ...base, status: 'failed', reason: 'locked', error: textOf(error) }
+  // Cross-process mutual exclusion on this ONE session (O_EXCL, owner pid recorded).
+  const lock = await acquireSessionLock(lockPath)
+  if (lock === undefined) {
+    return { ...base, status: 'failed', reason: 'locked', error: 'another process holds the session lock' }
   }
 
   try {
@@ -338,6 +336,61 @@ function textOf(error: unknown): string {
 
 function idOf(header: SessionHeader): string {
   return header.id as string
+}
+
+/** FileHandle for the session `.lock`, or undefined when held by a live process. */
+type SessionLock = Awaited<ReturnType<typeof open>>
+
+/**
+ * Acquire the per-session `.lock` (O_EXCL) and record the owner pid. If the file
+ * already exists and its recorded pid is DEAD (a crashed prior run), the stale
+ * lock is removed and one retry is made; a live holder is never taken over.
+ */
+async function acquireSessionLock(lockPath: string): Promise<SessionLock | undefined> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const handle = await open(lockPath, 'wx')
+      await handle.writeFile(String(process.pid))
+      return handle
+    } catch (error) {
+      // Only EEXIST is a lock conflict; any other error is unexpected.
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EEXIST') throw error
+      if (attempt === 1) return undefined
+      if (await removeStaleLock(lockPath)) continue
+      return undefined // a live process holds it
+    }
+  }
+  return undefined
+}
+
+/**
+ * Remove a `.lock` whose recorded owner pid is a VALID but DEAD process (a
+ * crashed prior run). A LIVE holder, or a lock that is empty/unparsable (a
+ * partial pid write — do NOT race a live holder into the same session), is
+ * left untouched so the caller fail-closes as "locked".
+ */
+async function removeStaleLock(lockPath: string): Promise<boolean> {
+  let pid = 0
+  try {
+    pid = Number((await readFile(lockPath, 'utf8')).trim())
+  } catch {
+    return false // unreadable → not provably stale
+  }
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false // partial/empty write → not provably stale
+  if (pidAlive(pid)) return false // live holder
+  await unlink(lockPath).catch(() => {})
+  return true
+}
+
+/** Is `pid` a living process? EPERM means it exists (we may not signal it). */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
 }
 
 // --- report rendering -------------------------------------------------------

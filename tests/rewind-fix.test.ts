@@ -73,6 +73,9 @@ class TempPersistence implements RewindFixDeps {
   sabotageClear = false
   /** When set, readRaw returns stale content for the just-written session. */
   sabotageVerify = false
+  /** When set, isSessionLoaded returns true from the 2nd call per id (loaded-between recheck). */
+  simulateLoadBetween = false
+  private readonly loadCalls = new Map<string, number>()
   /** Simulated read latency (ms) so concurrent readRaw calls overlap; 0 = off. */
   latencyMs = 0
   /** Live and max concurrent readRaw calls, used to assert the pool bound. */
@@ -131,7 +134,11 @@ class TempPersistence implements RewindFixDeps {
   }
 
   isSessionLoaded(id: Parameters<RewindFixDeps['isSessionLoaded']>[0]): boolean {
-    return this.loaded.has(id as string)
+    const key = id as string
+    const calls = (this.loadCalls.get(key) ?? 0) + 1
+    this.loadCalls.set(key, calls)
+    if (this.simulateLoadBetween) return calls > 1
+    return this.loaded.has(key)
   }
 
   async clearSession(id: string): Promise<unknown> {
@@ -197,7 +204,8 @@ describe('rewind-fix orchestration', () => {
 
   it('fails safely when the session is locked by another process', async () => {
     await p.writeSession('session-a', markerSession())
-    await writeFile(`${p.locateFor('session-a')}.rewind-fix.lock`, 'lock')
+    // A LIVE holder records its pid; a live lock must NOT be taken over.
+    await writeFile(`${p.locateFor('session-a')}.rewind-fix.lock`, String(process.pid))
     const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
     const outcome = outcomeOf(result, 'session-a')
     expect(outcome.status).toBe('failed')
@@ -269,5 +277,50 @@ describe('rewind-fix orchestration', () => {
     // Order preserved (listSnapshots is sorted, pool writes positional results).
     expect(result.sessions.map(s => s.id)).toEqual(['session-a', 'session-b', 'session-c'])
     expect(p.clearedCount).toBe(3)
+  })
+
+  it('rolls back on a post-write round-trip mismatch', async () => {
+    await p.writeSession('session-a', markerSession())
+    const original = await decodeZstd(await readFile(p.locateFor('session-a')))
+    p.sabotageVerify = true // readRaw returns the stale original after the write
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    expect(outcomeOf(result, 'session-a').status).toBe('failed')
+    // The rollback restored the original artifact.
+    expect(await decodeZstd(await readFile(p.locateFor('session-a')))).toBe(original)
+    expect(p.clearedCount).toBe(0)
+  })
+
+  it('skips a session that became loaded between the scan and the write', async () => {
+    await p.writeSession('session-a', markerSession())
+    const before = await decodeZstd(await readFile(p.locateFor('session-a')))
+    p.simulateLoadBetween = true // first isSessionLoaded(each id) is false, later true
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const outcome = outcomeOf(result, 'session-a')
+    expect(outcome.status).toBe('skipped')
+    expect(outcome.reason).toBe('loaded-between')
+    // The file was not written (original marker still present).
+    expect(await decodeZstd(await readFile(p.locateFor('session-a')))).toBe(before)
+    expect(p.clearedCount).toBe(0)
+  })
+
+  it('takes over a stale lock left by a dead process', async () => {
+    await p.writeSession('session-a', markerSession())
+    await writeFile(`${p.locateFor('session-a')}.rewind-fix.lock`, '999999999') // dead pid
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    expect(outcomeOf(result, 'session-a').status).toBe('repaired')
+    expect(p.clearedCount).toBe(1)
+    // The stale lock is gone after the run.
+    await expect(readFile(`${p.locateFor('session-a')}.rewind-fix.lock`)).rejects.toThrow()
+  })
+
+  it('refuses a live lock held by the current process', async () => {
+    await p.writeSession('session-a', markerSession())
+    const lockPath = `${p.locateFor('session-a')}.rewind-fix.lock`
+    await writeFile(lockPath, String(process.pid)) // live pid
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const outcome = outcomeOf(result, 'session-a')
+    expect(outcome.status).toBe('failed')
+    expect(outcome.reason).toBe('locked')
+    expect(p.clearedCount).toBe(0)
   })
 })

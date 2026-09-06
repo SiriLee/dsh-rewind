@@ -24,10 +24,6 @@
  */
 import { constants, zstdCompress, zstdDecompress } from 'node:zlib'
 import { promisify } from 'node:util'
-
-/** Promise-adapted async zstd compress/decompress (run on libuv's threadpool, non-blocking). */
-const zstdCompressAsync = promisify(zstdCompress)
-const zstdDecompressAsync = promisify(zstdDecompress)
 import {
   decodeSeqRanges,
   decodeStorageRecord,
@@ -37,6 +33,10 @@ import {
   type SessionSeq,
   type StorageRecord,
 } from '@deepseek-ai/dsh-session'
+
+/** Promise-adapted async zstd compress/decompress (run on libuv's threadpool, non-blocking). */
+const zstdCompressAsync = promisify(zstdCompress)
+const zstdDecompressAsync = promisify(zstdDecompress)
 
 /** The Zstandard frame magic. */
 const ZSTD_MAGIC = 0xfd2fb528
