@@ -119,12 +119,24 @@ export async function decompressZstdFrame(input: Buffer): Promise<Buffer> {
   return zstdDecompressAsync(input)
 }
 
-/** Decode a concatenated multi-frame zstd buffer to plaintext (async, threadpool). */
+/** Number of zstd frames decoded concurrently in {@link decodeZstd}. */
+const ZSTD_DECODE_CONCURRENCY = 8
+
+/** Decode a concatenated multi-frame zstd buffer to plaintext (async, threadpool). Frames are
+ * decoded in bounded parallel batches (a large log can have tens of thousands of frames). */
 export async function decodeZstd(buffer: Buffer): Promise<string> {
   const { frames } = scanZstdFrames(buffer)
   if (frames.length === 0) throw new Error('empty or header-less Zstandard session log')
-  const plaintexts = await Promise.all(frames.map(frame => decompressZstdFrame(buffer.subarray(frame.start, frame.end))))
-  return Buffer.concat(plaintexts).toString('utf8')
+  const out: Buffer[] = new Array(frames.length)
+  let next = 0
+  const run = async (): Promise<void> => {
+    while (next < frames.length) {
+      const i = next++
+      out[i] = await decompressZstdFrame(buffer.subarray(frames[i]!.start, frames[i]!.end))
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(ZSTD_DECODE_CONCURRENCY, frames.length) }, run))
+  return Buffer.concat(out).toString('utf8')
 }
 
 /** One complete session plaintext split into its header line and event body. */
