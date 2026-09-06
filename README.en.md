@@ -8,6 +8,9 @@ Conversation rewind for DeepSeek Harness: **rewind the conversation to any earli
 
 > English | [中文](README.md)
 
+> [!WARNING]
+> For the upcoming DSH line (v0.1.3), users who want the latest DSH should move to the new plugin (`>=0.9.0-alpha.1`) and update their session logs — see the [update guide](docs/rewind-fix.md).
+
 A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 
 - **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it — **truly seamless and convenient by design**.
@@ -154,10 +157,9 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 1. **Exported logs are complete** — a rewind only removes messages from the model context and the view; the exported session log (`/export`) still contains **withdrawn messages**. This plugin cannot alter exports.
 2. **Lightweight file rewind has a cost** — in specific cases not all changes can be rewound. Consistent with Claude Code. See: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
-3. **Rewinds from `≤ v0.2.4`** — sessions rewound with these versions may **fail to load history** after more conversation. Install a v0.3.3-or-earlier release and use its bundled repair tool ([docs/compat/troubleshooting.md](docs/compat/troubleshooting.md)).
-4. **Rewinds from `≤ v0.3.3`** — compaction (`/compact`) is unavailable for those sessions. Newer versions are compatible; for affected old sessions, start a new session.
-5. **The turn-rail shows rewound turns** — the right-side rail added in DSH `v0.1.2` keeps ticks for withdrawn messages, and hovering shows the withdrawn text. Only a display difference; no functional impact.
-6. **The system prompt is re-displayed after a rewind** — in DSH `v0.1.2`, rewinding and resending a message shows the "System prompt" component again, just like `/compact`. Only a display difference; no functional impact.
+3. **The turn-rail shows rewound turns** — the right-side rail added in DSH `v0.1.2` keeps ticks for withdrawn messages, and hovering shows the withdrawn text. Only a display difference; no functional impact.
+4. **The system prompt is re-displayed after a rewind** — in DSH `v0.1.2`, rewinding and resending a message shows the "System prompt" component again, just like `/compact`. Only a display difference; no functional impact.
+5. **Old rewind markers are no longer compatible** — DSH `v0.1.3` rejects the rewind markers from the old plugin (≤ 0.8.0). The new version resolves this and provides an in-session update. See the [update guide](docs/rewind-fix.md).
 
 > [!NOTE]
 > Browser diagnostics are available; see [Browser diagnostics](docs/compat/diagnostics.md).
