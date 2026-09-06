@@ -44,6 +44,8 @@ import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { REWIND_MARKER_SOURCE } from './rewind-marker-repair.ts'
+import { registerRewindFix } from './rewind-fix.ts'
 import {
   CLEANUP_CONFIG_FILENAME,
   CLEANUP_SETTINGS_NAMESPACE,
@@ -287,7 +289,7 @@ const REWIND_MARKER_CONTENT: ContentBlock[] = []
 function buildMarker(): UserMessage {
   return createUserMessage({
     content: REWIND_MARKER_CONTENT,
-    source: { kind: 'plugin', plugin: 'dsh-rewind' },
+    source: REWIND_MARKER_SOURCE,
   })
 }
 
@@ -980,6 +982,12 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       handler: invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession),
     })
   }, 'dsh-rewind command')
+
+  // `/dsh-rewind-fix`: rewrites legacy rewind markers (A/B) in CLOSED sessions
+  // to the current form-C shape. Registered via its own effect so its command +
+  // persistence wiring stays isolated from the rewind/undo/cleanup path; it
+  // reuses the same SnapshotStore for the clearSession step.
+  registerRewindFix(ctx, store)
 
   // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
   // analog): every time a user/message lands in a session log, re-read every
