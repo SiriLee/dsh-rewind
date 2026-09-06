@@ -78,6 +78,20 @@ Key invariants:
   rewinds are idempotent and a rewind whose target state already matches is a
   no-op.
 
+### Marker format history
+
+The rewind marker is written as form C (an empty `user/message` with a
+`surfaceOp.replace` over the shadowed range and `sourceEventSeqs`). Earlier
+plugin versions wrote shapes a newer harness no longer accepts:
+
+- **form A** — a bare `assistant/message(turn=N, step=0)` with no frame.
+- **form B** — a ghost turn frame: `[step/start][assistant/message][step/end]`
+  inside a closed turn.
+
+A/B became unreadable once v2 reserved surface `replace` to a node that cites
+`sourceEventSeqs` (`assistant/message` can no longer carry them). `/dsh-rewind-fix`
+rewrites form A/B in closed sessions to form C so a newer harness accepts the log.
+
 ## Checkpoint pipeline (Claude Code before-backup model)
 
 ```

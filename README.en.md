@@ -91,13 +91,13 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 
 ### 1. Conversation rewind: a single "mask", not a delete
 
-`append-only` is a hard rule: the session log only grows and is never rewritten — the foundation of auditability and privacy. A rewind never touches history; it makes a single move: append **one empty-content message marker** to the end of the log and use it to "mask out" everything after the target message, so the model and the UI see only the part before it.
+`append-only` is a hard rule: the session log only grows and is never rewritten — the foundation of auditability and privacy. A rewind never touches history; it makes a single move: append **one content-empty marker message** to the end of the log and use it to "mask + replace" everything after the target message, so the model and the UI see only the part before it.
 
-- The marker is **empty** — it never enters the model context and never renders as conversation content; what you and the model see is exactly how the conversation looked at the target. True "in place".
-- Because this is **masking, not deleting**, every withdrawn event stays in the log — auditable, traceable, and in principle manually recoverable.
-- The marker is deeply **aware of dsh internals**: it reuses the **last-started turn** number (never "last turn + 1") and carries its own **ghost step frame**. So the harness's own log replay, `/compact`, and resume preflight all recognize it and never mistake it for a real message.
+- The marker is **canonical** — the plugin **replicates** `/compact`'s "hide + replace": `/compact` compresses a span of history into a summary, while `/rewind` swaps in an empty user message. Because it's canonical, the harness's own log replay, `/compact` compaction, and resume preflight all recognize it and never mistake it for a real message.
+- The replacement is **empty** — the model fully ignores the empty message, with no effect (verified theoretically and empirically). Together with the plugin's UI handling, what you and the model see is exactly how the conversation looked at the target — truly "in place".
+- Because this is **masking, not deleting**, every withdrawn event stays in the log — auditable, traceable, viewable, and in principle manually recoverable.
 
-> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with the harness (ghost step frame, reused turn number) are where this plugin is genuinely professional — each is pinned by a dedicated probe test.
+> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with the harness (replicating `/compact`, the empty-message mask) are where this plugin is genuinely professional — each is pinned by a dedicated probe test.
 
 ### 2. File restore: lightweight checkpointing, "back up before the change"
 
@@ -121,7 +121,7 @@ The file half follows Claude Code's checkpoint semantics — **partial tracking 
 | Identical content stored as a link (dedup) | Hundreds of repeated writes cost almost nothing; links are materialized before their group is evicted, never left dangling |
 | Session-level auto-cleanup | Removes only long-inactive sessions' snapshots; the active session and the chat log are never touched |
 | Reconcile against the real disk before restoring | Idempotent, zero side effects, no collateral damage |
-| Ghost step frame + reused turn number | Deeply compatible with the host, pinned by probe tests |
+| Empty-message mask + replicating `/compact` | Deeply compatible with the host, pinned by probe tests |
 | Crash safety (atomic writes + restore journal) | Continue or roll back cleanly after a crash |
 | Pure-function planning + probed store | Fully unit-testable without a host; test-driven |
 
