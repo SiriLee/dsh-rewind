@@ -3,8 +3,18 @@ import { mkdtemp, readFile, writeFile, readdir, rm, mkdir } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import { runRewindFix, type RewindFixDeps } from '../src/rewind-fix.ts'
+import { runRewindFix, renderRewindFixReport, type RewindFixDeps, type RewindFixResult } from '../src/rewind-fix.ts'
 import { decodeZstd, encodeSessionLog } from '../src/session-log-io.ts'
+
+/** A stub renderer: returns `key|{params}` so tests can assert on layout keys. */
+const stubT = (key: string, params?: Record<string, string | number>): string =>
+  key + (params ? '|' + JSON.stringify(params) : '')
+
+function outcomeOf(result: RewindFixResult, id: string) {
+  const o = result.sessions.find(s => s.id === id)
+  if (o === undefined) throw new Error(`no outcome for ${id}`)
+  return o
+}
 
 type EventInput = Record<string, unknown>
 function ev(fields: EventInput): SessionEvent {
@@ -133,26 +143,26 @@ describe('rewind-fix orchestration', () => {
 
   it('applies the repair to a marker-bearing closed session and clears its snapshots', async () => {
     await p.writeSession('session-a', markerSession())
-    const text = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
-    expect(text).toContain('repaired')
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    expect(result.apply).toBe(true)
+    expect(outcomeOf(result, 'session-a').status).toBe('repaired')
 
     // The on-disk artifact now decodes to form-C markers (no legacy assistant markers).
     const plain = decodeZstd(await readFile(p.locateFor('session-a')))
     const lines = plain.split('\n').filter(Boolean).slice(1)
     const decoded: SessionEvent[] = []
     for (const line of lines) decoded.push(JSON.parse(line) as SessionEvent)
-    // Re-encode the flat event list to inspect: the marker event must be a user/message now.
     expect(decoded.some(e => e.type === 'user/message' && (e.data as { source?: { plugin?: string } }).source?.plugin === 'dsh-rewind')).toBe(true)
     expect(decoded.some(e => e.type === 'assistant/message' && (e.data as { message?: { source?: { provider?: string } } }).message?.source?.provider === 'dsh-rewind')).toBe(false)
     expect(p.clearedCount).toBe(1)
   })
 
-  it('dry-run does not write and does not clear snapshots', async () => {
+  it('dry-run records "will be repaired" without writing or clearing snapshots', async () => {
     await p.writeSession('session-a', markerSession())
     const before = decodeZstd(await readFile(p.locateFor('session-a')))
-    const text = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
-    expect(text).toContain('dry-run')
-    expect(text).toContain('1 will be repaired')
+    const result = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
+    expect(result.apply).toBe(false)
+    expect(outcomeOf(result, 'session-a').status).toBe('repaired')
     const after = decodeZstd(await readFile(p.locateFor('session-a')))
     expect(after).toBe(before)
     expect(p.clearedCount).toBe(0)
@@ -161,8 +171,10 @@ describe('rewind-fix orchestration', () => {
   it('skips a session the harness has loaded', async () => {
     await p.writeSession('session-a', markerSession())
     p.loaded.add('session-a')
-    const text = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
-    expect(text).toContain('SKIP (loaded)')
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const outcome = outcomeOf(result, 'session-a')
+    expect(outcome.status).toBe('skipped')
+    expect(outcome.reason).toBe('loaded')
     expect(p.clearedCount).toBe(0)
     // The file is untouched (still has the legacy marker).
     const plain = decodeZstd(await readFile(p.locateFor('session-a')))
@@ -172,8 +184,10 @@ describe('rewind-fix orchestration', () => {
   it('fails safely when the session is locked by another process', async () => {
     await p.writeSession('session-a', markerSession())
     await writeFile(`${p.locateFor('session-a')}.rewind-fix.lock`, 'lock')
-    const text = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
-    expect(text).toContain('locked by another process')
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const outcome = outcomeOf(result, 'session-a')
+    expect(outcome.status).toBe('failed')
+    expect(outcome.reason).toBe('locked')
     expect(p.clearedCount).toBe(0)
   })
 
@@ -181,8 +195,8 @@ describe('rewind-fix orchestration', () => {
     await p.writeSession('session-a', markerSession())
     const original = decodeZstd(await readFile(p.locateFor('session-a')))
     p.sabotageClear = true
-    const text = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
-    expect(text).toContain('FAIL')
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    expect(outcomeOf(result, 'session-a').status).toBe('failed')
     // The rollback restored the original artifact (from the .bak).
     const restored = decodeZstd(await readFile(p.locateFor('session-a')))
     expect(restored).toBe(original)
@@ -192,18 +206,39 @@ describe('rewind-fix orchestration', () => {
   it('is idempotent: a second run sees no legacy markers and re-scribbles nothing', async () => {
     await p.writeSession('session-a', markerSession())
     const first = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
-    expect(first).toContain('repaired')
+    expect(outcomeOf(first, 'session-a').status).toBe('repaired')
     const afterFirst = decodeZstd(await readFile(p.locateFor('session-a')))
     const second = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
-    expect(second).toContain('SKIP (no markers)')
+    const outcome2 = outcomeOf(second, 'session-a')
+    expect(outcome2.status).toBe('skipped')
+    expect(outcome2.reason).toBe('no-markers')
     const afterSecond = decodeZstd(await readFile(p.locateFor('session-a')))
     expect(afterSecond).toBe(afterFirst)
     expect(p.clearedCount).toBe(1)
   })
 
-  it('emits the launcher guard when the running session itself needs repair', async () => {
-    const text = await runRewindFix(p, { apply: false, launcherHasMarkers: true })
-    expect(text).toContain('needs repair')
-    expect(text).toContain('Start a NEW session')
+  it('emits the launcher guard flag when the running session itself needs repair', async () => {
+    const result = await runRewindFix(p, { apply: false, launcherHasMarkers: true })
+    expect(result.launcherHasMarkers).toBe(true)
+  })
+
+  it('renders the result headline FIRST (collapsed summary), then per-session detail', async () => {
+    await p.writeSession('session-a', markerSession())
+    const result = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
+    const lines = renderRewindFixReport(result, stubT).split('\n')
+    // Headline (dry-run) is the first line so the client card summary shows it.
+    expect(lines[0]).toMatch(/^rewindfix\.dryRun\|/)
+    // The per-session counts line follows it (for the repaired session).
+    const countsLine = lines.find(l => l.includes('rewindfix.counts|'))
+    expect(countsLine).toBeDefined()
+    expect(lines.indexOf(countsLine!)).toBeGreaterThan(0)
+  })
+
+  it('renders the apply headline first with the write-ok arrow for a repaired session', async () => {
+    await p.writeSession('session-a', markerSession())
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const lines = renderRewindFixReport(result, stubT).split('\n')
+    expect(lines[0]).toMatch(/^rewindfix\.done\|/)
+    expect(lines.some(l => l.includes('rewindfix.writeOk'))).toBe(true)
   })
 })

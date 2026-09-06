@@ -986,8 +986,9 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // `/dsh-rewind-fix`: rewrites legacy rewind markers (A/B) in CLOSED sessions
   // to the current form-C shape. Registered via its own effect so its command +
   // persistence wiring stays isolated from the rewind/undo/cleanup path; it
-  // reuses the same SnapshotStore for the clearSession step.
-  registerRewindFix(ctx, store)
+  // reuses the same SnapshotStore for the clearSession step. The command renders
+  // its report through the plugin's host locale translator.
+  registerRewindFix(ctx, store, (key, params) => t(key as HostKey, params))
 
   // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
   // analog): every time a user/message lands in a session log, re-read every
