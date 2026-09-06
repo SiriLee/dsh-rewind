@@ -17,15 +17,20 @@ credentials access.
 
 ```
 src/
-├── index.ts          host plugin: /rewind command + checkpoint pipeline
-├── rewind.ts         pure planning: target parsing, surface-range plan,
-│                     candidate listing, marker turn/step math
+├── index.ts          host plugin: /rewind, /undo, /snapshot-auto-cleanup,
+│                     /dsh-rewind-fix commands + checkpoint pipeline
+├── rewind.ts         pure planning: target parsing, surface-range plan, candidate listing
+├── rewind-fix.ts     /dsh-rewind-fix orchestration (repair pipeline, locks, rollback)
+├── rewind-marker-repair.ts  pure legacy-marker transform (A/B → C)
+├── session-log-io.ts session-log zstd codec + lossless re-encoder (rewind-fix write-back)
 ├── snapshot.ts       checkpoint store: disk before-backups, journaled restore,
 │                     reconcile / continue / rollback, bounded prune
+├── snapshot-cleanup.ts  cleanup policy + dsh-settings persistence + auto-sweep throttle
 ├── session-cwd.ts    session working-directory resolution (fs-tools rule)
+├── locales.ts        host i18n (t() renderer, HostKey)
 └── client/           browser half: per-message ↶ button (portal bridge),
                      mode popover, hidden-span computation, candidate parsing,
-                     locales, styles
+                     pending interaction, locales, styles
 ```
 
 Two dependency rules keep the design testable:

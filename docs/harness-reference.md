@@ -49,16 +49,29 @@ the canonical source; this block only adds the finer-grained client-side files
 and packaging entries.
 
 ```
-src/index.ts            host plugin: /rewind command + checkpoint pipeline (tools/execute|post-execute)
+src/index.ts            host plugin: /rewind|/undo|/snapshot-auto-cleanup|/dsh-rewind-fix
+                        + checkpoint pipeline (tools/execute|post-execute)
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
+src/rewind-fix.ts       /dsh-rewind-fix orchestration (repair pipeline, locks, rollback)
+src/rewind-marker-repair.ts  pure legacy-marker transform (A/B → C)
+src/session-log-io.ts   session-log zstd codec + lossless re-encoder (rewind-fix write-back)
 src/snapshot.ts         checkpoint store (disk before-backups, restore/preview, bounded prune)
+src/snapshot-cleanup.ts cleanup policy + dsh-settings persistence + auto-sweep throttle
 src/session-cwd.ts      session-cwd resolution (fs-tools rule)
-src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals
+src/locales.ts          host i18n (t() renderer, HostKey)
+src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals;
+                        re-exports the client contract (hiddenSeqsOf / targetSeqOfArgs / HiddenChat)
 src/client/popover.ts   mode-selection popover (both-mode impact confirm)
 src/client/hidden.ts    withdrawn-span computation (hiddenSeqsOf), pure
+src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
+src/client/pending.ts   pending-steering bubble ↔ queue-mirror matching, pure
 src/client/locales.ts   zh / en copy (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
+src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_REWIND_BUILD__)
+src/client/log.ts       client logger (namespaced, dsh-rewind.debug-gated)
 scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
+scripts/check-dsh-version.mjs  DSH peer-tuple check (latest dist-tag vs peers)
+scripts/update-badge.mjs       regenerate the tests badge (CI only)
 scripts/verify-host.mjs end-to-end host verification (full check suite)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration)
 docs/                   maintainer docs: contract/, compat/, release/ subdirectories

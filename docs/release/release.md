@@ -98,11 +98,15 @@ appended) when DSH releases a new tuple.
 independent of the host; a release declares its DSH line through the peer
 constraint (a single companion tuple), never through the plugin version.
 
-| Plugin version | DSH line | Notes |
+| Plugin version | DSH line | Role (example) |
 | --- | --- | --- |
 | `0.7.x` | `0.1.1` + `0.1.2` (broad) | frozen / EOL |
-| `0.8.x` | `0.1.2-rc.1` (single) | current stable |
-| `0.9.x` | `0.1.3` (single) | next line |
+| `0.8.x` | `0.1.2-rc.1` (single) | current line |
+| `0.9.x` | `0.1.3` (single) | following line |
+
+The rows are illustrative — the DSH line a release targets is the peer
+constraint, and its npm dist-tag is derived from the version (see above), so
+this model does not track the plugin's own version number.
 
 **Versioning.** A DSH version-line break is a MAJOR bump (incompatible with the
 prior DSH line). Within a line, MINOR/PATCH remain compatible.

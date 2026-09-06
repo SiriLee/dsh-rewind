@@ -103,9 +103,11 @@ interface RestoreJournalAction {
 }
 ```
 
-States: `running` and `rollback-running` are non-terminal; a host restart turns
-them into `interrupted` (or `recovery-required` when the journal is corrupt or
-a rollback could not complete). `completed` / `rolled-back` are terminal.
+States: `running` and `rollback-running` are non-terminal; `completed` /
+`rolled-back` are terminal. A restart never rewrites the journal — a
+reconciliation *reports* a still non-terminal op as `interrupted` (or
+`recovery-required` when the journal is corrupt or a rollback could not
+complete), while the journal itself stays `running` / `rollback-running`.
 
 ## Write guarantees
 
@@ -144,11 +146,12 @@ a rollback could not complete). `completed` / `rolled-back` are terminal.
 
 ## Versioning policy
 
-The journal schema is `version: 1`. Checkpoint entries currently carry no
-version field. A future incompatible format must either bump the journal
-`version` (readers reject unknown values — there is no best-effort fallback or
-legacy coercion) or move the state root (e.g. `rewind-snapshots/v2`) and ship
-an explicit migration tool. Old-format data is never silently re-interpreted.
+The journal schema is `version: 1` (currently descriptive — `isRestoreJournal`
+validates shape, not version). Checkpoint entries carry no version field. A
+future incompatible format should either make readers reject an unknown
+`version` (there is no best-effort fallback or legacy coercion) or move the
+state root (e.g. `rewind-snapshots/v2`) and ship an explicit migration tool.
+Old-format data is never silently re-interpreted.
 
 ## Cleanup policy persistence
 
