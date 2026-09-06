@@ -68,6 +68,12 @@ export interface RewindFixOptions {
   /** The launcher session itself needs repair (guard warning). */
   launcherHasMarkers: boolean
   signal?: AbortSignal
+  /**
+   * Max sessions processed concurrently. Sessions are independent files, so a
+   * bounded pool overlaps zstd decode/encode across them (the dominant cost).
+   * Default 4; capped by the session count. Higher means more peak memory.
+   */
+  concurrency?: number
 }
 
 /** Why a session was skipped or failed (drives the localized label). */
@@ -164,68 +170,77 @@ async function handleRewindFix(
  */
 export async function runRewindFix(deps: RewindFixDeps, opts: RewindFixOptions): Promise<RewindFixResult> {
   const snapshots = await deps.listSnapshots(opts.signal)
-  const sessions: SessionOutcome[] = []
+  const total = snapshots.length
   const started = Date.now()
+  let cancelled = false
 
-  for (let i = 0; i < snapshots.length; i += 1) {
-    if (opts.signal?.aborted) return finish(sessions, snapshots.length, opts, started, true)
-    const header = snapshots[i]!.header
-    const id = header.id as string
+  // Bounded worker pool: sessions are independent files, so overlapping their
+  // zstd decode/encode (the dominant cost) cuts wall-clock roughly by the
+  // concurrency factor, bounded by cores and peak memory. Result order is
+  // preserved by writing each outcome to its positional index.
+  const concurrency = Math.max(1, Math.min(opts.concurrency ?? 4, total))
+  const results: (SessionOutcome | undefined)[] = new Array(total)
+  let cursor = 0
 
-    // Safety rule 1: never touch a session the harness has loaded.
-    if (deps.isSessionLoaded(header.id)) {
-      sessions.push({ id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'loaded' })
-      continue
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (opts.signal?.aborted) { cancelled = true; return }
+      const i = cursor++
+      if (i >= total) return
+      results[i] = await processOneSession(deps, opts, snapshots[i]!.header)
     }
-
-    let decoded: Awaited<ReturnType<typeof readEvents>>
-    try {
-      decoded = await readEvents(deps, header.id, opts.signal)
-    } catch (error) {
-      sessions.push({ id, status: 'failed', a: 0, b: 0, c: 0, reason: 'unreadable', error: textOf(error) })
-      continue
-    }
-    if (decoded === undefined) {
-      sessions.push({ id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'no-artifact' })
-      continue
-    }
-
-    let repair: RepairOutput
-    try {
-      repair = repairRewindMarkers(decoded.events)
-    } catch (error) {
-      sessions.push({ id, status: 'failed', a: 0, b: 0, c: 0, reason: 'repair', error: textOf(error) })
-      continue
-    }
-
-    const hasMarkers = repair.stats.a + repair.stats.b > 0
-    if (!hasMarkers) {
-      sessions.push({ id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'no-markers' })
-      continue
-    }
-
-    if (!opts.apply) {
-      // Dry-run: record as "will be repaired" so the headline counts it.
-      sessions.push({ id, status: 'repaired', a: repair.stats.a, b: repair.stats.b, c: repair.stats.a + repair.stats.b + repair.stats.c })
-      continue
-    }
-
-    sessions.push(await executeSession(deps, header, decoded.headerLine, repair))
   }
 
-  return finish(sessions, snapshots.length, opts, started, false)
-}
+  await Promise.all(Array.from({ length: concurrency }, () => worker()))
 
-/** Assemble the structured result. */
-function finish(sessions: SessionOutcome[], scanned: number, opts: RewindFixOptions, started: number, cancelled: boolean): RewindFixResult {
+  const sessions = results.filter((o): o is SessionOutcome => o !== undefined)
   return {
     launcherHasMarkers: opts.launcherHasMarkers,
     cancelled,
-    scanned,
+    scanned: total,
     durationMs: Date.now() - started,
     apply: opts.apply,
     sessions,
   }
+}
+
+/** Process ONE session in the pool: enumerate-loaded check, decode, repair, apply. */
+async function processOneSession(deps: RewindFixDeps, opts: RewindFixOptions, header: SessionHeader): Promise<SessionOutcome> {
+  const id = header.id as string
+
+  // Safety rule 1: never touch a session the harness has loaded.
+  if (deps.isSessionLoaded(header.id)) {
+    return { id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'loaded' }
+  }
+
+  let decoded: Awaited<ReturnType<typeof readEvents>>
+  try {
+    decoded = await readEvents(deps, header.id, opts.signal)
+  } catch (error) {
+    return { id, status: 'failed', a: 0, b: 0, c: 0, reason: 'unreadable', error: textOf(error) }
+  }
+  if (decoded === undefined) {
+    return { id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'no-artifact' }
+  }
+
+  let repair: RepairOutput
+  try {
+    repair = repairRewindMarkers(decoded.events)
+  } catch (error) {
+    return { id, status: 'failed', a: 0, b: 0, c: 0, reason: 'repair', error: textOf(error) }
+  }
+
+  const hasMarkers = repair.stats.a + repair.stats.b > 0
+  if (!hasMarkers) {
+    return { id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'no-markers' }
+  }
+
+  if (!opts.apply) {
+    // Dry-run: record as "will be repaired" so the headline counts it.
+    return { id, status: 'repaired', a: repair.stats.a, b: repair.stats.b, c: repair.stats.a + repair.stats.b + repair.stats.c }
+  }
+
+  return executeSession(deps, header, decoded.headerLine, repair)
 }
 
 /** Execute the repair for ONE closed session: recheck lock, backup, write, verify, clear snapshots. */
@@ -265,8 +280,8 @@ async function executeSession(
   try {
     // Back up the original before touching it.
     await copyFile(path, bakPath)
-    // Re-encode and atomically replace.
-    const buffer = encodeSessionLog(headerLine, repair.events)
+    // Re-encode (async zstd) and atomically replace.
+    const buffer = await encodeSessionLog(headerLine, repair.events)
     await writeFile(tmpPath, buffer)
     await rename(tmpPath, path)
 

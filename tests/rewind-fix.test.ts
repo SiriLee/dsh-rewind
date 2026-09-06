@@ -61,6 +61,8 @@ function cleanSession(): SessionEvent[] {
   return turn(0, 1)
 }
 
+const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
+
 /** A mini dependency harness that persists real `.jsonl.zstd` files under a temp dir. */
 class TempPersistence implements RewindFixDeps {
   readonly root: string
@@ -71,6 +73,11 @@ class TempPersistence implements RewindFixDeps {
   sabotageClear = false
   /** When set, readRaw returns stale content for the just-written session. */
   sabotageVerify = false
+  /** Simulated read latency (ms) so concurrent readRaw calls overlap; 0 = off. */
+  latencyMs = 0
+  /** Live and max concurrent readRaw calls, used to assert the pool bound. */
+  inFlight = 0
+  maxInFlight = 0
   private readonly original = new Map<string, string>()
 
   constructor(root: string) {
@@ -82,33 +89,40 @@ class TempPersistence implements RewindFixDeps {
   }
 
   async writeSession(id: string, events: SessionEvent[]): Promise<void> {
-    const buffer = encodeSessionLog(header(id), events)
+    const buffer = await encodeSessionLog(header(id), events)
     await writeFile(this.locateFor(id), buffer)
-    this.original.set(id, decodeZstd(buffer))
+    this.original.set(id, await decodeZstd(buffer))
   }
 
   async listSnapshots(): Promise<Array<{ header: SessionHeader }>> {
     const out: Array<{ header: SessionHeader }> = []
-    for (const file of await readdir(this.root)) {
+    for (const file of (await readdir(this.root)).sort()) {
       if (!file.endsWith('.jsonl.zstd')) continue
       const id = file.slice(0, -'.jsonl.zstd'.length)
-      const plain = decodeZstd(await readFile(join(this.root, file)))
+      const plain = await decodeZstd(await readFile(join(this.root, file)))
       out.push({ header: { ...(JSON.parse(plain.split('\n')[0]!)) as SessionHeader } })
     }
     return out
   }
 
   async readRaw(id: Parameters<RewindFixDeps['readRaw']>[0]): Promise<{ content: string } | undefined> {
-    const p = this.locateFor(id as string)
+    this.inFlight += 1
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight)
     try {
-      // If a repair wrote this session AND verify is sabotaged, return the
-      // ORIGINAL content so the post-write verification sees a mismatch.
-      if (this.sabotageVerify && this.original.has(id as string)) {
-        return { content: this.original.get(id as string)! }
+      if (this.latencyMs > 0) await delay(this.latencyMs)
+      const p = this.locateFor(id as string)
+      try {
+        // If a repair wrote this session AND verify is sabotaged, return the
+        // ORIGINAL content so the post-write verification sees a mismatch.
+        if (this.sabotageVerify && this.original.has(id as string)) {
+          return { content: this.original.get(id as string)! }
+        }
+        return { content: await decodeZstd(await readFile(p)) }
+      } catch {
+        return undefined
       }
-      return { content: decodeZstd(await readFile(p)) }
-    } catch {
-      return undefined
+    } finally {
+      this.inFlight -= 1
     }
   }
 
@@ -148,7 +162,7 @@ describe('rewind-fix orchestration', () => {
     expect(outcomeOf(result, 'session-a').status).toBe('repaired')
 
     // The on-disk artifact now decodes to form-C markers (no legacy assistant markers).
-    const plain = decodeZstd(await readFile(p.locateFor('session-a')))
+    const plain = await decodeZstd(await readFile(p.locateFor('session-a')))
     const lines = plain.split('\n').filter(Boolean).slice(1)
     const decoded: SessionEvent[] = []
     for (const line of lines) decoded.push(JSON.parse(line) as SessionEvent)
@@ -159,11 +173,11 @@ describe('rewind-fix orchestration', () => {
 
   it('dry-run records "will be repaired" without writing or clearing snapshots', async () => {
     await p.writeSession('session-a', markerSession())
-    const before = decodeZstd(await readFile(p.locateFor('session-a')))
+    const before = await decodeZstd(await readFile(p.locateFor('session-a')))
     const result = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
     expect(result.apply).toBe(false)
     expect(outcomeOf(result, 'session-a').status).toBe('repaired')
-    const after = decodeZstd(await readFile(p.locateFor('session-a')))
+    const after = await decodeZstd(await readFile(p.locateFor('session-a')))
     expect(after).toBe(before)
     expect(p.clearedCount).toBe(0)
   })
@@ -177,7 +191,7 @@ describe('rewind-fix orchestration', () => {
     expect(outcome.reason).toBe('loaded')
     expect(p.clearedCount).toBe(0)
     // The file is untouched (still has the legacy marker).
-    const plain = decodeZstd(await readFile(p.locateFor('session-a')))
+    const plain = await decodeZstd(await readFile(p.locateFor('session-a')))
     expect(plain).toContain('rewind-marker')
   })
 
@@ -193,12 +207,12 @@ describe('rewind-fix orchestration', () => {
 
   it('rolls back to the original artifact when the post-write commit fails', async () => {
     await p.writeSession('session-a', markerSession())
-    const original = decodeZstd(await readFile(p.locateFor('session-a')))
+    const original = await decodeZstd(await readFile(p.locateFor('session-a')))
     p.sabotageClear = true
     const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
     expect(outcomeOf(result, 'session-a').status).toBe('failed')
     // The rollback restored the original artifact (from the .bak).
-    const restored = decodeZstd(await readFile(p.locateFor('session-a')))
+    const restored = await decodeZstd(await readFile(p.locateFor('session-a')))
     expect(restored).toBe(original)
     expect(p.clearedCount).toBe(0)
   })
@@ -207,12 +221,12 @@ describe('rewind-fix orchestration', () => {
     await p.writeSession('session-a', markerSession())
     const first = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
     expect(outcomeOf(first, 'session-a').status).toBe('repaired')
-    const afterFirst = decodeZstd(await readFile(p.locateFor('session-a')))
+    const afterFirst = await decodeZstd(await readFile(p.locateFor('session-a')))
     const second = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
     const outcome2 = outcomeOf(second, 'session-a')
     expect(outcome2.status).toBe('skipped')
     expect(outcome2.reason).toBe('no-markers')
-    const afterSecond = decodeZstd(await readFile(p.locateFor('session-a')))
+    const afterSecond = await decodeZstd(await readFile(p.locateFor('session-a')))
     expect(afterSecond).toBe(afterFirst)
     expect(p.clearedCount).toBe(1)
   })
@@ -240,5 +254,20 @@ describe('rewind-fix orchestration', () => {
     const lines = renderRewindFixReport(result, stubT).split('\n')
     expect(lines[0]).toMatch(/^rewindfix\.done\|/)
     expect(lines.some(l => l.includes('rewindfix.writeOk'))).toBe(true)
+  })
+
+  it('bounds concurrency to the pool size and preserves snapshot order', async () => {
+    await p.writeSession('session-a', markerSession())
+    await p.writeSession('session-b', markerSession())
+    await p.writeSession('session-c', markerSession())
+    p.latencyMs = 20
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false, concurrency: 2 })
+    // Never more than `concurrency` sessions' reads are in-flight at once.
+    expect(p.maxInFlight).toBeLessThanOrEqual(2)
+    // All three processed.
+    expect(result.sessions).toHaveLength(3)
+    // Order preserved (listSnapshots is sorted, pool writes positional results).
+    expect(result.sessions.map(s => s.id)).toEqual(['session-a', 'session-b', 'session-c'])
+    expect(p.clearedCount).toBe(3)
   })
 })

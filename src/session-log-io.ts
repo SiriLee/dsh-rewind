@@ -22,7 +22,12 @@
  * vendored copy. Round-trip is validated at the EVENT level ({type,seq,data}
  * deep-equal), not byte-for-byte (re-encoding may change row layout).
  */
-import { constants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { constants, zstdCompress, zstdDecompress } from 'node:zlib'
+import { promisify } from 'node:util'
+
+/** Promise-adapted async zstd compress/decompress (run on libuv's threadpool, non-blocking). */
+const zstdCompressAsync = promisify(zstdCompress)
+const zstdDecompressAsync = promisify(zstdDecompress)
 import {
   decodeSeqRanges,
   decodeStorageRecord,
@@ -96,21 +101,29 @@ export function scanZstdFrames(buffer: Buffer): ZstdFrameScan {
   return { frames }
 }
 
-/** Compress one independently decodable, checksummed Zstandard frame (mirrors DSH `compressZstdFrame`). */
-export function compressZstdFrame(input: Buffer | string): Buffer {
-  return zstdCompressSync(Buffer.from(input), { params: { [constants.ZSTD_c_checksumFlag]: 1 } })
+/**
+ * Compress one independently decodable, checksummed Zstandard frame (mirrors DSH
+ * `compressZstdFrame`). Async so it runs on libuv's threadpool and does not
+ * block the event loop, letting a concurrency pool overlap compression across
+ * sessions.
+ */
+export async function compressZstdFrame(input: Buffer | string): Promise<Buffer> {
+  // Checksummed, complete-frame compress (mirrors DSH `compressZstdFrame`). Note:
+  // a one-shot `zstdCompress` with `finishFlush` emits a FLUSH (non-final) frame
+  // that frame scanners reject, so we use only the checksum option.
+  return zstdCompressAsync(Buffer.from(input), { params: { [constants.ZSTD_c_checksumFlag]: 1 } })
 }
 
-/** Decompress one complete Zstandard frame (validates its checksum). */
-export function decompressZstdFrame(input: Buffer): Buffer {
-  return zstdDecompressSync(input)
+/** Decompress one complete Zstandard frame (validates its checksum). Async (threadpool). */
+export async function decompressZstdFrame(input: Buffer): Promise<Buffer> {
+  return zstdDecompressAsync(input)
 }
 
-/** Decode a concatenated multi-frame zstd buffer to plaintext. */
-export function decodeZstd(buffer: Buffer): string {
+/** Decode a concatenated multi-frame zstd buffer to plaintext (async, threadpool). */
+export async function decodeZstd(buffer: Buffer): Promise<string> {
   const { frames } = scanZstdFrames(buffer)
   if (frames.length === 0) throw new Error('empty or header-less Zstandard session log')
-  const plaintexts = frames.map(frame => decompressZstdFrame(buffer.subarray(frame.start, frame.end)))
+  const plaintexts = await Promise.all(frames.map(frame => decompressZstdFrame(buffer.subarray(frame.start, frame.end))))
   return Buffer.concat(plaintexts).toString('utf8')
 }
 
@@ -182,9 +195,10 @@ export interface EncodeOptions {
  * @param headerLine - the header JSON text, no trailing newline.
  * @param events - the repaired event list in log order.
  */
-export function encodeSessionLog(headerLine: string, events: readonly SessionEvent[], options: EncodeOptions = {}): Buffer {
+export async function encodeSessionLog(headerLine: string, events: readonly SessionEvent[], options: EncodeOptions = {}): Promise<Buffer> {
   const packChunks = options.packChunks ?? true
   const headerOut = headerLine + '\n'
   const bodyOut = eventLines(events, packChunks) + '\n'
-  return Buffer.concat([compressZstdFrame(headerOut), compressZstdFrame(bodyOut)])
+  const [headerFrame, eventFrame] = await Promise.all([compressZstdFrame(headerOut), compressZstdFrame(bodyOut)])
+  return Buffer.concat([headerFrame, eventFrame])
 }
