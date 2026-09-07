@@ -35,7 +35,7 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 import type { SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
 import { copyFile, rename, unlink, writeFile, readFile, open } from 'node:fs/promises'
 import { isDeepStrictEqual } from 'node:util'
-import { repairRewindMarkers, isLegacyRewindMarker, type RepairOutput } from './rewind-marker-repair.ts'
+import { repairRewindMarkers, repairStaleArgs, isLegacyRewindMarker, type RepairOutput } from './rewind-marker-repair.ts'
 import { decodeEventBody, encodeSessionLog, splitSession } from './session-log-io.ts'
 
 /** A locale renderer: dictionary key + optional `{name}` params → text. */
@@ -88,8 +88,19 @@ export interface SessionOutcome {
   readonly a: number
   readonly b: number
   readonly c: number
+  /** Number of `/rewind` `args` targets rewired (C→C stale-args repair). */
+  readonly staleArgs: number
   readonly reason?: OutcomeReason
   readonly error?: string
+}
+
+/** A session's final repair payload: the events to write plus the report counts. */
+interface SessionRepair {
+  events: SessionEvent[]
+  a: number
+  b: number
+  c: number
+  staleArgs: number
 }
 
 /** Structured result of {@link runRewindFix} (locale-agnostic, unit-testable). */
@@ -210,36 +221,53 @@ async function processOneSession(deps: RewindFixDeps, opts: RewindFixOptions, he
 
   // Safety rule 1: never touch a session the harness has loaded.
   if (deps.isSessionLoaded(header.id)) {
-    return { id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'loaded' }
+    return { id, status: 'skipped', a: 0, b: 0, c: 0, staleArgs: 0, reason: 'loaded' }
   }
 
   let decoded: Awaited<ReturnType<typeof readEvents>>
   try {
     decoded = await readEvents(deps, header.id, opts.signal)
   } catch (error) {
-    return { id, status: 'failed', a: 0, b: 0, c: 0, reason: 'unreadable', error: textOf(error) }
+    return { id, status: 'failed', a: 0, b: 0, c: 0, staleArgs: 0, reason: 'unreadable', error: textOf(error) }
   }
   if (decoded === undefined) {
-    return { id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'no-artifact' }
+    return { id, status: 'skipped', a: 0, b: 0, c: 0, staleArgs: 0, reason: 'no-artifact' }
   }
 
-  let repair: RepairOutput
+  // Stage 1: legacy A/B → C conversion (also rewires `/rewind` args targets
+  // through the seq map — see `remapReferences`).
+  let converted: ReturnType<typeof repairRewindMarkers>
   try {
-    repair = repairRewindMarkers(decoded.events)
+    converted = repairRewindMarkers(decoded.events)
   } catch (error) {
-    return { id, status: 'failed', a: 0, b: 0, c: 0, reason: 'repair', error: textOf(error) }
+    return { id, status: 'failed', a: 0, b: 0, c: 0, staleArgs: 0, reason: 'repair', error: textOf(error) }
   }
 
-  const hasMarkers = repair.stats.a + repair.stats.b > 0
-  if (!hasMarkers) {
-    return { id, status: 'skipped', a: 0, b: 0, c: 0, reason: 'no-markers' }
+  // Stage 2: C → C coherence — fix `/rewind` args targets that a previous
+  // migration left in the OLD numbering (args ≠ marker.surfaceOp.start), which
+  // is what splits the user-side hide from the agent-side hide.
+  let stale: ReturnType<typeof repairStaleArgs>
+  try {
+    stale = repairStaleArgs(converted.events)
+  } catch (error) {
+    return { id, status: 'failed', a: 0, b: 0, c: 0, staleArgs: 0, reason: 'repair', error: textOf(error) }
+  }
+
+  const a = converted.stats.a
+  const b = converted.stats.b
+  const c = converted.stats.a + converted.stats.b + converted.stats.c
+  const staleArgs = stale.fixed
+  const needsRepair = a + b > 0 || staleArgs > 0
+  if (!needsRepair) {
+    return { id, status: 'skipped', a, b, c, staleArgs, reason: 'no-markers' }
   }
 
   if (!opts.apply) {
     // Dry-run: record as "will be repaired" so the headline counts it.
-    return { id, status: 'repaired', a: repair.stats.a, b: repair.stats.b, c: repair.stats.a + repair.stats.b + repair.stats.c }
+    return { id, status: 'repaired', a, b, c, staleArgs }
   }
 
+  const repair: SessionRepair = { events: stale.events, a, b, c, staleArgs }
   return executeSession(deps, header, decoded.headerLine, repair)
 }
 
@@ -248,13 +276,14 @@ async function executeSession(
   deps: RewindFixDeps,
   header: SessionHeader,
   headerLine: string,
-  repair: RepairOutput,
+  repair: SessionRepair,
 ): Promise<SessionOutcome> {
   const base = {
     id: header.id as string,
-    a: repair.stats.a,
-    b: repair.stats.b,
-    c: repair.stats.a + repair.stats.b + repair.stats.c,
+    a: repair.a,
+    b: repair.b,
+    c: repair.c,
+    staleArgs: repair.staleArgs,
   }
 
   // Safety rule (re-check right before touching disk): the user may have opened it.
@@ -425,8 +454,9 @@ function sessionLines(outcome: SessionOutcome, index: number, total: number, app
   const head = `[${index}/${total}] ${outcome.id}`
   if (outcome.status === 'repaired') {
     const counts = render('rewindfix.counts', { a: outcome.a, b: outcome.b, c: outcome.c })
-    if (!apply) return [`${head}  ${counts}`]
-    return [`${head}  ${counts}`, `  ${render('rewindfix.writeOk')}`]
+    const argsNote = outcome.staleArgs > 0 ? ' ' + render('rewindfix.args', { n: outcome.staleArgs }) : ''
+    if (!apply) return [`${head}  ${counts}${argsNote}`]
+    return [`${head}  ${counts}${argsNote}`, `  ${render('rewindfix.writeOk')}`]
   }
   if (outcome.status === 'skipped') {
     return [`${head}  ${skipLabel(outcome, render)}`]

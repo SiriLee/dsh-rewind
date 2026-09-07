@@ -256,5 +256,91 @@ function remapReferences(row: Row, mapSeq: (old: number) => number): Row {
   const singleSeq = data['sourceEventSeq'] as number | undefined
   if (typeof singleSeq === 'number') data['sourceEventSeq'] = map(singleSeq)
 
+  // The `/rewind` command's `args` target (`@<seq>`) is ALSO a rewind reference:
+  // the client derives the USER-SIDE hide span from it (`hiddenSeqsOf` reads
+  // `args @<target>` + `outcome.sourceEventSeq`), while the agent-side hide
+  // reads the marker's `surfaceOp`/`sourceEventSeqs`. After the global seq
+  // renumbering the marker references are remapped here, so the `@<seq>` in
+  // `args` must follow the same map or the two sides diverge (rewound messages
+  // stay visible in the UI). `@(\d+)` is the rewind-target token the plugin
+  // writes; a bare index target (no `@`) and the mode words (`chat`/`both`)
+  // never match it. A target that points at a consumed seq fails closed, so a
+  // corrupted reference rolls the whole session back rather than masking it.
+  if (row.type === 'command/run' && data['name'] === 'rewind') {
+    const args = data['args']
+    if (typeof args === 'string') {
+      data['args'] = args.replace(/@(\d+)/g, (match, seqText: string) => {
+        const seq = Number(seqText)
+        return Number.isSafeInteger(seq) ? `@${mapSeq(seq)}` : match
+      })
+    }
+  }
+
   return row
+}
+
+/** Result of {@link repairStaleArgs}. */
+export interface StaleArgsRepair {
+  /** The coherence-repaired events, in log order. */
+  readonly events: SessionEvent[]
+  /** Number of `/rewind` command `args` targets rewritten. */
+  readonly fixed: number
+}
+
+/** The rewind-target seq parsed from a `/rewind` command's `args` string. */
+export function rewindTargetSeqOfArgs(args: unknown): number | undefined {
+  if (typeof args !== 'string') return undefined
+  const match = args.match(/@(\d+)/)
+  return match !== null ? Number(match[1]) : undefined
+}
+
+/**
+ * C→C coherence repair: after a legacy→C migration renumbered a session's
+ * seqs, a `/rewind` command's `args @<seq>` target can remain in the OLD
+ * numbering while its (form-C) marker carries the NEW `surfaceOp.start`. The
+ * client `hiddenSeqsOf` derives the USER-side hide span from
+ * `args @<target>` + `outcome.sourceEventSeq`; when the two diverge it hides
+ * the wrong set (the AGENT-side hide reads the marker's `sourceEventSeqs`,
+ * which IS correctly remapped). This rewrites each such `@<seq>` to the
+ * marker's `surfaceOp.start` — the authoritative post-migration target.
+ *
+ * Matching follows the same channel `hiddenSeqsOf` uses: a command/run is
+ * joined to its marker via the command/done with the same `commandId` (whose
+ * `sourceEventSeq` cites the marker seq). It is a no-op for a coherent session
+ * (a fresh live rewind, or one already repaired), so it is idempotent and safe
+ * to run on every closed session. It never mutates its input: a rewritten
+ * command/run is rebuilt onto a fresh event object.
+ */
+export function repairStaleArgs(input: readonly SessionEvent[]): StaleArgsRepair {
+  const markerBySeq = new Map<number, SessionEvent>()
+  for (const event of input) {
+    if (isFormCMarker(event)) markerBySeq.set(event.seq, event)
+  }
+  const markerSeqByCommandId = new Map<string, number>()
+  for (const event of input) {
+    if (event.type !== 'command/done') continue
+    const data = event.data as { commandId?: unknown; sourceEventSeq?: unknown }
+    if (typeof data.commandId === 'string' && typeof data.sourceEventSeq === 'number') {
+      markerSeqByCommandId.set(data.commandId, data.sourceEventSeq)
+    }
+  }
+
+  let fixed = 0
+  const events = input.map((event): SessionEvent => {
+    if (event.type !== 'command/run') return event
+    const data = event.data as { name?: unknown; commandId?: unknown; args?: unknown }
+    if (data.name !== 'rewind' || typeof data.commandId !== 'string' || typeof data.args !== 'string') {
+      return event
+    }
+    const markerSeq = markerSeqByCommandId.get(data.commandId)
+    const marker = markerSeq === undefined ? undefined : markerBySeq.get(markerSeq)
+    const start = (marker as unknown as { surfaceOp?: { start?: unknown } } | undefined)?.surfaceOp?.start
+    const target = rewindTargetSeqOfArgs(data.args)
+    if (start === undefined || target === undefined || target === start) return event
+    const newArgs = data.args.replace(new RegExp(`@${target}(?!\\d)`), `@${start}`)
+    if (newArgs === data.args) return event
+    fixed += 1
+    return { ...event, data: { ...data, args: newArgs } } as SessionEvent
+  })
+  return { events, fixed }
 }

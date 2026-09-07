@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { runRewindFix, renderRewindFixReport, type RewindFixDeps, type RewindFixResult } from '../src/rewind-fix.ts'
-import { decodeZstd, encodeSessionLog } from '../src/session-log-io.ts'
+import { decodeZstd, decodeEventBody, encodeSessionLog } from '../src/session-log-io.ts'
 
 /** A stub renderer: returns `key|{params}` so tests can assert on layout keys. */
 const stubT = (key: string, params?: Record<string, string | number>): string =>
@@ -59,6 +59,22 @@ function markerSession(): SessionEvent[] {
 /** A session with no rewind markers (should be skipped). */
 function cleanSession(): SessionEvent[] {
   return turn(0, 1)
+}
+
+/** An already-form-C session whose `/rewind` args target is stale (needs C→C). */
+function staleCSession(): SessionEvent[] {
+  return [
+    ...turn(0, 1),
+    ev({ type: 'command/run', seq: 6, time: 9, data: { commandId: 'c1', name: 'rewind', args: ' @5 chat' } }),
+    ev({
+      type: 'user/message', seq: 7, time: 9,
+      data: { role: 'user', content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' }, id: 'm1' },
+      surfaceOp: { op: 'replace', start: 2, end: 5 },
+      sourceEventSeqs: [2, 5],
+    }),
+    ev({ type: 'command/done', seq: 8, time: 9, data: { commandId: 'c1', kind: 'success', sourceEventSeq: 7 } }),
+    ...turn(9, 2),
+  ]
 }
 
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -175,6 +191,40 @@ describe('rewind-fix orchestration', () => {
     for (const line of lines) decoded.push(JSON.parse(line) as SessionEvent)
     expect(decoded.some(e => e.type === 'user/message' && (e.data as { source?: { plugin?: string } }).source?.plugin === 'dsh-rewind')).toBe(true)
     expect(decoded.some(e => e.type === 'assistant/message' && (e.data as { message?: { source?: { provider?: string } } }).message?.source?.provider === 'dsh-rewind')).toBe(false)
+    expect(p.clearedCount).toBe(1)
+  })
+
+  it('detects and rewires a stale args target on an already-form-C session (C→C)', async () => {
+    await p.writeSession('session-c', staleCSession())
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    expect(outcomeOf(result, 'session-c').status).toBe('repaired')
+    expect(outcomeOf(result, 'session-c').staleArgs).toBe(1)
+
+    // The on-disk artifact now carries the rewired args target (args == surfaceOp.start).
+    const plain = await decodeZstd(await readFile(p.locateFor('session-c')))
+    const decoded = decodeEventBody(plain.split('\n').filter(Boolean).slice(1).join('\n'))
+    const cmd = decoded.find(e => e.type === 'command/run')!
+    expect((cmd.data as { args?: string }).args).toBe(' @2 chat')
+    expect(p.clearedCount).toBe(1)
+  })
+
+  it('reports an already-form-C stale-args session in dry-run without writing', async () => {
+    await p.writeSession('session-c', staleCSession())
+    const result = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
+    const o = outcomeOf(result, 'session-c')
+    expect(o.status).toBe('repaired')
+    expect(o.staleArgs).toBe(1)
+    // dry-run never writes or clears snapshots.
+    expect(p.clearedCount).toBe(0)
+  })
+
+  it('C→C repair is idempotent: after the fix a second run skips the session', async () => {
+    await p.writeSession('session-c', staleCSession())
+    await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const second = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
+    const o = outcomeOf(second, 'session-c')
+    expect(o.status).toBe('skipped')
+    expect(o.staleArgs).toBe(0)
     expect(p.clearedCount).toBe(1)
   })
 

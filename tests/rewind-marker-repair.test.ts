@@ -4,6 +4,7 @@ import {
   isLegacyRewindMarker,
   isFormCMarker,
   repairRewindMarkers,
+  repairStaleArgs,
   buildRewindMarkerData,
 } from '../src/rewind-marker-repair.ts'
 
@@ -146,6 +147,145 @@ describe('rewind-marker-repair', () => {
     expect(data['messageSeqs']).toEqual([9, 12])
     expect(data['sourceEventSeq']).toBe(12)
     events.forEach((e, i) => expect(e.seq).toBe(i))
+  })
+
+  it('rewrites the /rewind command args target (@<seq>) through the seq map (B-form shift)', () => {
+    // turn(0..5), then a ghost marker at 6..10 (command/run @6, ghost frames 7/9
+    // removed), then turn(11..16) whose user message is at original seq 13.
+    // The args target @13 and the marker's refs shift by -2 after the removal.
+    const input = [
+      ...turn(0, 1),
+      ev({ type: 'command/run', seq: 6, time: 9, data: { name: 'rewind', args: ' @13 chat' } }),
+      ev({ type: 'step/start', seq: 7, time: 9, data: { turn: 99, step: 0 } }),
+      ev({
+        type: 'assistant/message', seq: 8, time: 9,
+        data: { turn: 99, step: 0, message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'dsh-rewind', model: 'rewind-marker' }, id: 'm1' } },
+        surfaceOp: { op: 'replace', start: 13, end: 16 },
+        sourceEventSeqs: [13, 14, 16],
+      }),
+      ev({ type: 'step/end', seq: 9, time: 9, data: { turn: 99, step: 0 } }),
+      ev({ type: 'command/done', seq: 10, time: 9, data: { commandId: 'c', kind: 'success', sourceEventSeq: 8 } }),
+      ...turn(11, 2),
+    ]
+    const { events } = repairRewindMarkers(input)
+    // The command/run survives at new seq 6; its args target is remapped 13→11.
+    const cmd = events.find(e => e.type === 'command/run')!
+    expect((cmd.data as Record<string, unknown>)['args']).toBe(' @11 chat')
+    // The marker reference fields (agent-side hide) are remapped in lockstep.
+    const marker = events.find(e => isFormCMarker(e))!
+    expect((marker as { sourceEventSeqs?: number[] }).sourceEventSeqs).toEqual([11, 12, 14])
+    events.forEach((e, i) => expect(e.seq).toBe(i))
+  })
+
+  it('leaves an A-form /rewind args target unchanged (identity map)', () => {
+    const input = [
+      ...turn(0, 1),
+      ev({ type: 'command/run', seq: 6, time: 9, data: { name: 'rewind', args: ' preview @3 both' } }),
+      ev({
+        type: 'assistant/message', seq: 7, time: 9,
+        data: { turn: 0, step: 0, message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'dsh-rewind', model: 'rewind-marker' }, id: 'm1' } },
+        surfaceOp: { op: 'replace', start: 3, end: 5 },
+        sourceEventSeqs: [3, 5],
+      }),
+      ev({ type: 'command/done', seq: 8, time: 9, data: {} }),
+    ]
+    const { events } = repairRewindMarkers(input)
+    const cmd = events.find(e => e.type === 'command/run')!
+    // No ghost frame removed → the target seq is unchanged.
+    expect((cmd.data as Record<string, unknown>)['args']).toBe(' preview @3 both')
+  })
+
+  it('fails closed when a /rewind args target points at a consumed (ghost) seq', () => {
+    const input = [
+      ...turn(0, 1),
+      ev({ type: 'command/run', seq: 6, time: 9, data: { name: 'rewind', args: ' @7 chat' } }),
+      ev({ type: 'step/start', seq: 7, time: 9, data: { turn: 99, step: 0 } }),
+      ev({
+        type: 'assistant/message', seq: 8, time: 9,
+        data: { turn: 99, step: 0, message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'dsh-rewind', model: 'rewind-marker' }, id: 'm1' } },
+        surfaceOp: { op: 'replace', start: 2, end: 5 },
+        sourceEventSeqs: [2, 5],
+      }),
+      ev({ type: 'step/end', seq: 9, time: 9, data: { turn: 99, step: 0 } }),
+      ev({ type: 'command/done', seq: 10, time: 9, data: {} }),
+    ]
+    // @7 is the removed ghost step/start seq → the map throws, failing closed.
+    expect(() => repairRewindMarkers(input)).toThrow(/consumed seq/)
+  })
+
+  it('does not rewrite args on a non-rewind command/run', () => {
+    const input = [
+      ...turn(0, 1),
+      ev({ type: 'command/run', seq: 6, time: 9, data: { name: 'app-edit', args: ' @7 on' } }),
+      ev({
+        type: 'assistant/message', seq: 7, time: 9,
+        data: { turn: 0, step: 0, message: { role: 'assistant', content: [], source: { kind: 'model', provider: 'dsh-rewind', model: 'rewind-marker' }, id: 'm1' } },
+        surfaceOp: { op: 'replace', start: 2, end: 5 },
+        sourceEventSeqs: [2, 5],
+      }),
+      ev({ type: 'command/done', seq: 8, time: 9, data: {} }),
+    ]
+    const { events } = repairRewindMarkers(input)
+    const cmd = events.find(e => e.type === 'command/run')!
+    // name !== 'rewind' → args is left untouched even though it looks like a seq.
+    expect((cmd.data as Record<string, unknown>)['args']).toBe(' @7 on')
+  })
+
+  it('repairStaleArgs: rewires a stale args target to the marker surfaceOp.start (C→C)', () => {
+    // An already-form-C session created by a migration that left args in the OLD
+    // numbering: args target @5 ≠ marker.surfaceOp.start=2.
+    const input = [
+      ev({ type: 'command/run', seq: 0, time: 9, data: { commandId: 'c1', name: 'rewind', args: ' @5 chat' } }),
+      ev({ type: 'user/message', seq: 1, time: 9, data: buildRewindMarkerData('m1'), surfaceOp: { op: 'replace', start: 2, end: 5 }, sourceEventSeqs: [2, 5] }),
+      ev({ type: 'command/done', seq: 2, time: 9, data: { commandId: 'c1', kind: 'success', sourceEventSeq: 1 } }),
+    ]
+    const { events, fixed } = repairStaleArgs(input)
+    expect(fixed).toBe(1)
+    const cmd = events.find(e => e.type === 'command/run')!
+    expect((cmd.data as Record<string, unknown>)['args']).toBe(' @2 chat')
+    // The input is never mutated (the fix rebuilds a fresh event object).
+    expect((input[0]!.data as Record<string, unknown>)['args']).toBe(' @5 chat')
+  })
+
+  it('repairStaleArgs: no-op when the args target already matches surfaceOp.start (coherent)', () => {
+    const input = [
+      ev({ type: 'command/run', seq: 0, time: 9, data: { commandId: 'c1', name: 'rewind', args: ' @2 chat' } }),
+      ev({ type: 'user/message', seq: 1, time: 9, data: buildRewindMarkerData('m1'), surfaceOp: { op: 'replace', start: 2, end: 5 }, sourceEventSeqs: [2, 5] }),
+      ev({ type: 'command/done', seq: 2, time: 9, data: { commandId: 'c1', kind: 'success', sourceEventSeq: 1 } }),
+    ]
+    const { events, fixed } = repairStaleArgs(input)
+    expect(fixed).toBe(0)
+    expect((events[0]!.data as Record<string, unknown>)['args']).toBe(' @2 chat')
+  })
+
+  it('repairStaleArgs: ignores a rewind preview (no marker cited) and a non-rewind command', () => {
+    const input = [
+      ev({ type: 'command/run', seq: 0, time: 9, data: { commandId: 'p1', name: 'rewind', args: ' preview @99 both' } }),
+      ev({ type: 'command/done', seq: 1, time: 9, data: { commandId: 'p1', kind: 'success' } }),
+      ev({ type: 'command/run', seq: 2, time: 9, data: { commandId: 'e1', name: 'app-edit', args: ' @5 on' } }),
+      ev({ type: 'command/done', seq: 3, time: 9, data: { commandId: 'e1', kind: 'success', sourceEventSeq: 1 } }),
+    ]
+    const { events, fixed } = repairStaleArgs(input)
+    expect(fixed).toBe(0)
+    expect((events[0]!.data as Record<string, unknown>)['args']).toBe(' preview @99 both')
+    expect((events[2]!.data as Record<string, unknown>)['args']).toBe(' @5 on')
+  })
+
+  it('repairStaleArgs: does not mutate deep-frozen input', () => {
+    const input = [
+      ev({ type: 'command/run', seq: 0, time: 9, data: { commandId: 'c1', name: 'rewind', args: ' @5 chat' } }),
+      ev({ type: 'user/message', seq: 1, time: 9, data: buildRewindMarkerData('m1'), surfaceOp: { op: 'replace', start: 2, end: 5 }, sourceEventSeqs: [2, 5] }),
+      ev({ type: 'command/done', seq: 2, time: 9, data: { commandId: 'c1', kind: 'success', sourceEventSeq: 1 } }),
+    ]
+    const deepFreeze = (v: unknown): void => {
+      if (v !== null && typeof v === 'object') {
+        Object.freeze(v)
+        for (const key of Object.keys(v)) deepFreeze((v as Record<string, unknown>)[key])
+      }
+    }
+    deepFreeze(input)
+    expect(() => repairStaleArgs(input)).not.toThrow()
+    expect((input[0]!.data as Record<string, unknown>)['args']).toBe(' @5 chat')
   })
 
   it('handles stacked markers (B then A) with a single global compaction', () => {
