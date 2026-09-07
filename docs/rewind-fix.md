@@ -5,7 +5,7 @@
 ## Applies to
 
 - **DSH**: `0.1.2-rc.1`
-- **dsh-rewind**: `0.9.0-alpha.1`
+- **dsh-rewind**: `0.9.0-alpha.1`, `0.9.0-alpha.2`
 
 ## Background
 
