@@ -1,5 +1,8 @@
 # dsh-rewind
 
+> [!WARNING]
+> **Planning to use DSH `0.1.3`? Upgrade to the latest plugin (`>= 0.9.0-alpha.1`) as soon as possible and run `/dsh-rewind-fix` to update old rewind markers** ([update guide](docs/rewind-fix.md)).
+
 Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window** — no new branch, no window switch, with optional workspace-file restore (full Claude Code `/rewind` semantics).
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
@@ -7,9 +10,6 @@ Conversation rewind for DeepSeek Harness: **rewind the conversation to any earli
 [![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2FSiriLee%2Fdb3b9260351c2b26eb3d201c2ed29df1%2Fraw%2Fbadge.json)](https://github.com/SiriLee/dsh-rewind/actions/workflows/ci.yml)
 
 > English | [中文](README.md)
-
-> [!WARNING]
-> For the upcoming DSH line (v0.1.3), users who want the latest DSH should move to the new plugin (`>=0.9.0-alpha.1`) and update their session logs — see the [update guide](docs/rewind-fix.md).
 
 A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 

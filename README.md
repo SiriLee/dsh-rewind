@@ -1,5 +1,8 @@
 # dsh-rewind
 
+> [!WARNING]
+> **计划使用 DSH `0.1.3` 的用户：请尽早升级到最新插件（`>= 0.9.0-alpha.1`），并运行 `/dsh-rewind-fix` 更新旧回退标记**（[更新指南](docs/rewind-fix.zh.md)）。
+
 DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消息**——同窗口内完成，不新建分支、不换窗口，可一并还原工作区文件（完整 Claude Code `/rewind` 语义）。
 
 [![npm version](https://img.shields.io/npm/v/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
@@ -7,9 +10,6 @@ DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消�
 [![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2FSiriLee%2Fdb3b9260351c2b26eb3d201c2ed29df1%2Fraw%2Fbadge.json)](https://github.com/SiriLee/dsh-rewind/actions/workflows/ci.yml)
 
 > [English](README.en.md) | 中文
-
-> [!WARNING]
-> 为了适配未来版本（DSH v0.1.3），期望使用最新版 DSH 的用户，请尽早使用新版插件（`>=0.9.0-alpha.1`）。并更新你的会话日志，详见：[更新指南](docs/rewind-fix.zh.md)
 
 刻意聚焦、保持极简，只做一件事：**就地回退到任意远的用户消息**，还能**顺手还原改过的文件**。
 
