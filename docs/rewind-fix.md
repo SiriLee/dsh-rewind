@@ -9,9 +9,17 @@
 
 ## Background
 
-`/rewind` appends a **marker** to the session log, telling DSH "everything from this screen onward is withdrawn". Aged plugin versions used a "ghost step frame" for this; the current version uses a more canonical, functionally-equivalent shape — a content-empty `user/message` that replaces the content after the target (see the [README](../README.en.md), the "How it works" section).
+`dsh-rewind` rewinds **within the same session** — it never forks a branch. It also follows the conservative policy of **deleting no history** (the session log is an append-only audit trail): it only **appends a marker**, telling DSH "the model-visible conversation continues from this message; everything after it is rolled back". Older plugin versions wrote that **rewind marker** as a "ghost step frame", which worked reliably on DSH v0.1.2-rc.1 and earlier.
 
-The next DSH line (`v0.1.3`) will reject the old shape, so **sessions rewound by an older plugin may fail to open after an upgrade**. That's why the plugin ships `/dsh-rewind-fix`: it translates those old markers into the new shape and makes the sessions usable again. The new shape is also fully compatible with older DSH versions.
+But DSH v0.1.3 (alpha) introduces a stricter **session-format validation**. We discovered ahead of time that the **rewind markers** written by older plugin versions **cannot be validated** under those stricter checks, so **a session rewound with `/rewind` may fail to open** when that line ships.
+
+The plugin is prepared in two parts, both shipped in the new version:
+
+1. **New rewind markers use the new shape** (forward) — this is a **correct, low-risk**, long-term change (see the [README](../README.en.md), the "How it works" section), and the new shape is fully compatible with **both old and new** DSH.
+
+2. **The `/dsh-rewind-fix` command** (backward) — for **already-existing** old sessions, the plugin ships a convenient update command that translates those old markers into the new shape so the sessions are usable again.
+
+This document covers mainly the **update command**.
 
 ## Warnings
 
