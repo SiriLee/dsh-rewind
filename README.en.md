@@ -1,7 +1,7 @@
 # dsh-rewind
 
 > [!WARNING]
-> **Planning to use DSH `0.1.3`? Upgrade to the latest plugin (`>= 0.9.0`) as soon as possible and run `/dsh-rewind-fix` to update old rewind markers** ([update guide](docs/rewind-fix.md)).
+> **Planning to use DSH `0.1.3`? Install a `v0.9.x` release as soon as possible and run `/dsh-rewind-fix` to update old rewind markers** ([update guide](docs/rewind-fix.md)).
 
 Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window** — no new branch, no window switch, with optional workspace-file restore (full Claude Code `/rewind` semantics).
 
@@ -106,7 +106,7 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 
 The file half follows Claude Code's checkpoint semantics — **partial tracking + before-write backup, plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
 
-- **Before-write backup**: tracks only the write-class tools (`write`, `edit`, `str_replace_editor`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight.
+- **Before-write backup**: tracks only the write-class tools (`write`, `edit`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight.
 - **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — external changes such as a command run or a manual edit are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
 - **Unchanged-not-recorded, identical-content-as-link**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy. Repeated writes cost almost nothing, and a link is materialized before its group is evicted — never left dangling.
 - **Reconcile against the real disk before restoring**: restore takes each path's **earliest** record, then reads the live file and compares — **only files that actually differ are touched**: modified files are written back to the earliest backup, files created after the target are deleted, already-matching files are skipped. Repeated rewinds are therefore **idempotent with zero side effects** and never produce "ghost impact".

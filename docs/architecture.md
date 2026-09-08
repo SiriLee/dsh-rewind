@@ -17,12 +17,9 @@ credentials access.
 
 ```
 src/
-├── index.ts          host plugin: /rewind, /undo, /snapshot-auto-cleanup,
-│                     /dsh-rewind-fix commands + checkpoint pipeline
+├── index.ts          host plugin: /rewind, /undo, /snapshot-auto-cleanup
+│                     commands + checkpoint pipeline
 ├── rewind.ts         pure planning: target parsing, surface-range plan, candidate listing
-├── rewind-fix.ts     /dsh-rewind-fix orchestration (repair pipeline, locks, rollback)
-├── rewind-marker-repair.ts  pure legacy-marker transform (A/B → C)
-├── session-log-io.ts session-log zstd codec + lossless re-encoder (rewind-fix write-back)
 ├── snapshot.ts       checkpoint store: disk before-backups, journaled restore,
 │                     reconcile / continue / rollback, bounded prune
 ├── snapshot-cleanup.ts  cleanup policy + dsh-settings persistence + auto-sweep throttle
@@ -32,6 +29,11 @@ src/
                      mode popover, hidden-span computation, candidate parsing,
                      pending interaction, locales, styles
 ```
+
+The old marker-update repair line (`/dsh-rewind-fix` and its `rewind-fix.ts` /
+`rewind-marker-repair.ts` / `session-log-io.ts` modules) was a **temporary
+migration tool** for the DSH `0.1.2-rc.1` → `0.1.3` transition: it shipped
+through the `0.9.x` line and is **removed in the `0.10.x` line**.
 
 Two dependency rules keep the design testable:
 
@@ -89,13 +91,15 @@ plugin versions wrote shapes a newer harness no longer accepts:
   inside a closed turn.
 
 A/B became unreadable once v2 reserved surface `replace` to a node that cites
-`sourceEventSeqs` (`assistant/message` can no longer carry them). `/dsh-rewind-fix`
-rewrites form A/B in closed sessions to form C so a newer harness accepts the log.
+`sourceEventSeqs` (`assistant/message` can no longer carry them). The
+`/dsh-rewind-fix` command rewrote form A/B in closed sessions to form C so a
+newer harness accepts the log — it was a **temporary migration tool** (kept on
+the `0.9.x` line) and is **removed in the `0.10.x` line**.
 
 ## Checkpoint pipeline (Claude Code before-backup model)
 
 ```
-tools/execute        captureBefore: for write / edit / str_replace_editor
+tools/execute        captureBefore: for write / edit
                      (mutating commands only), read the file's BEFORE state;
                      subagent edits are NOT tracked (Claude Code alignment).
 tools/post-execute   commitEntry: anchor = latest user/message seq; skip

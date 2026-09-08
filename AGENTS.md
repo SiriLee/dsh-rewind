@@ -26,12 +26,9 @@
 them at runtime, so the published tarball does not carry them.
 
 ## Layout at a glance
-- `src/index.ts` — host plugin: `/rewind`, `/undo`, `/snapshot-auto-cleanup`,
-  `/dsh-rewind-fix` commands + checkpoint pipeline (`tools/execute` | `post-execute`)
+- `src/index.ts` — host plugin: `/rewind`, `/undo`, `/snapshot-auto-cleanup`
+  commands + checkpoint pipeline (`tools/execute` | `post-execute`)
 - `src/rewind.ts` — pure planning: target resolution, surface range, candidate listing
-- `src/rewind-fix.ts` — `/dsh-rewind-fix` orchestration (repair pipeline, locks, rollback)
-- `src/rewind-marker-repair.ts` — pure legacy-marker transform (A/B → C)
-- `src/session-log-io.ts` — session-log zstd codec + lossless re-encoder (rewind-fix write-back)
 - `src/snapshot.ts` — checkpoint store (on-disk before-backups, restore/preview, bounded prune)
 - `src/snapshot-cleanup.ts` — cleanup policy + dsh-settings persistence + auto-sweep throttle
 - `src/session-cwd.ts` — session working-directory resolution (fs-tools rule)
