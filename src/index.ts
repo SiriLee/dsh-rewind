@@ -257,7 +257,6 @@ async function commitEntry(
 }
 
 /**
-/**
  * The rewind-marker source written into every marker the plugin appends. It is
  * the form-C contract the host lives at: an empty `user/message` carrying this
  * plugin source is what a 0.1.3 harness recognises as the rewind marker (the
