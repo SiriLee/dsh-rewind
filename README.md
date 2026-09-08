@@ -1,4 +1,5 @@
 # dsh-rewind
+[![DSH Insights health](https://dsh-insights.com/badge/SiriLee/dsh-rewind.svg)](https://dsh-insights.com/p/SiriLee/dsh-rewind/)
 
 > [!WARNING]
 > **计划使用 DSH `0.1.3` 的用户：请尽早安装 `v0.9.x` 版本，并运行 `/dsh-rewind-fix` 更新旧回退标记**（[更新指南](docs/rewind-fix.zh.md)）。
