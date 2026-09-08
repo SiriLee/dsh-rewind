@@ -44,6 +44,7 @@ function appendCancelledToolTurn(session: Session, turn: number, callId: ToolCal
       content: [{ type: 'tool-call', id: callId, name: 'echo', arguments: '{}' }],
       source: { provider: 'test', model: 'test-model' },
     }),
+    stream: [],
   }, { surfaceOp: 'append' })
   // No tool/result — the turn was cancelled — but the step and turn DO close,
   // exactly like the agent loop's finally blocks.
@@ -158,6 +159,7 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
         content: [{ type: 'tool-call', id: ToolCallId('call-dangling'), name: 'echo', arguments: '{}' }],
         source: { provider: 'test', model: 'test-model' },
       }),
+      stream: [],
     }, { surfaceOp: 'append' })
     // no step/end — the log is abnormal from here on
 

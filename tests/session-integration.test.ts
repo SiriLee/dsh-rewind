@@ -52,9 +52,9 @@ function applyRewind(session: Session, plan: ReturnType<typeof planRewind>): num
 function buildSession(): Session {
   const session = Session.create(SessionId('rewind-integration'))
   session.append('user/message', textMessage('first question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 0, step: 0, message: assistantMessage('first answer') }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 0, step: 0, message: assistantMessage('first answer'), stream: [] }, { surfaceOp: 'append' })
   session.append('user/message', textMessage('second question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 1, step: 0, message: assistantMessage('second answer') }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 1, step: 0, message: assistantMessage('second answer'), stream: [] }, { surfaceOp: 'append' })
   return session
 }
 
@@ -95,11 +95,11 @@ function buildTurnedSession(): Session {
   const session = Session.create(SessionId('rewind-turned'))
   session.append('turn/start', { turn: 1 })
   session.append('user/message', textMessage('first question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 1, step: 0, message: assistantMessage('first answer') }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 1, step: 0, message: assistantMessage('first answer'), stream: [] }, { surfaceOp: 'append' })
   session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
   session.append('turn/start', { turn: 2 })
   session.append('user/message', textMessage('second question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 2, step: 0, message: assistantMessage('second answer') }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 2, step: 0, message: assistantMessage('second answer'), stream: [] }, { surfaceOp: 'append' })
   session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
   return session
 }
@@ -145,7 +145,7 @@ describe('in-place rewind over a real session', () => {
     session.append('turn/start', { turn: 3 })
     session.append('step/start', { turn: 3, step: 1 })
     session.append('user/message', textMessage('follow-up after rewind'), { surfaceOp: 'append' })
-    session.append('assistant/message', { turn: 3, step: 1, message: assistantMessage('follow-up answer') }, { surfaceOp: 'append' })
+    session.append('assistant/message', { turn: 3, step: 1, message: assistantMessage('follow-up answer'), stream: [] }, { surfaceOp: 'append' })
     session.append('step/end', { turn: 3, step: 1 })
     session.append('turn/end', { turn: 3, reason: { kind: 'completed' } })
 

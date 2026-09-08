@@ -37,6 +37,7 @@ function appendUsageTurn(session: Session, turn: number, inputTokens: number, ou
       content: [{ type: 'text', text: `usage answer ${turn}` }],
       source: { provider: 'test', model: 'test-model' },
     }),
+    stream: [],
     usage: { inputTokens, outputTokens },
   }, { surfaceOp: 'append' })
   session.append('step/end', { turn, step: 1 })

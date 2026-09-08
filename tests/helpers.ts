@@ -59,7 +59,7 @@ export function appendTurn(session: Session, turn: number): void {
   session.append('turn/start', { turn })
   session.append('step/start', { turn, step: 1 })
   session.append('user/message', textMessage(`question ${turn}`), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn, step: 1, message: assistantMessage(`answer ${turn}`) }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn, step: 1, message: assistantMessage(`answer ${turn}`), stream: [] }, { surfaceOp: 'append' })
   session.append('step/end', { turn, step: 1 })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }
@@ -81,6 +81,7 @@ export function appendToolTurn(session: Session, turn: number, callId: ToolCallI
       content: [{ type: 'tool-call', id: callId, name: 'echo', arguments: '{}' }],
       source: { provider: 'test', model: 'test-model' },
     }),
+    stream: [],
   }, { surfaceOp: 'append' })
   session.append('tool/call', { turn, step: 1, callId, name: 'echo', arguments: '{}' })
   session.append('tool/result', {
@@ -88,7 +89,7 @@ export function appendToolTurn(session: Session, turn: number, callId: ToolCallI
     step: 1,
     message: createToolResultMessage({ callId, content: [{ type: 'text', text: 'ok' }], isError: false }),
   }, { surfaceOp: 'append' })
-  session.append('assistant/message', { turn, step: 1, message: assistantMessage(`tool answer ${turn}`) }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn, step: 1, message: assistantMessage(`tool answer ${turn}`), stream: [] }, { surfaceOp: 'append' })
   session.append('step/end', { turn, step: 1 })
   session.append('turn/end', { turn, reason: { kind: 'completed' } })
 }

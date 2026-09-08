@@ -225,6 +225,7 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
       turn: 1,
       step: 1,
       message: assistantMessage('answer'),
+      stream: [],
     }, { surfaceOp: 'append' })
     session.append('step/end', { turn: 1, step: 1 })
     session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })

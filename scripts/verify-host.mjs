@@ -40,7 +40,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
 import { planProjectionDefinition as planProjection } from '@deepseek-ai/dsh-plan-mode'
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
@@ -122,12 +122,12 @@ const assistant = text => createAssistantMessage({ content: [{ type: 'text', tex
 function buildSession(id, cwd, extra = {}) {
   const session = Session.create(SessionId(id), undefined,
     cwd !== undefined
-      ? { version: 0, id: SessionId(id), createdAt: Date.now(), cwd, isSeeded: false, ...extra }
+      ? { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt: Date.now(), cwd, isSeeded: false, ...extra }
       : undefined)
   session.append('user/message', user('first question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 0, step: 0, message: assistant('first answer') }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 0, step: 0, message: assistant('first answer'), stream: [] }, { surfaceOp: 'append' })
   session.append('user/message', user('second question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 1, step: 0, message: assistant('second answer') }, { surfaceOp: 'append' })
+  session.append('assistant/message', { turn: 1, step: 0, message: assistant('second answer'), stream: [] }, { surfaceOp: 'append' })
   return session
 }
 
@@ -173,7 +173,7 @@ function buildFramedSession(id, turns = 2) {
     // compaction backend's fixed checkpoint preamble — otherwise /compact
     // legally no-ops ("summary not smaller than the shadowed content").
     session.append('user/message', user(`framed question ${turn}: the quick brown fox jumps over the lazy dog and keeps running through the deep forest`), { surfaceOp: 'append' })
-    session.append('assistant/message', { turn, step: 1, message: assistant(`framed answer ${turn}: the response covers the requested detail, the follow-up implications, and the remaining open questions for the user to decide on`) }, { surfaceOp: 'append' })
+    session.append('assistant/message', { turn, step: 1, message: assistant(`framed answer ${turn}: the response covers the requested detail, the follow-up implications, and the remaining open questions for the user to decide on`), stream: [] }, { surfaceOp: 'append' })
     session.append('step/end', { turn, step: 1 })
     session.append('turn/end', { turn, reason: { kind: 'completed' } })
   }
@@ -497,7 +497,7 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   cs.append('turn/start', { turn: 9 })
   cs.append('step/start', { turn: 9, step: 1 })
   cs.append('user/message', user('ninth question'), { surfaceOp: 'append' })
-  cs.append('assistant/message', { turn: 9, step: 1, message: assistant('ninth answer') }, { surfaceOp: 'append' })
+  cs.append('assistant/message', { turn: 9, step: 1, message: assistant('ninth answer'), stream: [] }, { surfaceOp: 'append' })
   cs.append('step/end', { turn: 9, step: 1 })
   cs.append('turn/end', { turn: 9, reason: { kind: 'completed' } })
   await call(ca, '@20 chat') // rewind again

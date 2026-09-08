@@ -6,7 +6,7 @@ import { mkdirSync, realpathSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { execSessionCwd, sessionCwd } from '../src/session-cwd.ts'
 
@@ -41,7 +41,7 @@ describe('sessionCwd', () => {
 describe('execSessionCwd', () => {
   it('reads the cwd from the calling agent session header', () => {
     const session = Session.create(SessionId('cwd-test'), undefined, {
-      version: 0,
+      version: SESSION_FORMAT_VERSION,
       id: SessionId('cwd-test'),
       createdAt: Date.now(),
       cwd: BASE,

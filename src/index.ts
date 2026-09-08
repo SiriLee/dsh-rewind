@@ -44,8 +44,6 @@ import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
-import { REWIND_MARKER_SOURCE } from './rewind-marker-repair.ts'
-import { registerRewindFix } from './rewind-fix.ts'
 import {
   CLEANUP_CONFIG_FILENAME,
   CLEANUP_SETTINGS_NAMESPACE,
@@ -80,10 +78,7 @@ export interface RewindConfig {
 }
 
 /** Tool names whose mutations the checkpoint tracker follows. */
-const TRACKED_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
-
-/** str_replace_editor commands that mutate the filesystem. */
-const MUTATING_EDITOR_COMMANDS = new Set(['create', 'str_replace', 'insert'])
+const TRACKED_TOOLS = new Set(['write', 'edit'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
@@ -121,13 +116,9 @@ interface PendingCapture {
 
 /** Extract the file path a tracked tool call mutates, or undefined. */
 function mutationPathOf(exec: ToolExecution): string | undefined {
-  const args = exec.arguments as { file_path?: unknown; path?: unknown; command?: unknown }
+  const args = exec.arguments as { file_path?: unknown }
   if (exec.name === 'write' || exec.name === 'edit') {
     return typeof args.file_path === 'string' ? args.file_path : undefined
-  }
-  if (exec.name === 'str_replace_editor') {
-    if (typeof args.command !== 'string' || !MUTATING_EDITOR_COMMANDS.has(args.command)) return undefined
-    return typeof args.path === 'string' ? args.path : undefined
   }
   return undefined
 }
@@ -264,6 +255,15 @@ async function commitEntry(
   }
   tracked.add(capture.path)
 }
+
+/**
+/**
+ * The rewind-marker source written into every marker the plugin appends. It is
+ * the form-C contract the host lives at: an empty `user/message` carrying this
+ * plugin source is what a 0.1.3 harness recognises as the rewind marker (the
+ * A→B→C repair line operated on the same shape and is gone in 0.10.x).
+ */
+const REWIND_MARKER_SOURCE = { kind: 'plugin', plugin: 'dsh-rewind' } as const
 
 /**
  * The rewind-marker content: empty. v2 requires the surface `replace` node to
@@ -982,13 +982,6 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       handler: invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession),
     })
   }, 'dsh-rewind command')
-
-  // `/dsh-rewind-fix`: rewrites legacy rewind markers (A/B) in CLOSED sessions
-  // to the current form-C shape. Registered via its own effect so its command +
-  // persistence wiring stays isolated from the rewind/undo/cleanup path; it
-  // reuses the same SnapshotStore for the clearSession step. The command renders
-  // its report through the plugin's host locale translator.
-  registerRewindFix(ctx, store, (key, params) => t(key as HostKey, params))
 
   // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
   // analog): every time a user/message lands in a session log, re-read every
