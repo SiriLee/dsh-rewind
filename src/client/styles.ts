@@ -289,7 +289,12 @@ export const STYLE = `
   line-height: 1.5;
   color: var(--dsw-alias-label-error);
 }
-/* Switch row: label left, role=switch button right, hint below (Subagent module). */
+/* Switch row: label left, role=switch button right, hint below (Subagent module).
+ * The track mirrors the harness ui-primitives Switch (0.1.3-alpha.2 line): the
+ * on/off appearance keys off aria-checked rather than a parallel class, so the
+ * visual state cannot disagree with the state assistive technology reads, and
+ * corner-shape: round opts the capsule track out of the global superellipse
+ * (which would square the capsule ends off against the round thumb inside). */
 .dsh-rewind-cleanup-toggle-row {
   display: flex;
   align-items: flex-start;
@@ -312,10 +317,11 @@ export const STYLE = `
   padding: 2px;
   border: 0;
   border-radius: 10px;
+  corner-shape: round;
   background: var(--dsw-alias-border-l3);
   cursor: pointer;
 }
-.dsh-rewind-cleanup-switch-on {
+.dsh-rewind-cleanup-switch[aria-checked='true'] {
   background: var(--dsw-alias-brand-primary);
 }
 .dsh-rewind-cleanup-switch:disabled {
@@ -335,7 +341,7 @@ export const STYLE = `
   background: var(--dsw-alias-label-primary-foreground);
   transition: transform 120ms ease;
 }
-.dsh-rewind-cleanup-switch-on .dsh-rewind-cleanup-thumb {
+.dsh-rewind-cleanup-switch[aria-checked='true'] .dsh-rewind-cleanup-thumb {
   transform: translateX(16px);
 }
 .dsh-rewind-cleanup-input {

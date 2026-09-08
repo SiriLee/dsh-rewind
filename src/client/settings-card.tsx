@@ -164,7 +164,7 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
           <div className="dsh-rewind-cleanup-permission">
             <div className="dsh-rewind-cleanup-toggle-row">
               <span className="dsh-rewind-cleanup-toggle-label" id="dsh-rewind-cleanup-enabled-label">{t('cleanup.auto')}</span>
-              <button type="button" role="switch" className={`dsh-rewind-cleanup-switch${draft.enabled ? ' dsh-rewind-cleanup-switch-on' : ''}`}
+              <button type="button" role="switch" className="dsh-rewind-cleanup-switch"
                 aria-checked={draft.enabled} aria-labelledby="dsh-rewind-cleanup-enabled-label" disabled={disabled}
                 onClick={() => edit({ enabled: !draft.enabled })}>
                 <span className="dsh-rewind-cleanup-thumb" />
