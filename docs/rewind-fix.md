@@ -5,7 +5,7 @@
 ## Applies to
 
 - **DSH**: `0.1.2-rc.1`
-- **dsh-rewind**: `0.9.0-alpha.1`, `0.9.0-alpha.2`
+- **dsh-rewind**: `0.9.0-alpha.1`, `0.9.0-alpha.2`, `0.9.0`
 
 ## Background
 
@@ -40,7 +40,7 @@ The command rewrites session files and clears some snapshots, so a backup is a g
 cp -r ~/.dsh/sessions          ~/.dsh/sessions.backup
 cp -r ~/.dsh/rewind-snapshots  ~/.dsh/rewind-snapshots.backup
 ```
-Or copy them anywhere convenient.
+Or copy them anywhere convenient. You can also let the AI run the backup for you.
 
 ### Step 3 · Start a new session, or pick one that was never rewound
 
@@ -50,11 +50,11 @@ The command only handles **closed** sessions, and it can't run on itself. So:
 
 Then run the command **in this new session**, and it will update the old sessions that need it.
 
-> ⚠️ Don't run it in a session that itself needs updating and is currently open — the command skips this session, and any other currently-open/in-use session.
+> Don't run it in a session that itself needs updating and is currently open — the command skips this session, and any other currently-open/in-use session.
 
 ### Step 4 · Preview the update scope
 
-Type `/dsh-rewind-fix` in the composer and send it. It only scans, doesn't write — it reports how many sessions were scanned, how many will be updated, how many skipped, and how many failed. Confirm those are what you expect before moving on.
+Type `/dsh-rewind-fix` in the composer and send it. It only scans, doesn't write. The editor locks while it runs, which is normal. **Don't switch session windows midway.** When it finishes, it reports how many sessions were scanned, how many will be updated, how many skipped, and how many failed. Confirm those are what you expect before moving on.
 ```
 /dsh-rewind-fix
 ```
@@ -67,7 +67,7 @@ Once you're sure, re-enter the command with `--apply` to actually run it:
 ```
 This really rewrites the session logs and updates the old markers, and **may take a few minutes**. Please let it finish — **don't switch to another session window or close DSH** while it runs: a session you switch to is **safely skipped** (no corruption, but it won't be updated this pass and you'll need to re-run). A session that fails stays as it was, unharmed, and can be updated again later. Sessions that are updated also get their matching **snapshot backups cleared**, so file restore to earlier messages is no longer available for them.
 
-### Step 6 · Restart DSH and preview again (optional)
+### Step 6 · Restart DSH and preview again
 
 After the run, restart DSH, then **preview once more**:
 ```

@@ -1,7 +1,7 @@
 # dsh-rewind
 
 > [!WARNING]
-> **计划使用 DSH `0.1.3` 的用户：请尽早升级到最新插件（`>= 0.9.0-alpha.1`），并运行 `/dsh-rewind-fix` 更新旧回退标记**（[更新指南](docs/rewind-fix.zh.md)）。
+> **计划使用 DSH `0.1.3` 的用户：请尽早升级到最新插件（`>= 0.9.0`），并运行 `/dsh-rewind-fix` 更新旧回退标记**（[更新指南](docs/rewind-fix.zh.md)）。
 
 DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消息**——同窗口内完成，不新建分支、不换窗口，可一并还原工作区文件（完整 Claude Code `/rewind` 语义）。
 
