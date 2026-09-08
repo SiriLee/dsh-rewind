@@ -91,6 +91,13 @@ appended) when DSH releases a new tuple.
 - **After DSH goes final**: final releases are not bound by the prerelease
   tuple rule, so the peers can converge to a single stable range (e.g.
   `^0.1.x`); this section can then be deleted.
+- **Declared minimum (`dsh.engines.dsh`)**: alongside the peer tuple, each
+  release declares the DSH runtime floor under `dsh.engines.dsh` (e.g.
+  `>=0.1.2-rc.1`), consumed by the plugin-manager update guard. Bump it in
+  the same release that raises the peer tuple; never leave code raised while
+  the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is
+  supported (`^`/`~`/multi-range are treated as "cannot verify" and
+  fail closed).
 
 ## Versioned-line release model
 
