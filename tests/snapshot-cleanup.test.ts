@@ -1,7 +1,8 @@
 /**
  * Unit tests for the snapshot-cleanup policy module (src/snapshot-cleanup.ts):
- * config validation/load/save, the command parser, and the 24h throttle. The
- * config file is exercised against a real file under a temporary directory.
+ * config validation, the settings-backed store, the command parser, and the 24h
+ * throttle. The last-sweep state file is exercised against a real file under a
+ * temporary directory.
  */
 import { mkdtemp, mkdir, readFile, writeFile, rm, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -17,12 +18,8 @@ import {
   loadLastSweepAt,
   parseCleanupCommand,
   parseCleanupConfig,
-  loadCleanupConfig,
-  migrateLegacyCleanupConfig,
-  resolveCleanupConfigPath,
   resolveCleanupStatePath,
   runAutoCleanupCheck,
-  saveCleanupConfig,
   saveLastSweepAt,
   settingsCleanupStore,
   shouldRunAutoSweep,
@@ -72,58 +69,6 @@ describe('parseCleanupConfig', () => {
     expect(parseCleanupConfig({ maxAgeDays: 1.5 }).ok).toBe(false)
     expect(parseCleanupConfig({ maxAgeDays: '30' }).ok).toBe(false)
     expect(parseCleanupConfig({ maxAgeDays: Number.NaN }).ok).toBe(false)
-  })
-})
-
-describe('loadCleanupConfig', () => {
-  it('reads a missing file as the safe default (off)', async () => {
-    const r = await loadCleanupConfig(cfg)
-    expect(r).toEqual({ ok: true, config: { ...DEFAULT_CLEANUP_CONFIG }, fromFile: false })
-  })
-
-  it('reads a valid file and reports fromFile', async () => {
-    await writeFile(cfg, JSON.stringify({ enabled: true, maxAgeDays: 7 }), 'utf8')
-    const r = await loadCleanupConfig(cfg)
-    expect(r).toEqual({ ok: true, config: { enabled: true, maxAgeDays: 7 }, fromFile: true })
-  })
-
-  it('reports ok:false for invalid JSON', async () => {
-    await writeFile(cfg, '{nope', 'utf8')
-    const r = await loadCleanupConfig(cfg)
-    expect(r.ok).toBe(false)
-  })
-
-  it('reports ok:false for structurally invalid values', async () => {
-    await writeFile(cfg, JSON.stringify({ enabled: true, maxAgeDays: 0 }), 'utf8')
-    const r = await loadCleanupConfig(cfg)
-    expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.error).toContain('maxAgeDays')
-  })
-
-  it('reports ok:false for an unreadable path', async () => {
-    const r = await loadCleanupConfig(dir) // a directory: readFile fails with EISDIR
-    expect(r.ok).toBe(false)
-  })
-})
-
-describe('saveCleanupConfig', () => {
-  it('writes a readable config and leaves no temp sibling', async () => {
-    await saveCleanupConfig(cfg, { enabled: true, maxAgeDays: 12 })
-    const onDisk = JSON.parse(await readFile(cfg, 'utf8')) as CleanupConfig
-    expect(onDisk).toEqual({ enabled: true, maxAgeDays: 12 })
-    await expect(loadCleanupConfig(cfg)).resolves.toEqual({ ok: true, config: { enabled: true, maxAgeDays: 12 }, fromFile: true })
-    await expect(readFile(`${cfg}.tmp`, 'utf8')).rejects.toThrow()
-  })
-
-  it('rejects an invalid config without writing anything', async () => {
-    await expect(saveCleanupConfig(cfg, { enabled: true, maxAgeDays: 0 })).rejects.toThrow(RangeError)
-    expect(await loadCleanupConfig(cfg)).toEqual({ ok: true, config: { ...DEFAULT_CLEANUP_CONFIG }, fromFile: false })
-  })
-})
-
-describe('resolveCleanupConfigPath', () => {
-  it('defaults to ~/.dsh/snapshot-cleanup.json', () => {
-    expect(resolveCleanupConfigPath()).toBe(join(homedir(), '.dsh', 'snapshot-cleanup.json'))
   })
 })
 
@@ -226,12 +171,9 @@ describe('last-sweep state (persisted across restart)', () => {
   })
 })
 
-describe('resolveCleanupConfigPath / resolveCleanupStatePath', () => {
-  it('derives both from the same dshHome dir (no env override since the migration)', () => {
-    const dshHome = join(dir, 'home')
-    const cfgPath = resolveCleanupConfigPath(dshHome)
-    expect(cfgPath).toBe(join(dshHome, 'snapshot-cleanup.json'))
-    expect(resolveCleanupStatePath(dshHome)).toBe(join(dshHome, 'snapshot-cleanup-last-sweep.json'))
+describe('resolveCleanupStatePath', () => {
+  it('resolves the last-sweep state path under the harness home', () => {
+    expect(resolveCleanupStatePath()).toBe(join(homedir(), '.dsh', 'snapshot-cleanup-last-sweep.json'))
   })
 })
 
@@ -239,17 +181,13 @@ describe('runAutoCleanupCheck', () => {
   const day = 86_400_000
   const now = () => Date.now()
   const snapRoot = () => join(dir, 'snapshots')
-  const deps = () => ({
+  const deps = (policy: { ok: true; config: CleanupConfig } | { ok: false; error: string }) => ({
     pruner: new SnapshotStore(snapRoot()),
-    readConfig: async () => {
-      const loaded = await loadCleanupConfig(cfg)
-      return loaded.ok
-        ? { ok: true as const, config: loaded.config }
-        : { ok: false as const, error: loaded.error }
-    },
+    readConfig: async () => policy,
     statePath: state,
     log: (_s: string): void => {},
   })
+  const enabled = (): { ok: true; config: CleanupConfig } => ({ ok: true, config: { enabled: true, maxAgeDays: 30 } })
 
   async function seedStale(sessionId: string, mtimeMs: number): Promise<void> {
     const anchor = join(snapRoot(), sessionId, '1')
@@ -267,50 +205,45 @@ describe('runAutoCleanupCheck', () => {
 
   it('sweeps and re-anchors the window when enabled and due', async () => {
     await seedStale('old', now() - 40 * day)
-    await writeFile(cfg, JSON.stringify({ enabled: true, maxAgeDays: 30 }), 'utf8')
     await saveLastSweepAt(state, now() - 40 * day)
-    await runAutoCleanupCheck(deps(), 'active')
+    await runAutoCleanupCheck(deps(enabled()), 'active')
     await expect(staleExists('old')).resolves.toBe(false)
     await expect(loadLastSweepAt(state)).resolves.toBeGreaterThan(now() - day)
   })
 
   it('does nothing when throttled (recent window)', async () => {
     await seedStale('old', now() - 40 * day)
-    await writeFile(cfg, JSON.stringify({ enabled: true, maxAgeDays: 30 }), 'utf8')
     const recent = now() - 60_000
     await saveLastSweepAt(state, recent)
-    await runAutoCleanupCheck(deps(), 'active')
+    await runAutoCleanupCheck(deps(enabled()), 'active')
     await expect(staleExists('old')).resolves.toBe(true) // untouched
     await expect(loadLastSweepAt(state)).resolves.toBe(recent) // unchanged
   })
 
   it('never sweeps when disabled (and never reads the window)', async () => {
     await seedStale('old', now() - 40 * day)
-    await writeFile(cfg, JSON.stringify({ enabled: false, maxAgeDays: 30 }), 'utf8')
-    await runAutoCleanupCheck(deps(), 'active')
+    await runAutoCleanupCheck(deps({ ok: true, config: { enabled: false, maxAgeDays: 30 } }), 'active')
     await expect(staleExists('old')).resolves.toBe(true)
   })
 
   it('fail-closes on a corrupt config and logs', async () => {
     await seedStale('old', now() - 40 * day)
-    await writeFile(cfg, '{broken', 'utf8')
     const log = vi.fn()
-    await runAutoCleanupCheck({ ...deps(), log }, 'active')
+    await runAutoCleanupCheck({ ...deps({ ok: false, error: 'config file is not valid JSON' }), log }, 'active')
     expect(log).toHaveBeenCalled()
     await expect(staleExists('old')).resolves.toBe(true) // nothing deleted
   })
 
   it('treats a missing config as the safe default (disabled)', async () => {
     await seedStale('old', now() - 40 * day)
-    await runAutoCleanupCheck(deps(), 'active')
+    await runAutoCleanupCheck(deps({ ok: true, config: { ...DEFAULT_CLEANUP_CONFIG } }), 'active')
     await expect(staleExists('old')).resolves.toBe(true)
   })
 
   it('never prunes the active session even when due', async () => {
     await seedStale('active', now() - 40 * day)
-    await writeFile(cfg, JSON.stringify({ enabled: true, maxAgeDays: 30 }), 'utf8')
     await saveLastSweepAt(state, now() - 40 * day)
-    await runAutoCleanupCheck(deps(), 'active')
+    await runAutoCleanupCheck(deps(enabled()), 'active')
     await expect(staleExists('active')).resolves.toBe(true) // skipped via keepActiveId
   })
 })
@@ -356,53 +289,5 @@ describe('CleanupConfig schema + settingsCleanupStore', () => {
   it('namespace is lowercase-hyphenated (settings grammar, no dots)', () => {
     expect(CLEANUP_SETTINGS_NAMESPACE).toMatch(/^[a-z][a-z0-9-]*$/)
     expect(CLEANUP_SETTINGS_NAMESPACE).not.toContain('.')
-  })
-})
-
-describe('migrateLegacyCleanupConfig', () => {
-  const makeScope = (): { updates: Array<{ enabled?: boolean; maxAgeDays?: number }>; scope: CleanupSettingsScope } => {
-    const updates: Array<{ enabled?: boolean; maxAgeDays?: number }> = []
-    return {
-      updates,
-      scope: {
-        get: (): CleanupConfig => DEFAULT_CLEANUP_CONFIG,
-        update: async (patch) => { updates.push(patch) },
-      },
-    }
-  }
-
-  it('is a no-op when the legacy file is absent', async () => {
-    const { scope, updates } = makeScope()
-    await expect(migrateLegacyCleanupConfig(join(dir, 'absent.json'), scope, () => {})).resolves.toBe(false)
-    expect(updates).toHaveLength(0)
-  })
-
-  it('imports a present legacy file into the scope and deletes it', async () => {
-    const legacy = join(dir, 'legacy.json')
-    await writeFile(legacy, JSON.stringify({ enabled: true, maxAgeDays: 4 }), 'utf8')
-    const { scope, updates } = makeScope()
-    await expect(migrateLegacyCleanupConfig(legacy, scope, () => {})).resolves.toBe(true)
-    expect(updates).toEqual([{ enabled: true, maxAgeDays: 4 }])
-    await expect(readFile(legacy, 'utf8')).rejects.toThrow() // deleted
-  })
-
-  it('writes the safe default and drops an invalid legacy file', async () => {
-    const legacy = join(dir, 'invalid.json')
-    await writeFile(legacy, '{broken', 'utf8')
-    const log = vi.fn()
-    const { scope, updates } = makeScope()
-    await expect(migrateLegacyCleanupConfig(legacy, scope, log)).resolves.toBe(true)
-    expect(updates).toEqual([{ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS }])
-    expect(log).toHaveBeenCalled()
-    await expect(readFile(legacy, 'utf8')).rejects.toThrow()
-  })
-
-  it('deletes a file equal to the defaults without persisting', async () => {
-    const legacy = join(dir, 'defaults.json')
-    await writeFile(legacy, JSON.stringify({ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS }), 'utf8')
-    const { scope, updates } = makeScope()
-    await expect(migrateLegacyCleanupConfig(legacy, scope, () => {})).resolves.toBe(true)
-    expect(updates).toHaveLength(0)
-    await expect(readFile(legacy, 'utf8')).rejects.toThrow()
   })
 })

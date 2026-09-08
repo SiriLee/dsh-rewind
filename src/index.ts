@@ -45,13 +45,10 @@ import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewin
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
-  CLEANUP_CONFIG_FILENAME,
   CLEANUP_SETTINGS_NAMESPACE,
   CleanupConfigSchema,
   DEFAULT_CLEANUP_CONFIG,
-  migrateLegacyCleanupConfig,
   parseCleanupCommand,
-  resolveCleanupConfigPath,
   resolveCleanupStatePath,
   runAutoCleanupCheck,
   saveLastSweepAt,
@@ -700,7 +697,7 @@ async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId
 /**
  * Read the resolved cleanup policy from the settings-backed store. Before the
  * settings service is present the read fails closed (an error, deleting
- * nothing) — the same safety the pre-migration invalid-file read had.
+ * nothing).
  */
 async function readCleanupPolicy(): Promise<{ ok: true; config: CleanupConfig } | { ok: false; error: string }> {
   if (cleanupStore === undefined) {
@@ -948,16 +945,6 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       { base: DEFAULT_CLEANUP_CONFIG },
     ) as unknown as CleanupSettingsScope
     cleanupStore = settingsCleanupStore(cleanupScope)
-    // One-time, idempotent migration of the pre-GUI file (see the module doc in
-    // snapshot-cleanup.ts); every startup this is a cheap ENOENT read once the
-    // file is gone.
-    void migrateLegacyCleanupConfig(
-      resolveCleanupConfigPath(dshHome),
-      cleanupScope,
-      msg => ctx.logger.warn(msg),
-    ).catch(error => {
-      ctx.logger.warn(`[dsh-rewind] snapshot cleanup migration failed: ${error instanceof Error ? error.message : String(error)}`)
-    })
   })
 
   ctx.effect(function* () {

@@ -158,8 +158,7 @@ Old-format data is never silently re-interpreted.
 The snapshot auto-cleanup policy (the `enabled` switch and the `maxAgeDays`
 idle cutoff) is no longer a file: it lives in the **dsh-settings document** under
 the `dsh-rewind-snapshot-cleanup` namespace (validated by a schemastery schema;
-defaults are the `base` layer). On first run after this change, a legacy
-`<dsh home>/snapshot-cleanup.json` is imported into the document **once** and
-then deleted (an absent file is a no-op; an invalid file imports the safe
-default and is dropped). The last-sweep clock stays in its own
+defaults are the `base` layer). The policy was previously persisted in a legacy
+`<dsh home>/snapshot-cleanup.json` file; that file store and its one-time
+startup migration have been removed. The last-sweep clock stays in its own
 `<dsh home>/snapshot-cleanup-last-sweep.json` state file, which is unchanged.
