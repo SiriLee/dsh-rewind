@@ -1,7 +1,7 @@
 # dsh-rewind
 
 > [!WARNING]
-> **Planning to use DSH `0.1.3`? Install a `v0.9.x` release as soon as possible and run `/dsh-rewind-fix` to update old rewind markers** ([update guide](docs/rewind-fix.md)).
+> **Install a `v0.9.x` release on DSH `0.1.2-rc.1` as early as possible, and run `/dsh-rewind-fix` to update old sessions' rewind markers** ([update guide](docs/rewind-fix.md)).
 
 Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window** — no new branch, no window switch, with optional workspace-file restore (full Claude Code `/rewind` semantics).
 

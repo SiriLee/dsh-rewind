@@ -4,18 +4,19 @@
 
 ## Applies to
 
-- **DSH**: `0.1.2-rc.1`
-- **dsh-rewind**: `0.9.0-alpha.1`, `0.9.0-alpha.2`, `0.9.0`, `0.9.1`
+- **DSH version**: `0.1.2-rc.1`.
+- **Plugin version**: `v0.9.0-alpha.1`, `v0.9.0-alpha.2`, `v0.9.0`, `v0.9.1` (recommended).
+- **Audience**: users planning to use a future DSH version who used an early plugin (≤ 0.8.0).
 
 ## Background
 
-`dsh-rewind` rewinds **within the same session** — it never forks a branch. It also follows the conservative policy of **deleting no history** (the session log is an append-only audit trail): it only **appends a marker**, telling DSH "the model-visible conversation continues from this message; everything after it is rolled back". Older plugin versions wrote that **rewind marker** as a "ghost step frame", which worked reliably on DSH v0.1.2-rc.1 and earlier.
+`dsh-rewind` rewinds **within the same session** — it never forks a branch, and the session log stays the single source. The plugin follows a conservative policy: it deletes no history, and only **appends a rewind marker** telling DSH "the model-visible conversation continues from this message; everything after it is rolled back". Older plugin versions wrote that **rewind marker** as a "ghost step frame", which worked reliably on DSH `v0.1.2-rc.1` and earlier.
 
-But DSH v0.1.3 (alpha) introduces a stricter **session-format validation**. We discovered ahead of time that the **rewind markers** written by older plugin versions **cannot be validated** under those stricter checks, so **a session rewound with `/rewind` may fail to open** when that line ships.
+But starting with DSH `v0.1.3-alpha.1`, a stricter **session-format validation** is introduced. We discovered ahead of time that the **rewind markers** written by older plugin versions **cannot be validated** under those stricter checks, so **a session that was rewound may fail to open**.
 
 The plugin is prepared in two parts, both shipped in the new version:
 
-1. **New rewind markers use the new shape** (forward) — this is a **correct, low-risk**, long-term change (see the [README](../README.en.md), the "How it works" section), and the new shape is fully compatible with **both old and new** DSH.
+1. **New rewind markers use the new shape** (forward) — this is a **correct, low-risk**, long-term change aligned with the official `/compact` design (see the [README](../README.en.md), the "How it works" section), and the new shape is fully compatible with **both old and new** DSH.
 
 2. **The `/dsh-rewind-fix` command** (backward) — for **already-existing** old sessions, the plugin ships a convenient update command that translates those old markers into the new shape so the sessions are usable again.
 
@@ -54,7 +55,7 @@ Then run the command **in this new session**, and it will update the old session
 
 ### Step 4 · Preview the update scope
 
-Type `/dsh-rewind-fix` in the composer and send it. It only scans, doesn't write. The editor locks while it runs, which is normal. **Don't switch session windows midway.** When it finishes, it reports how many sessions were scanned, how many will be updated, how many skipped, and how many failed. Confirm those are what you expect before moving on.
+Type `/dsh-rewind-fix` in the composer and send it. It only scans, doesn't write. The editor locks while it runs, which is normal. **Don't switch session windows midway**. When it finishes, it reports how many sessions were scanned, how many will be updated, how many skipped, and how many failed. Confirm those are what you expect before moving on.
 ```
 /dsh-rewind-fix
 ```
@@ -73,7 +74,7 @@ After the run, restart DSH, then **preview once more**:
 ```
 /dsh-rewind-fix
 ```
-If it says there are no more sessions to update, the markers are all current and the old sessions will open normally.
+If it says there are no more sessions to update, the markers are all current and the old sessions will open normally. If there are still sessions to update, they may have been loaded during the run — restart in a temporary session window and retry.
 
 ### Step 7 · Delete the backup after confirming (optional)
 
@@ -84,5 +85,5 @@ rm -rf ~/.dsh/sessions.backup ~/.dsh/rewind-snapshots.backup
 
 ## Notes
 
-- The session logs are still v0 format; when DSH's later `v0 → v1 → v2` migration (in `v0.1.3`) arrives, if you've completed the `rewind` marker update, the markers themselves won't block it.
+- The session logs are still v0 format; when DSH's later `v0 → v1 → v2 → v3` migration arrives, if you've completed the `rewind` marker update, the markers themselves won't block it.
 - Some sessions may still be blocked by an **unclosed turn** (a turn that was interrupted/cancelled and never wrote `turn/end`). Per the empirical analysis these are widespread and **unrelated to rewind** — they're a DSH-side issue and this tool doesn't handle them. **So updating the markers doesn't guarantee you can upgrade to the next DSH line.**
