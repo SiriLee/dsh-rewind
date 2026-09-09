@@ -77,6 +77,22 @@ function staleCSession(): SessionEvent[] {
   ]
 }
 
+/** A session whose rewind marker is an OLD empty form-C (no A/B, no stale args): only the content must be upgraded. */
+function emptyFormCSession(): SessionEvent[] {
+  return [
+    ...turn(0, 1),
+    ev({ type: 'command/run', seq: 6, time: 9, data: { commandId: 'c1', name: 'rewind', args: ' @2 chat' } }),
+    ev({
+      type: 'user/message', seq: 7, time: 9,
+      data: { role: 'user', content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' }, id: 'm1' },
+      surfaceOp: { op: 'replace', start: 2, end: 5 },
+      sourceEventSeqs: [2, 5],
+    }),
+    ev({ type: 'command/done', seq: 8, time: 9, data: { commandId: 'c1', kind: 'success', sourceEventSeq: 7 } }),
+    ...turn(9, 2),
+  ]
+}
+
 const delay = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 /** A mini dependency harness that persists real `.jsonl.zstd` files under a temp dir. */
@@ -225,6 +241,33 @@ describe('rewind-fix orchestration', () => {
     const o = outcomeOf(second, 'session-c')
     expect(o.status).toBe('skipped')
     expect(o.staleArgs).toBe(0)
+    expect(p.clearedCount).toBe(1)
+  })
+
+  it('upgrades an old empty form-C marker (no A/B, no stale args) and writes the (empty message) content', async () => {
+    // Issue #21: a session whose ONLY rewind marker is the old empty form-C must
+    // be repaired (contentUpgrades > 0) and its marker content rewritten to the
+    // canonical (empty message) placeholder — even with a=0, b=0, staleArgs=0.
+    await p.writeSession('session-fc', emptyFormCSession())
+    const result = await runRewindFix(p, { apply: true, launcherHasMarkers: false })
+    const o = outcomeOf(result, 'session-fc')
+    expect(o.status).toBe('repaired')
+    expect(o.staleArgs).toBe(0)
+    expect(p.clearedCount).toBe(1)
+
+    // The on-disk artifact now carries the canonical placeholder in the marker.
+    const plain = await decodeZstd(await readFile(p.locateFor('session-fc')))
+    const decoded = decodeEventBody(plain.split('\n').filter(Boolean).slice(1).join('\n'))
+    const marker = decoded.find(e => e.type === 'user/message'
+      && (e.data as { source?: { plugin?: string } }).source?.plugin === 'dsh-rewind')!
+    expect((marker.data as { content?: unknown[] }).content).toEqual([{ type: 'text', text: '(empty message)' }])
+    expect((marker.data as { id?: unknown }).id).toBe('m1')
+
+    // Idempotent: a second run sees the canonical marker and skips.
+    const second = await runRewindFix(p, { apply: false, launcherHasMarkers: false })
+    const o2 = outcomeOf(second, 'session-fc')
+    expect(o2.status).toBe('skipped')
+    expect(o2.reason).toBe('no-markers')
     expect(p.clearedCount).toBe(1)
   })
 
