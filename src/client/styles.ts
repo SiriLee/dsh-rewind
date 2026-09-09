@@ -242,7 +242,7 @@ export const STYLE = `
 .dsh-rewind-cleanup-body {
   border-top: 0.5px solid var(--dsw-alias-border-l2);
   margin: 0 16px;
-  padding: 4px 0 8px;
+  padding: 0 0 8px;
 }
 .dsh-rewind-cleanup-readonly {
   margin: 12px 0 0;
@@ -262,6 +262,12 @@ export const STYLE = `
   padding: 12px 0;
 }
 .dsh-rewind-cleanup-field + .dsh-rewind-cleanup-field {
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
+}
+/* Auto-cleanup (permission) block and the max-age field are consecutive control
+ * sections of the open card — give them the same 0.5px divider the harness gives
+ * every pair of config fields (fields.module.css field + field). */
+.dsh-rewind-cleanup-permission + .dsh-rewind-cleanup-field {
   border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 .dsh-rewind-cleanup-head {
@@ -348,7 +354,7 @@ export const STYLE = `
   box-sizing: border-box;
   height: 34px;
   padding: 0 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-3);
   font: inherit;
@@ -373,7 +379,7 @@ export const STYLE = `
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 0 4px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 .dsh-rewind-cleanup-failed {
   flex: 1;
