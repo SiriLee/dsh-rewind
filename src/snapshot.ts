@@ -1619,12 +1619,18 @@ export class SnapshotStore {
    * Record the session-format version a session's snapshots are anchored under
    * (`session.header.version`: 2 for the v2 format, 3 for the v3 format). The
    * marker is a tiny non-`.json` file, so it never counts as a checkpoint
-   * entry in `sessionStats`/`clearSession`.
+   * entry in `sessionStats`/`clearSession`. Written atomically (temp + rename)
+   * like every other persisted marker, so a crash mid-write can only leave an
+   * inert `format.tmp` — never a partial marker that a later reconcile could
+   * misread as a version mismatch and wrongly clear.
    */
   async markFormatVersion(sessionId: string, sessionVersion: number): Promise<void> {
     const dir = this.sessionDir(sessionId)
     await mkdir(dir, { recursive: true })
-    await writeFile(join(dir, SnapshotStore.FORMAT_FILE), `${sessionVersion}`, 'utf8')
+    const file = join(dir, SnapshotStore.FORMAT_FILE)
+    const tmp = `${file}.tmp`
+    await writeFile(tmp, `${sessionVersion}`, 'utf8')
+    await rename(tmp, file)
   }
 
   /**

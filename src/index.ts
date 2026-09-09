@@ -962,16 +962,6 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     })
   }, 'dsh-rewind command')
 
-  // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
-  // analog): every time a user/message lands in a session log, re-read every
-  // tracked file of that session and record a before-backup for any whose
-  // on-disk state changed since it was last recorded (including EXTERNAL
-  // edits and deletions the write-class capture never saw). The change test
-  // uses the store's single last-known-state source, so only CHANGED files
-  // are recorded (a full snapshot; unchanged ones stay in memory, no per-
-  // message dedup file). The entry is anchored at the boundary message, so a
-  // later rewind to this message restores the file to this exact state — and
-  // a rewind to an earlier message restores an earlier entry. Subagent
   // Session-format-version guard: after DSH migrates/loads a session, clear
   // that session's snapshots when they were anchored under a DIFFERENT session
   // format — their seq references would be mis-mapped by the v2→v3 migration.
@@ -997,6 +987,16 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     })()
   }, { global: true })
 
+  // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
+  // analog): every time a user/message lands in a session log, re-read every
+  // tracked file of that session and record a before-backup for any whose
+  // on-disk state changed since it was last recorded (including EXTERNAL
+  // edits and deletions the write-class capture never saw). The change test
+  // uses the store's single last-known-state source, so only CHANGED files
+  // are recorded (a full snapshot; unchanged ones stay in memory, no per-
+  // message dedup file). The entry is anchored at the boundary message, so a
+  // later rewind to this message restores the file to this exact state — and
+  // a rewind to an earlier message restores an earlier entry. Subagent
   // sessions are skipped (their edits are not tracked, matching captureBefore).
   // Runs async off the append hot path; failures are logged, never blocking
   // the message.
