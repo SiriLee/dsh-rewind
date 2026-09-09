@@ -55,7 +55,7 @@ machine channels (see [Compatibility strategy](#compatibility-strategy)).
     user/message currently on the surface)
   → agent.cancel({ keepInbox: true }) if running; waitForAgentIdle
   → dropPendingSteering (next-step inbox only; queued messages untouched)
-  → append the rewind marker = an empty user/message with surfaceOp
+  → append the rewind marker = a user/message with surfaceOp
     { op: 'replace', start, end } over every surface node after the
     target (+ sourceEventSeqs = shadowed seqs)          [a single event]
   → if mode 'both': store.restoreAfter(targetSeq) + syncRestoreObservations
@@ -68,11 +68,14 @@ Key invariants:
 
 - **The log is append-only.** The marker is the *only* mutation: it cuts the
   model-visible surface, never the raw history (search/export still see it).
-- **The marker is empty** (`content: []`) and carries the dsh-rewind plugin
-  source. It is a `user/message`, the only surface type that can cite the
-  shadowed seqs (`sourceEventSeqs`) — `assistant/message` can no longer carry
-  them (v2). It derives to itself, so it stays as a present-but-empty user
-  turn at the surface tail rather than entering model context as content.
+- **The marker content is a constant `(empty message)` placeholder.** It carries
+  the dsh-rewind plugin source and is a `user/message`, the only surface type
+  that can cite the shadowed seqs (`sourceEventSeqs`) — `assistant/message` can
+  no longer carry them (v2). It derives to itself, so it stays as a present
+  user turn at the surface tail. The content is provider-independent and never
+  empty: the session log is immutable but the model serving a session may
+  change later, and a strict OpenAI-compatible gateway rejects an empty user
+  message (HTTP 400, Issue #21).
 - **No ghost step frame is needed**: the token-meter step machine ignores
   `user/message`, and the session invariant imposes no open-turn requirement
   on it, so the marker is appended while idle, outside any turn, as one event.
@@ -82,8 +85,9 @@ Key invariants:
 
 ### Marker format history
 
-The rewind marker is written as form C (an empty `user/message` with a
-`surfaceOp.replace` over the shadowed range and `sourceEventSeqs`). Earlier
+The rewind marker is written as form C (a `user/message` with a
+`surfaceOp.replace` over the shadowed range, `sourceEventSeqs`, and the
+constant `(empty message)` content). Earlier
 plugin versions wrote shapes a newer harness no longer accepts:
 
 - **form A** — a bare `assistant/message(turn=N, step=0)` with no frame.

@@ -50,7 +50,7 @@ legacy branch).
 
 ## Verified-compatible surfaces (probes pass)
 
-- **token-meter replay** (the empty `user/message` marker + multiple rewinds + interleaved real turns + compact stacking).
+- **token-meter replay** (the `user/message` marker + multiple rewinds + interleaved real turns + compact stacking).
 - **compaction transactions**: `toolPairingBalancedBefore/After` stays balanced after a marker cut; the real `/compact` command (`command-compact` + `compaction-basic`, stub summarizer) can land `compaction/start…end` on top of a rewind marker and stay replayable; `/compact` is a legal no-op on a small surface.
 - **resume replay**: `Session.create(id, events)` replays a rewind/compact-bearing log.
 - **session-stats**: the `user/message` marker adds no step (the step count stays at the real turns' steps), no phantom turn.
@@ -63,8 +63,9 @@ legacy branch).
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 
-- **session-stats / session-telemetry fold the full log**: post-rewind stats do **not** rewind — `turns`/`steps`/`llmMs` still include withdrawn content; the empty `user/message` marker is folded as a present-but-empty user turn (it adds no step). This is the intended "fold the full log" semantics, pinned by probe.
-- **token-meter usage anchor stays stable** (G3): the empty `user/message` marker carries no usage, but because it is not an `assistant/message`, the baseline anchor does not drop to a heuristic estimate — it stays `usage` across a rewind. Pinned by `compat-gaps` G3.
+- **session-stats / session-telemetry fold the full log**: post-rewind stats do **not** rewind — `turns`/`steps`/`llmMs` still include withdrawn content; the `user/message` marker is folded as a present user turn (it adds no step). This is the intended "fold the full log" semantics, pinned by probe.
+- **token-meter usage anchor stays stable** (G3): the `user/message` marker carries no usage, but because it is not an `assistant/message`, the baseline anchor does not drop to a heuristic estimate — it stays `usage` across a rewind. Pinned by `compat-gaps` G3.
+- **marker content is the constant `(empty message)` placeholder**: never empty, because the session log is immutable but the model serving a session may change later — a strict OpenAI-compatible gateway rejects an empty user message (HTTP 400, Issue #21). The marker is a small visible user turn in derived history. Pin: `verify-host` (`marker is a user/message with the dsh-rewind plugin source and the (empty message) placeholder`).
 - **Withdrawn content stays searchable/exportable**: session-query full-text and `/export` read the raw log; a rewind cuts only the surface, so withdrawn messages remain (declared in the README).
 - **Session title auto-regeneration**: the title derives from the surface, so an automatically-derived title may change after a rewind.
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).

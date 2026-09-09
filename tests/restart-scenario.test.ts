@@ -73,8 +73,8 @@ describe('restart flow: rewind -> restart -> continue -> restart -> rewind', () 
     // The marker is a turn-less `user/message` (v2 surface replace), so it
     // can never collide with a future real turn number.
     const marker = [...session.snapshotEvents()].reverse().find(e => e.type === 'user/message'
-      && (e.data as { source?: { kind?: string }; content?: unknown[] }).source?.kind === 'plugin'
-      && (e.data as { content?: unknown[] })?.content?.length === 0)
+      && (e.data as { source?: { kind?: string; plugin?: string } }).source?.kind === 'plugin'
+      && (e.data as { source?: { plugin?: string } }).source?.plugin === 'dsh-rewind')
     expect(marker).toBeDefined()
 
     probe(session)

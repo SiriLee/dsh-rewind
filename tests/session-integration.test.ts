@@ -6,10 +6,9 @@
  *
  * The marker is a `user/message` (v2 reserves surface `replace` to a node
  * that cites the shadowed seqs via `sourceEventSeqs`; `assistant/message` can
- * no longer carry them). An empty `user/message` derives to itself, so it
- * stays as a present-but-empty user turn at the surface tail — it carries no
- * language, but it is no longer projected to `null` the way the old empty
- * `assistant/message` marker was.
+ * no longer carry them). A `user/message` marker derives to itself, so it
+ * stays as a present user turn at the surface tail — it is not projected to
+ * `null` the way the old empty `assistant/message` marker was.
  */
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -28,9 +27,9 @@ function assistantMessage(text: string): AssistantMessage {
   })
 }
 
-/** The empty-content `user/message` rewind marker the host appends. */
-function emptyMarker(): UserMessage {
-  return createUserMessage({ content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' } })
+/** The `(empty message)`-content `user/message` rewind marker the host appends. */
+function rewindMarker(): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: { kind: 'plugin', plugin: 'dsh-rewind' } })
 }
 
 /**
@@ -41,7 +40,7 @@ function emptyMarker(): UserMessage {
  * open-turn requirement on it.
  */
 function applyRewind(session: Session, plan: ReturnType<typeof planRewind>): number {
-  const event = session.append('user/message', emptyMarker(), {
+  const event = session.append('user/message', rewindMarker(), {
     surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
@@ -105,7 +104,7 @@ function buildTurnedSession(): Session {
 }
 
 describe('in-place rewind over a real session', () => {
-  it('withdraws the target and everything after it; the empty user/message marker sits at the tail', () => {
+  it('withdraws the target and everything after it; the user/message marker sits at the tail', () => {
     const session = buildSession()
     expect([...session.surface.nodes]).toEqual([0, 1, 2, 3])
 
@@ -125,13 +124,13 @@ describe('in-place rewind over a real session', () => {
     expect([...session.surface.nodes]).toEqual([0, 1, 4])
 
     // The model context is the pre-rewind messages plus the marker as a
-    // present-but-empty user turn (an empty user/message derives to itself).
+    // present user turn (a `user/message` marker derives to itself).
     const messages = session.deriveMessages()
     expect(messages.length).toBe(3)
     expect((messages[0]!.content[0] as { text: string }).text).toBe('first question')
     expect((messages[1]!.content[0] as { text: string }).text).toBe('first answer')
     expect(messages[2]!.role).toBe('user')
-    expect(messages[2]!.content).toEqual([])
+    expect(messages[2]!.content).toEqual([{ type: 'text', text: '(empty message)' }])
   })
 
   it('regression: a rewind followed by the harness next turn never violates turn-tail ordering', () => {
@@ -154,10 +153,10 @@ describe('in-place rewind over a real session', () => {
     expect(() => assertTurnTailOrdering(session.snapshotEvents())).not.toThrow()
 
     // The rewind cut holds on the model-visible surface: marker, then the
-    // follow-up turn. The marker content is empty.
+    // follow-up turn. The marker content is the `(empty message)` placeholder.
     const messages = session.deriveMessages()
     expect(messages.length).toBe(3)
-    expect(messages[0]!.content).toEqual([])
+    expect(messages[0]!.content).toEqual([{ type: 'text', text: '(empty message)' }])
     expect((messages[1]!.content[0] as { text: string }).text).toBe('follow-up after rewind')
     expect((messages[2]!.content[0] as { text: string }).text).toBe('follow-up answer')
   })
@@ -175,7 +174,7 @@ describe('in-place rewind over a real session', () => {
     expect([...session.surface.nodes]).toEqual([markerSeq])
     const messages = session.deriveMessages()
     expect(messages.length).toBe(1)
-    expect(messages[0]!.content).toEqual([])
+    expect(messages[0]!.content).toEqual([{ type: 'text', text: '(empty message)' }])
   })
 
   it('withdraws the latest message end to end, then re-sends', () => {
@@ -193,7 +192,7 @@ describe('in-place rewind over a real session', () => {
     const messages = open.deriveMessages()
     expect(messages.length).toBe(3)
     expect((messages[0]!.content[0] as { text: string }).text).toBe('first question')
-    expect(messages[1]!.content).toEqual([])
+    expect(messages[1]!.content).toEqual([{ type: 'text', text: '(empty message)' }])
     expect((messages[2]!.content[0] as { text: string }).text).toBe('the corrected question')
   })
 
@@ -204,7 +203,7 @@ describe('in-place rewind over a real session', () => {
     session.append('user/message', textMessage('follow-up question'), { surfaceOp: 'append' })
     const messages = session.deriveMessages()
     expect(messages.length).toBe(2)
-    expect(messages[0]!.content).toEqual([])
+    expect(messages[0]!.content).toEqual([{ type: 'text', text: '(empty message)' }])
     expect((messages[1]!.content[0] as { text: string }).text).toBe('follow-up question')
     // marker at seq 4, follow-up at seq 5.
     expect([...session.surface.nodes]).toEqual([markerSeq, 5])

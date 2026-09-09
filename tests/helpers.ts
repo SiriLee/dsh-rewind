@@ -44,9 +44,9 @@ export function assistantMessage(text: string): AssistantMessage {
   })
 }
 
-/** The empty-content `user/message` rewind marker the host appends. */
-export function emptyMarker(): UserMessage {
-  return createUserMessage({ content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' } })
+/** The `(empty message)`-content `user/message` rewind marker the host appends. */
+export function rewindMarker(): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: { kind: 'plugin', plugin: 'dsh-rewind' } })
 }
 
 /**
@@ -110,7 +110,7 @@ export function buildTurnedSession(): Session {
  */
 export function applyRewind(session: Session, targetSeq: number): number {
   const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const event = session.append('user/message', emptyMarker(), {
+  const event = session.append('user/message', rewindMarker(), {
     surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })

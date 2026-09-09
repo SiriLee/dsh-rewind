@@ -8,12 +8,12 @@
  * surface node after the target message with the marker. The append-only log
  * (and the rendered transcript) is untouched — only the model-visible surface
  * is cut, so the next request derives its context from the target onward.
- * The marker is an EMPTY `user/message`: v2 reserves surface `replace` to a
- * node that cites every shadowed seq (`sourceEventSeqs`), and
- * `assistant/message` can no longer carry those — so the replacement node is
- * a `user/message`, exactly as /compact's checkpoint is. An empty
- * `user/message` derives to itself (a present-but-empty user turn), so the
- * marker stays as the surface-tail cut point rather than vanishing.
+ * The marker is a `user/message` carrying the shadowed-seq citations
+ * (`sourceEventSeqs`): v2 reserves surface `replace` to a node that cites
+ * every shadowed seq, and `assistant/message` can no longer carry those — so
+ * the replacement node is a `user/message`, exactly as /compact's checkpoint
+ * is. It derives to itself (a present user turn), so the marker stays as the
+ * surface-tail cut point rather than vanishing.
  *
  *
  * File restore (mode `both`) follows Claude Code's checkpointing: the plugin
@@ -255,32 +255,33 @@ async function commitEntry(
 
 /**
  * The rewind-marker source written into every marker the plugin appends. It is
- * the form-C contract the host lives at: an empty `user/message` carrying this
+ * the form-C contract the host lives at: a `user/message` carrying this
  * plugin source is what a 0.1.3 harness recognises as the rewind marker (the
  * A→B→C repair line operated on the same shape and is gone in 0.10.x).
  */
 const REWIND_MARKER_SOURCE = { kind: 'plugin', plugin: 'dsh-rewind' } as const
 
 /**
- * The rewind-marker content: empty. v2 requires the surface `replace` node to
- * be a `user/message` (assistant/message can no longer cite shadowed seqs),
- * and an empty user/message is the closest to "invisible" — it derives to
- * itself, so it remains a present-but-empty user turn at the surface tail.
- * Left as a module constant so a provider that rejects `content: []` can flip
- * to a minimal localized note in one place (see the compat audit).
+ * The rewind-marker content, always this minimal self-declaring placeholder.
+ *
+ * It must be provider-independent. The session log is append-only (the marker
+ * content is frozen when written), but the model serving a session may change
+ * later — so a conditional empty content would break the moment a strict
+ * OpenAI-compatible gateway is used after a rewind (HTTP 400 "user message
+ * must have content", Issue #21). A constant non-empty placeholder is accepted
+ * by every gate and reads as an empty one the model need not act on.
  */
-const REWIND_MARKER_CONTENT: ContentBlock[] = []
+const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty message)' }]
 
 /**
- * Build the rewind marker: an EMPTY-content `user/message` carrying the
- * surface-replace op. v2 keeps surface `replace` for the node that cites the
- * shadowed seqs via `sourceEventSeqs`; a `user/message` is the only surface
- * type that can do so (assistant/message embeds its stream and cannot cite
- * sources; tool/result is restricted to single-node rewrites). The marker is
- * appended while idle, outside any turn — no ghost `step/start`…`step/end`
- * frame is needed, because the token-meter's step machine ignores
- * `user/message` and the session invariant imposes no open-turn requirement
- * on it.
+ * Build the rewind marker: a `user/message` carrying the surface-replace op.
+ * v2 keeps surface `replace` for the node that cites the shadowed seqs via
+ * `sourceEventSeqs`; a `user/message` is the only surface type that can do so
+ * (assistant/message embeds its stream and cannot cite sources; tool/result
+ * is restricted to single-node rewrites). The marker is appended while idle,
+ * outside any turn — no ghost `step/start`…`step/end` frame is needed, because
+ * the token-meter's step machine ignores `user/message` and the session
+ * invariant imposes no open-turn requirement on it.
  */
 function buildMarker(): UserMessage {
   return createUserMessage({
@@ -514,17 +515,17 @@ async function executeRewind(
     const marker = buildMarker()
     let event: ReturnType<Session['append']>
     try {
-      // The marker is an EMPTY `user/message` carrying the surface-replace op.
+      // The marker is a `user/message` carrying the surface-replace op.
       // v2 keeps surface `replace` for the one node that cites every shadowed
       // seq via `sourceEventSeqs`; `assistant/message` can no longer carry
       // those (it now embeds its provider stream), so the replacement node
       // must be a `user/message` — exactly as /compact's checkpoint is. The
       // marker is appended while idle, outside any turn, with NO ghost step
       // frame: the token-meter's step machine ignores `user/message`, and the
-      // session invariant imposes no open-turn requirement on it. The empty
-      // content derives to itself (a present-but-empty user turn), so it stays
-      // only as the surface-tail cut point — the model-visible surface ends
-      // before the withdrawn messages.
+      // session invariant imposes no open-turn requirement on it. It derives
+      // to itself (a present user turn), so it stays only as the surface-tail
+      // cut point — the model-visible surface ends before the withdrawn
+      // messages.
       event = agent.session.append('user/message', marker, {
         surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
         sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],

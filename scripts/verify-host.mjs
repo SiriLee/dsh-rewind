@@ -267,11 +267,15 @@ check('bare /rewind withdraws the latest message', bareAfter.length === 3 && bar
 // frame, so 4 seed events + 1 marker = 5.
 check('log stays append-only (5 events: 4 + user/message marker)', session.snapshotEvents().length === 5, `events=${session.snapshotEvents().length}`)
 // Assert the HOST's real marker shape (the integration tests use a mirror):
-// an empty user/message carrying the dsh-rewind plugin source — the only
-// surface type that can carry the shadowed-seq citations v2 requires.
+// a `user/message` carrying the dsh-rewind plugin source and the constant
+// self-declaring placeholder — the only surface type that can carry the
+// shadowed-seq citations v2 requires.
 const bareMarker = session.snapshotEvents().at(-1)
-check('marker is an empty user/message with the dsh-rewind plugin source', bareMarker.type === 'user/message'
-  && bareMarker.data.content.length === 0
+check('marker is a user/message with the dsh-rewind plugin source and the (empty message) placeholder', bareMarker.type === 'user/message'
+  && Array.isArray(bareMarker.data.content)
+  && bareMarker.data.content.length === 1
+  && bareMarker.data.content[0].type === 'text'
+  && bareMarker.data.content[0].text === '(empty message)'
   && bareMarker.data.source.kind === 'plugin'
   && bareMarker.data.source.plugin === 'dsh-rewind', JSON.stringify(bareMarker?.data))
 

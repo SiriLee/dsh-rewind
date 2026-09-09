@@ -134,7 +134,7 @@ describe('I2 surface consistency (probe: deriveMessages + node legality)', () =>
     const lastEvent = session.snapshotEvents().find(e => e.seq === last)!
     expect(lastEvent.type).toBe('user/message')
     const data = lastEvent.data as { content?: unknown[]; source?: { kind?: string } }
-    expect(data.content).toEqual([])
+    expect(data.content).toEqual([{ type: 'text', text: '(empty message)' }])
     expect(data.source?.kind).toBe('plugin')
   })
 })
@@ -169,7 +169,7 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
     // a `user/message` (not an `assistant/message`), so it adds NO ghost step
     // frame — the step count stays at the real turns' steps, and the reused
     // turn number creates no phantom turn. llmMs stays non-negative and near
-    // zero for the empty marker.
+    // zero for the marker.
     const after = registry.snapshot(Session.create(session.id, session.snapshotEvents())).values.sessionStats!
     expect(after.turns).toBe(2)
     expect(after.steps).toBe(2)
