@@ -15,6 +15,11 @@
  * renders through machine tokens (`impact=<n>`, `args` @seq), never by parsing
  * host prose.
  *
+ * DSH localizes only its OWN command descriptions via the client locale — a
+ * closed `HOST_DESCRIPTION_KEYS` allowlist; third-party plugin descriptions are
+ * not in that channel (see docs/compat/audit.md, RU-I18N), so this plugin's host
+ * command copy stays in the host's tongue (English by default).
+ *
  * English is the key-set source of truth; zh is checked complete against it.
  *
  * @module dsh-rewind/locales

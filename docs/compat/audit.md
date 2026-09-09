@@ -102,6 +102,14 @@ The plugin treats these as harness-side defects it does not compensate for. Each
   are English for **every** host command — system plugins also pass raw English `description`
   strings, e.g. `/goal` — so this behavior is consistent with the ecosystem, not a plugin
   deviation.)
+- **Client-side command-description i18n is first-party-only**: DSH also localizes host command
+  descriptions through the client `locale` binding (`ui-commands`), but the description keys come
+  from a **closed allowlist** (`HOST_DESCRIPTION_KEYS`: compact, export, feedback, goal,
+  permission, plan). A command outside that set — every third-party plugin — is passed through
+  verbatim, never translated (`hostDescription` only rewrites a description that equals the
+  first-party English copy). So the plugin's own `/rewind` command description can never ride this
+  channel either; it is authored in the host's tongue (English by default), same as the host
+  runtime copy above.
 
 ### R-OPENSTEP (rewind part resolved): an unclosed `step` in the log breaks token-meter replay; the rewind no longer compounds it
 
