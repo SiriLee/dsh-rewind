@@ -9,10 +9,10 @@
  * transcript) is untouched; only the model-visible surface is cut, so the
  * next request derives its context from the target message onward.
  *
- * Marker shape (v0.1.3/v2): the marker is a `user/message` carrying a replace
+ * Marker shape (v0.1.5/v3): the marker is a `user/message` carrying a replace
  * `surfaceOp` — a single event:
  *
- *   user/message (marker content) → { surfaceOp {replace, start, end} }
+ *   user/message (marker content) → { surfaceOp {replace, startSeq, endSeq} }
  *
  * v2 reserves surface `replace` to a node that cites every shadowed seq via
  * `sourceEventSeqs`, and `assistant/message` can no longer carry
@@ -27,6 +27,7 @@
  * @module dsh-rewind/rewind
  */
 
+import type { MessageSource } from '@deepseek-ai/dsh-llm/message'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 
 /** Which of the two rewind modes a rewind executes. */
@@ -84,6 +85,35 @@ export interface RewindPlan {
   readonly surfaceStart: number
   /** Last surface node — the replace range end (inclusive). */
   readonly surfaceEnd: number
+}
+
+/**
+ * The rewind-marker brand: the backend-independent identity shared by every
+ * marker the plugin appends. A `user/message` whose source carries this brand
+ * is what a harness recognises as the rewind marker; the shape mirrors the
+ * /compact checkpoint marker (`compactCheckpointSource`), but adds `targetSeq`
+ * so the marker self-describes the user message it rewound to.
+ */
+const REWIND_MARKER_BRAND = Object.freeze({ kind: 'plugin', plugin: 'dsh-rewind' } as const)
+
+/**
+ * Create rewind-marker provenance correlated with one rewind target.
+ * @param targetSeq - absolute log seq of the user message rewound to.
+ * @returns immutable rewind-marker source.
+ */
+export function rewindMarkerSource(
+  targetSeq: number,
+): Readonly<{ kind: 'plugin'; plugin: 'dsh-rewind'; targetSeq: number }> {
+  return Object.freeze({ ...REWIND_MARKER_BRAND, targetSeq } as const)
+}
+
+/**
+ * Test whether a persisted message source identifies a rewind marker.
+ * @param source - source restored from a surface user message.
+ * @returns whether the source carries the backend-independent rewind brand.
+ */
+export function isRewindMarker(source: MessageSource): boolean {
+  return source.kind === 'plugin' && source.plugin === REWIND_MARKER_BRAND.plugin
 }
 
 /** Preview length cap for candidate listings. */

@@ -20,6 +20,20 @@
  * typed structurally (see `SlotsLike`) so the plugin never imports the
  * conversation UI package's types and survives its version drift.
  *
+ * COUPLING NOTE — HIGH. There is no harness interface for a per-user-message
+ * action (see docs/compat/audit.md): `MessageIconActions.extraActions` and the
+ * `conversation.chat.assistant-actions` slot are wired for assistant messages
+ * only, and no per-user-message action slot exists. So this portal targets
+ * undocumented internal structure — the `data-chat-flow-kind`,
+ * `data-chat-anchor-key`, `data-composer-input`, `data-composer-card`,
+ * `data-pending-steering` and `data-time-hover-root` attributes plus the
+ * `anchorSeq` field read in `client/hidden.ts`. Those are harness-internal and
+ * may change with the UI; this module (and `hidden.ts`) must be re-adapted to
+ * follow, and is the migration target when a first-class user-action slot or
+ * an official renderer hook surface appears. The coupling is accepted
+ * deliberately because a standards-conformant alternative does not exist
+ * today; it is not a defect to be removed while the DOM-portal approach stands.
+ *
  * @module dsh-rewind/client/portals
  */
 

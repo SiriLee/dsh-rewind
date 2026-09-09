@@ -28,7 +28,7 @@ import { applyRewind, buildTurnedSession, newMeter, textMessage } from './helper
 function appendUsageTurn(session: Session, turn: number, inputTokens: number, outputTokens: number): void {
   session.append('turn/start', { turn })
   session.append('step/start', { turn, step: 1 })
-  session.append('request/header', { header: { config: { provider: 'test', model: 'test-model' }, system: 'sys' }, reason: 'initial' })
+  session.append('request/header', { header: { config: { provider: 'test', model: 'test-model' } }, reason: 'initial' })
   session.append('user/message', textMessage(`usage question ${turn}`), { surfaceOp: 'append' })
   session.append('assistant/message', {
     turn,

@@ -41,7 +41,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { unlink } from 'node:fs/promises'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, rewindMarkerSource, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
@@ -254,14 +254,6 @@ async function commitEntry(
 }
 
 /**
- * The rewind-marker source written into every marker the plugin appends. It is
- * the form-C contract the host lives at: a `user/message` carrying this
- * plugin source is what a 0.1.3 harness recognises as the rewind marker (the
- * A→B→C repair line operated on the same shape and is gone in 0.10.x).
- */
-const REWIND_MARKER_SOURCE = { kind: 'plugin', plugin: 'dsh-rewind' } as const
-
-/**
  * The rewind-marker content, always this minimal self-declaring placeholder.
  *
  * It must be provider-independent. The session log is append-only (the marker
@@ -283,10 +275,10 @@ const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty mes
  * the token-meter's step machine ignores `user/message` and the session
  * invariant imposes no open-turn requirement on it.
  */
-function buildMarker(): UserMessage {
+function buildMarker(targetSeq: SessionSeq): UserMessage {
   return createUserMessage({
     content: REWIND_MARKER_CONTENT,
-    source: REWIND_MARKER_SOURCE,
+    source: rewindMarkerSource(targetSeq),
   })
 }
 
@@ -512,7 +504,7 @@ async function executeRewind(
       return rewindErrorResult(error)
     }
 
-    const marker = buildMarker()
+    const marker = buildMarker(plan.targetSeq as SessionSeq)
     let event: ReturnType<Session['append']>
     try {
       // The marker is a `user/message` carrying the surface-replace op.
@@ -527,7 +519,7 @@ async function executeRewind(
       // cut point — the model-visible surface ends before the withdrawn
       // messages.
       event = agent.session.append('user/message', marker, {
-        surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+        surfaceOp: { op: 'replace', startSeq: plan.surfaceStart as SessionSeq, endSeq: plan.surfaceEnd as SessionSeq },
         sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
       })
     } catch (error) {
@@ -980,6 +972,31 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // message dedup file). The entry is anchored at the boundary message, so a
   // later rewind to this message restores the file to this exact state — and
   // a rewind to an earlier message restores an earlier entry. Subagent
+  // Session-format-version guard: after DSH migrates/loads a session, clear
+  // that session's snapshots when they were anchored under a DIFFERENT session
+  // format — their seq references would be mis-mapped by the v2→v3 migration.
+  // Conservative per the "delete stale snapshots" policy: a legacy dir with no
+  // recorded format marker is discarded too. Subagent sessions are skipped
+  // (they are never rewind targets and record no snapshots).
+  ctx.on('agent/session-start', ({ agent }: { agent: Agent }) => {
+    const session = agent.session
+    if (session.header.origin === 'subagent' || (session.header.delegationDepth ?? 0) > 0) return
+    void (async () => {
+      try {
+        // Stamp snapshots recorded after this point with the loaded session's
+        // format, so a future format change is detected; then clear any
+        // snapshots anchored under a different (now-migrated) format.
+        store.setFormatVersion(session.header.version)
+        const result = await store.reconcileFormatVersion(session.id, session.header.version)
+        if (result.cleared) {
+          ctx.logger.warn(`[dsh-rewind] cleared snapshots for ${session.id}: session format changed (v${session.header.version})`)
+        }
+      } catch (error) {
+        ctx.logger.warn(`[dsh-rewind] session-format reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
+  }, { global: true })
+
   // sessions are skipped (their edits are not tracked, matching captureBefore).
   // Runs async off the append hot path; failures are logged, never blocking
   // the message.

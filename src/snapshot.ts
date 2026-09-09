@@ -509,6 +509,14 @@ export class SnapshotStore {
   /** Sessions whose dedup state has been seeded from disk this process. */
   private readonly seededSessions = new Set<string>()
 
+  /**
+   * Session-format version snapshots are anchored under, stamped into each
+   * session's `format` marker when an entry is recorded. `null` until the host
+   * sets it (from `agent/session-start`), so a session that never records is
+   * never materialized and a marker is only written where snapshots exist.
+   */
+  private formatVersion: number | null = null
+
   constructor(
     root?: string,
     opts?: { readonly dedup?: boolean; readonly dshHome?: string },
@@ -622,6 +630,12 @@ export class SnapshotStore {
       const committed: CheckpointEntry = { ...entry, time }
       await writeJsonAtomic(file, committed, () => opts?.crash?.('after-temp-write'))
       this.lastEntry.set(key, { content: entry.before, ref: selfRef })
+    }
+    // Stamp the session-format marker so this session's snapshots record the
+    // session-format version they were written under — the value the
+    // `agent/session-start` reconcile compares against on the next load.
+    if (this.formatVersion !== null) {
+      await this.markFormatVersion(sessionId, this.formatVersion)
     }
     // Prune at most once per interval: a turn with many writes would otherwise
     // pay a readdir + sort on every commit. The 100-group cap still holds —
@@ -863,6 +877,9 @@ export class SnapshotStore {
 
   /** Prefix of one restore-op journal file inside the session dir. */
   private static readonly JOURNAL_PREFIX = 'restore-journal-'
+
+  /** Session-format-version marker file inside the session dir. Non-`.json`, so it never counts as a checkpoint entry. */
+  private static readonly FORMAT_FILE = 'format'
 
   /** Absolute path of one restore-op journal file. */
   private journalPath(sessionId: string, opId: string): string {
@@ -1581,6 +1598,75 @@ export class SnapshotStore {
       }
     }
     return { sessionId, ...stats, dryRun }
+  }
+
+  /**
+   * Read the session-format version marker recorded for a session, or `null`
+   * when there is no marker — a pre-marker, legacy snapshot dir, or a session
+   * that never materialized a dir.
+   */
+  private async readFormatVersion(sessionId: string): Promise<number | null> {
+    try {
+      const raw = await readFile(join(this.sessionDir(sessionId), SnapshotStore.FORMAT_FILE), 'utf8')
+      const parsed = Number(raw.trim())
+      return Number.isFinite(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Record the session-format version a session's snapshots are anchored under
+   * (`session.header.version`: 2 for the v2 format, 3 for the v3 format). The
+   * marker is a tiny non-`.json` file, so it never counts as a checkpoint
+   * entry in `sessionStats`/`clearSession`.
+   */
+  async markFormatVersion(sessionId: string, sessionVersion: number): Promise<void> {
+    const dir = this.sessionDir(sessionId)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, SnapshotStore.FORMAT_FILE), `${sessionVersion}`, 'utf8')
+  }
+
+  /**
+   * Set the session-format version the store stamps onto every snapshot it
+   * records. The host sets this once per process from `agent/session-start`
+   * (`agent.session.header.version`), so a marker is only materialized for a
+   * session that actually records a snapshot.
+   */
+  setFormatVersion(sessionVersion: number): void {
+    this.formatVersion = sessionVersion
+  }
+
+  /**
+   * Session-format-version guard: clear a session's snapshot dir when the
+   * format its snapshots were anchored under differs from the current session
+   * format, so seq-anchored references can never survive a format migration
+   * mis-mapped. Runs at `agent/session-start` — after DSH has migrated/loaded
+   * the session, so `sessionVersion` is the post-migration value.
+   *
+   * Conservative rule (per the "delete stale snapshots" policy): a session
+   * with no recorded marker but with snapshot content is treated as legacy and
+   * cleared; a session whose marker differs from `sessionVersion` is cleared.
+   * A matching version — or an untouched session with nothing to protect — is
+   * left alone. The marker is re-stamped to the current version afterward so a
+   * FUTURE format change is detected on the next start.
+   *
+   * @returns whether a session snapshot dir was cleared.
+   */
+  async reconcileFormatVersion(sessionId: string, sessionVersion: number): Promise<{ cleared: boolean }> {
+    const stored = await this.readFormatVersion(sessionId)
+    if (stored === sessionVersion) return { cleared: false }
+    const stats = await this.sessionStats(sessionId)
+    const hasContent = stats.anchorGroups > 0 || stats.journals > 0
+    if (hasContent) {
+      await this.clearSession(sessionId)
+    }
+    // Re-stamp only when there was something worth protecting (snapshots or a
+    // prior marker) — never materialize a session dir for an untouched one.
+    if (hasContent || stored !== null) {
+      await this.markFormatVersion(sessionId, sessionVersion)
+    }
+    return { cleared: hasContent }
   }
 }
 

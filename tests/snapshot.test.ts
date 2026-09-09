@@ -830,6 +830,62 @@ describe('clearSession', () => {
   })
 })
 
+describe('session format-version reconcile', () => {
+  const formatFile = (id: string): string => join(store.sessionDir(id), 'format')
+  const anchorDir = (id: string, seq: number): string => join(store.sessionDir(id), String(seq))
+  const readFormat = async (id: string): Promise<string | null> => readFile(formatFile(id), 'utf8').catch(() => null)
+
+  it('clears a legacy dir (snapshots, no marker) and re-stamps the current version', async () => {
+    const file = await touch('legacy.txt', 'x')
+    // Written under a pre-marker build: no format marker is stamped.
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    expect(await store.exists(anchorDir(session, 5))).toBe(true)
+    expect(await readFormat(session)).toBeNull()
+
+    const result = await store.reconcileFormatVersion(session, 3)
+    expect(result.cleared).toBe(true)
+    expect(await store.exists(anchorDir(session, 5))).toBe(false)
+    expect(await readFormat(session)).toBe('3')
+  })
+
+  it('keeps snapshots when the marker matches the loaded session format', async () => {
+    store.setFormatVersion(3)
+    const file = await touch('match.txt', 'x')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    expect(await readFormat(session)).toBe('3')
+
+    const result = await store.reconcileFormatVersion(session, 3)
+    expect(result.cleared).toBe(false)
+    expect(await store.exists(anchorDir(session, 5))).toBe(true)
+  })
+
+  it('clears snapshots and re-stamps when the marker differs (v2 -> v3)', async () => {
+    const file = await touch('v2.txt', 'x')
+    // The snapshot was anchored under the v2 format (marker 2).
+    await store.markFormatVersion(session, 2)
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    expect(await readFormat(session)).toBe('2')
+
+    const result = await store.reconcileFormatVersion(session, 3)
+    expect(result.cleared).toBe(true)
+    expect(await store.exists(anchorDir(session, 5))).toBe(false)
+    expect(await readFormat(session)).toBe('3')
+  })
+
+  it('does nothing (and materializes no dir) for an untouched session', async () => {
+    const result = await store.reconcileFormatVersion(session, 3)
+    expect(result.cleared).toBe(false)
+    expect(await readFormat(session)).toBeNull()
+  })
+
+  it('recordEntry stamps the current format onto newly-written snapshots', async () => {
+    store.setFormatVersion(3)
+    const file = await touch('stamp.txt', 'x')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'x' })
+    expect(await readFormat(session)).toBe('3')
+  })
+})
+
 describe('store-root default (harness-home resolution)', () => {
   const prevHome = process.env.DSH_HOME
   const prevOverride = process.env.DSH_REWIND_SNAPSHOT_DIR

@@ -15,7 +15,7 @@ import {
   toolPairingBalancedAfter,
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
-import { planRewind } from '../src/rewind.ts'
+import { planRewind, rewindMarkerSource } from '../src/rewind.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
@@ -45,8 +45,8 @@ export function assistantMessage(text: string): AssistantMessage {
 }
 
 /** The `(empty message)`-content `user/message` rewind marker the host appends. */
-export function rewindMarker(): UserMessage {
-  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: { kind: 'plugin', plugin: 'dsh-rewind' } })
+export function rewindMarker(targetSeq = 0): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: rewindMarkerSource(targetSeq) })
 }
 
 /**
@@ -110,8 +110,8 @@ export function buildTurnedSession(): Session {
  */
 export function applyRewind(session: Session, targetSeq: number): number {
   const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const event = session.append('user/message', rewindMarker(), {
-    surfaceOp: { op: 'replace', start: plan.surfaceStart as SessionSeq, end: plan.surfaceEnd as SessionSeq },
+  const event = session.append('user/message', rewindMarker(targetSeq), {
+    surfaceOp: { op: 'replace', startSeq: plan.surfaceStart as SessionSeq, endSeq: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
   return event.seq
@@ -144,7 +144,7 @@ export function simulateCompaction(session: Session, start: number, end: number)
     content: [{ type: 'text', text: 'summary' }],
     source: compactCheckpointSource(compactionId),
   }), {
-    surfaceOp: { op: 'replace', start: start as SessionSeq, end: end as SessionSeq },
+    surfaceOp: { op: 'replace', startSeq: start as SessionSeq, endSeq: end as SessionSeq },
     sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...shadowedSeqs],
   })
   session.append('compaction/end', { compactionId, turn: null })
