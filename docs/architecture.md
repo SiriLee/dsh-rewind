@@ -56,7 +56,7 @@ machine channels (see [Compatibility strategy](#compatibility-strategy)).
   → agent.cancel({ keepInbox: true }) if running; waitForAgentIdle
   → dropPendingSteering (next-step inbox only; queued messages untouched)
   → append the rewind marker = a user/message with surfaceOp
-    { op: 'replace', start, end } over every surface node after the
+    { op: 'replace', startSeq, endSeq } over every surface node after the
     target (+ sourceEventSeqs = shadowed seqs)          [a single event]
   → if mode 'both': store.restoreAfter(targetSeq) + syncRestoreObservations
   → result text carries machine tokens (impact=<n>, restore:/delete: lines)

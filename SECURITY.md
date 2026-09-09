@@ -59,13 +59,16 @@ than hidden.
 A failed gate fails closed: an invalid target, a missing store, an absent
 backup, or a cancelled invocation aborts the rewind with an error.
 
-**Automatic store deletion (opt-in)**: unrelated to restores, an enabled
-`snapshot-auto-cleanup` background sweep deletes whole session directories of
-**long-inactive** sessions (default off — the store is otherwise only mutated by
-an explicit rewind apply). It is confined to the store root, uses `lstat` (so it
-never follows a symlink out of the root), skips the active session, and never
-touches the conversation log. When disabled (the default), no automatic deletion
-runs.
+**Automatic store deletion**: two things delete session snapshots. The opt-in
+`snapshot-auto-cleanup` sweep (default off) removes the whole directories of
+**long-inactive** sessions, unrelated to restores. Separately, a session's
+snapshots are cleared automatically when the conversation log's session format
+has changed (a DSH upgrade), because those backups are anchored to message
+positions that no longer line up. Both stay confined to the store root, use
+`lstat` (so they never follow a symlink out of the root), the sweep never targets
+the active session, and neither touches the conversation log. When auto-cleanup
+is disabled (the default), only the format-change clear runs, and only for an
+affected session.
 
 ## Conversation integrity
 
