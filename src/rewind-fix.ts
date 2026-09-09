@@ -257,7 +257,11 @@ async function processOneSession(deps: RewindFixDeps, opts: RewindFixOptions, he
   const b = converted.stats.b
   const c = converted.stats.a + converted.stats.b + converted.stats.c
   const staleArgs = stale.fixed
-  const needsRepair = a + b > 0 || staleArgs > 0
+  const contentUpgrades = converted.contentUpgrades
+  // A session needs repair when it has legacy A/B markers, a stale args target,
+  // or an old form-C marker whose empty content must become the canonical
+  // `(empty message)` placeholder.
+  const needsRepair = a + b > 0 || staleArgs > 0 || contentUpgrades > 0
   if (!needsRepair) {
     return { id, status: 'skipped', a, b, c, staleArgs, reason: 'no-markers' }
   }

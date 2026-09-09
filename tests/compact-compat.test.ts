@@ -26,11 +26,12 @@ describe('compact compatibility (rewind + compaction replay)', () => {
     const meter = newMeter()
     expect(() => meter.measure(session)).not.toThrow()
     const measurement = meter.measure(session)
-    // Surface [user1, assistant1, marker]: the marker is an empty user/message
-    // and is priced at the surface — no language tokens, just small framing.
+    // Surface [user1, assistant1, marker]: the marker is a user/message with
+    // the `(empty message)` placeholder, priced at the surface — small framing,
+    // not the shadowed turn.
     const markerSeq = markerSeqOf(session)
     expect(measurement.nodes.map(n => n.seq)).toEqual([2, 3, markerSeq])
-    expect(measurement.nodes.find(n => n.seq === markerSeq)!.tokens).toBeLessThanOrEqual(4)
+    expect(measurement.nodes.find(n => n.seq === markerSeq)!.tokens).toBeLessThanOrEqual(20)
   })
 
   it('the compaction transaction works and the meter replays the post-compaction log', () => {

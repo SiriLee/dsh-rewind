@@ -134,7 +134,7 @@ describe('I2 surface consistency (probe: deriveMessages + node legality)', () =>
     const lastEvent = session.snapshotEvents().find(e => e.seq === last)!
     expect(lastEvent.type).toBe('user/message')
     const data = lastEvent.data as { content?: unknown[]; source?: { kind?: string } }
-    expect(data.content).toEqual([])
+    expect(data.content).toEqual([{ type: 'text', text: '(empty message)' }])
     expect(data.source?.kind).toBe('plugin')
   })
 })

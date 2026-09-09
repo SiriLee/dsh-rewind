@@ -88,8 +88,8 @@ describe('rewind-marker-repair', () => {
     const marker = events[7]!
     expect(marker.type).toBe('user/message')
     expect(isFormCMarker(marker)).toBe(true)
-    expect((marker.data as Record<string, unknown>)['id']).toBe('m-ghost')
-    expect((marker.data as Record<string, unknown>)['role']).toBe('user')
+    expect((marker.data as unknown as Record<string, unknown>)['id']).toBe('m-ghost')
+    expect((marker.data as unknown as Record<string, unknown>)['role']).toBe('user')
     // The surface replace and sourceEventSeqs are preserved (refs predate the removal → unchanged).
     expect((marker as { surfaceOp?: unknown }).surfaceOp).toEqual({ op: 'replace', start: 2, end: 5 })
     expect((marker as { sourceEventSeqs?: number[] }).sourceEventSeqs).toEqual([2, 5])
@@ -117,7 +117,7 @@ describe('rewind-marker-repair', () => {
 
     const marker = events[7]!
     expect(marker.type).toBe('user/message')
-    expect((marker.data as Record<string, unknown>)['id']).toBe('m-bare')
+    expect((marker.data as unknown as Record<string, unknown>)['id']).toBe('m-bare')
     events.forEach((e, i) => expect(e.seq).toBe(i))
   })
 
@@ -371,9 +371,67 @@ describe('rewind-marker-repair', () => {
     const data = buildRewindMarkerData('orig-id')
     expect(data).toEqual({
       role: 'user',
-      content: [],
+      content: [{ type: 'text', text: '(empty message)' }],
       source: { kind: 'plugin', plugin: 'dsh-rewind' },
       id: 'orig-id',
     })
+  })
+
+  it('upgrades an old empty form-C marker content to the canonical placeholder', () => {
+    // A pre-0.10 form-C marker wrote EMPTY content; the repair must re-fill it
+    // so a strict gateway does not reject the session (Issue #21).
+    const input = [
+      ...turn(0, 1),
+      ev({
+        type: 'user/message', seq: 6, time: 9,
+        data: { role: 'user', content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' }, id: 'old-empty-c' },
+        surfaceOp: { op: 'replace', start: 2, end: 5 },
+        sourceEventSeqs: [2, 5],
+      }),
+    ]
+    const { events, stats, contentUpgrades } = repairRewindMarkers(input)
+    expect(stats).toEqual({ a: 0, b: 0, c: 1, removedGhosts: 0 })
+    expect(contentUpgrades).toBe(1)
+    const marker = events.find(e => isFormCMarker(e))!
+    expect((marker.data as unknown as Record<string, unknown>)['id']).toBe('old-empty-c')
+    expect((marker.data as unknown as Record<string, unknown>)['content']).toEqual([{ type: 'text', text: '(empty message)' }])
+    events.forEach((e, i) => expect(e.seq).toBe(i))
+  })
+
+  it('normalizes a re-typed assistant/message marker (Issue #21 workaround) to canonical form-C', () => {
+    // A user who hand-typed the empty form-C marker as an `assistant/message`
+    // (keeping the dsh-rewind plugin source) is a form-C variant; the repair
+    // retypes it back and fills the canonical placeholder.
+    const input = [
+      ...turn(0, 1),
+      ev({
+        type: 'assistant/message', seq: 6, time: 9,
+        data: { turn: 0, step: 0, message: { role: 'assistant', content: [], source: { kind: 'plugin', plugin: 'dsh-rewind' }, id: 'retitled-assistant' } },
+        surfaceOp: { op: 'replace', start: 2, end: 5 },
+        sourceEventSeqs: [2, 5],
+      }),
+    ]
+    const { events, stats, contentUpgrades } = repairRewindMarkers(input)
+    expect(stats).toEqual({ a: 0, b: 0, c: 1, removedGhosts: 0 })
+    expect(contentUpgrades).toBe(1)
+    const marker = events.find(e => isFormCMarker(e))!
+    expect(marker.type).toBe('user/message')
+    expect((marker.data as unknown as Record<string, unknown>)['id']).toBe('retitled-assistant')
+    expect((marker.data as unknown as Record<string, unknown>)['content']).toEqual([{ type: 'text', text: '(empty message)' }])
+    events.forEach((e, i) => expect(e.seq).toBe(i))
+  })
+
+  it('leaves an already-canonical form-C marker untouched (no content upgrade)', () => {
+    const input = [
+      ...turn(0, 1),
+      ev({
+        type: 'user/message', seq: 6, time: 9,
+        data: buildRewindMarkerData('canonical'),
+        surfaceOp: { op: 'replace', start: 2, end: 5 },
+        sourceEventSeqs: [2, 5],
+      }),
+    ]
+    const { contentUpgrades } = repairRewindMarkers(input)
+    expect(contentUpgrades).toBe(0)
   })
 })

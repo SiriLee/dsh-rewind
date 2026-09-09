@@ -9,10 +9,10 @@
  * transcript) is untouched; only the model-visible surface is cut, so the
  * next request derives its context from the target message onward.
  *
- * Marker shape (v0.1.3/v2): the marker is an EMPTY `user/message` carrying a
- * replace `surfaceOp` — a single event:
+ * Marker shape (v0.1.3/v2): the marker is a `user/message` carrying a replace
+ * `surfaceOp` — a single event:
  *
- *   user/message (marker, empty content) → { surfaceOp {replace, start, end} }
+ *   user/message (marker content) → { surfaceOp {replace, start, end} }
  *
  * v2 reserves surface `replace` to a node that cites every shadowed seq via
  * `sourceEventSeqs`, and `assistant/message` can no longer carry
@@ -21,10 +21,8 @@
  * is. No ghost `step/start`…`step/end` frame is needed: the token-meter's
  * step state machine ignores `user/message`, and the session invariant
  * (`invariant.ts`) imposes no open-turn requirement on it, so the marker is
- * appended while idle, outside any turn. The empty content means the marker
- * carries no language; it sits at the surface tail as the model-visible
- * "cut point" (an empty `user/message` derives to itself, so it remains a
- * present-but-empty user turn in derived history).
+ * appended while idle, outside any turn. It sits at the surface tail as the
+ * model-visible "cut point" — a present user turn in derived history.
  *
  * @module dsh-rewind/rewind
  */

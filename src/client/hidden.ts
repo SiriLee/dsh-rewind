@@ -164,7 +164,7 @@ export function isCandidateCommand(command: CommandNode): boolean {
  * (pending, succeeded, or errored — it only exists to feed the popover) and
  * every SUCCESSFUL executed `/rewind` command row, plus every message
  * withdrawn by a rewind — the target message itself, everything after it, and
- * the (empty, unrendered) marker.
+ * the (unrendered) marker.
  *
  * Each executed rewind cuts ONE span `[target, marker]`: the target message
  * and everything after it, up to the marker appended at rewind time. Spans are

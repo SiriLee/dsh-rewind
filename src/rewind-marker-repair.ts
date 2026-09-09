@@ -4,9 +4,12 @@
  * The `/dsh-rewind-fix` command rewrites the OLD plugin's rewind marker — a
  * bare `assistant/message(turn=N, step=0)` (form A) or a ghost-frame
  * `[step/start][assistant/message][step/end]` inside a closed turn (form B) —
- * into the CURRENT marker shape (form C): an empty-content `user/message` whose
- * `source` cites the plugin and whose `surfaceOp`/`sourceEventSeqs` still carry
- * the surface replace. Form C is what a 0.1.3 harness accepts.
+ * into the CURRENT marker shape (form C): a `user/message` whose `source` cites
+ * the plugin, whose `surfaceOp`/`sourceEventSeqs` still carry the surface
+ * replace, and whose content is the constant `(empty message)` placeholder
+ * (never empty, so a strict gateway does not reject it). Form C is what a 0.1.3
+ * harness accepts. It ALSO upgrades an older form-C marker whose content was
+ * empty to the canonical placeholder.
  *
  * This module is PURE: it only recognizes event shapes and rewrites them. It
  * does zero IO and has no dependency on the harness session services. The
@@ -35,14 +38,30 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 /** The rewind-marker source the current plugin writes (form C contract). */
 export const REWIND_MARKER_SOURCE = { kind: 'plugin', plugin: 'dsh-rewind' } as const
 
-/** The rewind-marker message content: empty (closest to "invisible"). */
-export const REWIND_MARKER_CONTENT: readonly ContentBlock[] = []
+/**
+ * The rewind-marker message content: always this minimal self-declaring
+ * placeholder. It is provider-independent — a strict OpenAI-compatible gateway
+ * rejects an empty user message (HTTP 400, Issue #21), and the session log is
+ * immutable while the model serving it may change. A constant non-empty
+ * placeholder is accepted by every gate and reads as an empty one the model
+ * need not act on.
+ */
+export const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty message)' }]
+
+/** Whether a form-C marker's content is already the canonical placeholder. */
+export function isCanonicalMarkerContent(content: unknown): boolean {
+  return Array.isArray(content)
+    && content.length === 1
+    && (content[0] as Record<string, unknown> | undefined)?.type === 'text'
+    && (content[0] as Record<string, unknown> | undefined)?.text === '(empty message)'
+}
 
 /**
  * Build the form-C marker `data` (the `user/message` payload). When `id` is
  * supplied it is preserved verbatim (the repair keeps the original marker's
- * `message.id`); when omitted a fresh id is generated so the running plugin can
- * reuse this contract for its live `buildMarker()`.
+ * id, whether nested at `data.message.id` or at `data.id`); when omitted a
+ * fresh id is generated so the running plugin can reuse this contract for its
+ * live `buildMarker()`.
  */
 export function buildRewindMarkerData(id?: string): Record<string, unknown> {
   return {
@@ -73,7 +92,11 @@ export function isLegacyRewindMarker(event: Readonly<SessionEvent>): boolean {
   return isLegacyRewindMarkerRow(asRow(event))
 }
 
-/** Is `event` already a form-C rewind marker? (the target shape) */
+/**
+ * Is `event` already a form-C rewind marker (a `user/message`, or a re-typed
+ * `assistant/message`, carrying the dsh-rewind plugin source + replace op)? the
+ * target shape.
+ */
 export function isFormCMarker(event: Readonly<SessionEvent>): boolean {
   return isFormCMarkerRow(asRow(event))
 }
@@ -86,6 +109,8 @@ export interface RepairOutput {
   mapSeq: ReadonlyMap<number, number>
   /** Per-form counts observed in the repaired run. */
   stats: { a: number; b: number; c: number; removedGhosts: number }
+  /** Form-C markers whose content was upgraded to the canonical placeholder. */
+  contentUpgrades: number
 }
 
 /**
@@ -100,6 +125,7 @@ export interface RepairOutput {
 export function repairRewindMarkers(input: ReadonlyArray<SessionEvent | unknown>): RepairOutput {
   const rows = input.map(toRow)
   const stats = { a: 0, b: 0, c: 0, removedGhosts: 0 }
+  let contentUpgrades = 0
   for (const row of rows) {
     if (isFormCMarkerRow(row)) stats.c += 1
   }
@@ -127,7 +153,11 @@ export function repairRewindMarkers(input: ReadonlyArray<SessionEvent | unknown>
     }
   }
 
-  // Build the surviving list and the oldSeq→newSeq map in one pass.
+  // Build the surviving list and the oldSeq→newSeq map in one pass. Every rewind
+  // marker is normalized to canonical form-C: legacy A/B retypes, and a form-C
+  // marker whose content is not already the `(empty message)` placeholder is
+  // upgraded (the old form-C wrote empty content). An already-canonical form-C
+  // is only renumbered.
   const survivors: SessionEvent[] = []
   const oldToNew = new Map<number, number>()
   for (let i = 0; i < rows.length; i += 1) {
@@ -135,9 +165,12 @@ export function repairRewindMarkers(input: ReadonlyArray<SessionEvent | unknown>
     const original = rows[i]!
     const newSeq = survivors.length
     oldToNew.set(original.seq, newSeq)
-    survivors.push(isLegacyRewindMarkerRow(original)
-      ? toEvent(retargetToC(original, newSeq))
-      : toEvent({ ...original, seq: newSeq }))
+    if (!isRewindMarkerRow(original) || isCanonicalCMarker(original)) {
+      survivors.push(toEvent({ ...original, seq: newSeq }))
+    } else {
+      if (isFormCMarkerRow(original)) contentUpgrades += 1
+      survivors.push(toEvent(retargetToC(original, newSeq)))
+    }
   }
 
   // Rewrite every reference through the map.
@@ -150,7 +183,7 @@ export function repairRewindMarkers(input: ReadonlyArray<SessionEvent | unknown>
   }
   const events = survivors.map((event) => toEvent(remapReferences(toRow(event), mapSeq)))
 
-  return { events, mapSeq: oldToNew, stats }
+  return { events, mapSeq: oldToNew, stats, contentUpgrades }
 }
 
 /** Mutable structural view of an event (typed loosely so the transform can touch refs). */
@@ -164,21 +197,44 @@ interface Row {
   ignorable?: true
 }
 
+/** The message source a row carries: legacy A/B nests it under `data.message`, form-C holds it at `data`. */
+function rowSource(row: Row): Record<string, unknown> | undefined {
+  const message = row.data['message'] as Record<string, unknown> | undefined
+  return (message?.['source'] ?? row.data['source']) as Record<string, unknown> | undefined
+}
+
 /** Row-level predicate: legacy rewind marker (form A or B). */
 function isLegacyRewindMarkerRow(row: Row): boolean {
   if (row.type !== 'assistant/message') return false
-  const message = row.data['message'] as Record<string, unknown> | undefined
-  const source = message?.['source'] as Record<string, unknown> | undefined
+  const source = rowSource(row)
   if (source?.['kind'] !== 'model') return false
   if (source?.['provider'] !== 'dsh-rewind' || source?.['model'] !== 'rewind-marker') return false
   return isReplaceSurfaceOp(row.surfaceOp)
 }
 
-/** Row-level predicate: already form-C rewind marker (the target shape). */
+/**
+ * Row-level predicate: a form-C rewind marker (the target source identity). A
+ * `user/message` is the canonical form; an `assistant/message` carrying the same
+ * dsh-rewind plugin source (a hand-retyped guest, either the old form-C or a
+ * user workaround — Issue #21) is also a form-C marker and is normalized.
+ */
 function isFormCMarkerRow(row: Row): boolean {
-  if (row.type !== 'user/message') return false
-  const source = row.data['source'] as Record<string, unknown> | undefined
+  if (row.type !== 'user/message' && row.type !== 'assistant/message') return false
+  if (!isReplaceSurfaceOp(row.surfaceOp)) return false
+  const source = rowSource(row)
   return source?.['kind'] === 'plugin' && source?.['plugin'] === 'dsh-rewind'
+}
+
+/** Row-level predicate: any rewind marker identity (legacy A/B or form-C). */
+function isRewindMarkerRow(row: Row): boolean {
+  return isLegacyRewindMarkerRow(row) || isFormCMarkerRow(row)
+}
+
+/** Row-level predicate: an already-canonical form-C marker (user/message + canonical content). */
+function isCanonicalCMarker(row: Row): boolean {
+  return row.type === 'user/message'
+    && isFormCMarkerRow(row)
+    && isCanonicalMarkerContent(row.data['content'])
 }
 
 /** Rebuild a mutable {@link Row} from an event, never mutating the input. */
@@ -216,10 +272,12 @@ function toEvent(row: Row): SessionEvent {
 /** The `data.*` seq-array reference fields the transform rewrites. */
 type DataSeqListKey = 'shadowedSeqs' | 'messageSeqs'
 
-/** Retarget an A/B marker row into a form-C `user/message` row at `seq`. */
+/** Retarget any rewind marker row into a canonical form-C `user/message` row at `seq`. */
 function retargetToC(row: Row, seq: number): Row {
   const message = row.data['message'] as Record<string, unknown> | undefined
-  const id = typeof message?.['id'] === 'string' ? message['id'] : undefined
+  const id = typeof message?.['id'] === 'string' ? message['id']
+    : typeof row.data['id'] === 'string' ? row.data['id']
+    : undefined
   return {
     type: 'user/message',
     seq,
