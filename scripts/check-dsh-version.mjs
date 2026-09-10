@@ -12,10 +12,22 @@
  * working and need no action. The single-line model replaces the tuple rather
  * than appending an OR term.
  *
+ * Only the `latest` dist-tag is probed, by design: `latest` is what a plain
+ * `npm install @deepseek-ai/dsh` resolves to, and it is the anchor this
+ * single-line model is built on. A pre-release that DSH publishes under
+ * another tag (`alpha`, `rc`, `next`) is deliberately NOT tracked here —
+ * `npm view @deepseek-ai/dsh dist-tags` is the manual pre-release check.
+ * Consequence: while the plugin sits on a pre-release line that `latest` has
+ * not reached yet (peers on `^0.1.5-alpha.1` while `latest` is still
+ * `0.1.2-rc.1`), this script exits 1 even though nothing needs to change. A
+ * non-zero exit therefore means "the declared tuple and `latest` disagree",
+ * NOT "downgrade the tuple to `latest`".
+ *
  * This script compares the current DSH tuple against the tuples covered by the
  * first @deepseek-ai/dsh-* peer range in package.json and exits:
- *   0 — current DSH tuple is covered, no action needed.
- *   1 — DSH moved to a new tuple; append an OR term and re-verify.
+ *   0 — `latest`'s tuple is covered, no action needed.
+ *   1 — the declared tuple and `latest` disagree (the ordinary forward move,
+ *       or a pre-release line that `latest` has not reached); see above.
  *   2 — registry unreachable or unparseable (never blocks a release silently
  *       as "OK"; the caller decides whether to treat it as a warning).
  */
@@ -75,6 +87,12 @@ if (covered.has(tuple)) {
   process.exit(0)
 }
 
+// Reached only when `latest`'s tuple is not among the covered tuples. This is
+// the ordinary forward case (DSH moved past the declared tuple), but it is
+// also what an alpha/rc line that `latest` has not reached produces — those
+// tags are invisible here by design (see the header). No direction check is
+// performed: when the peers deliberately lead `latest`, this branch is
+// expected and the steps below must NOT be followed.
 console.log('ACTION NEEDED: DSH moved to a new version tuple.')
 if (probe.includes('||')) {
   // Multi-line (OR-union) peer: a new tuple is appended.
