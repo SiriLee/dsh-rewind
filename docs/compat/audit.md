@@ -7,14 +7,15 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.5-alpha.2` (the `0.1.5` line's current release).
+> Targeted version: npm `@deepseek-ai/*@0.1.5-rc.1` (the range the peers and `dsh.engines.dsh` declare).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
 > (e.g. `^0.1.2-rc.1`). npm's prerelease matching rules require a candidate to
 > share the range comparator's `[major, minor, patch]` tuple, so a new DSH tuple
-> replaces the peer tuple (single-line model); any prerelease within the SAME
-> tuple is a no-op. Signal: `npm view @deepseek-ai/dsh version`;
+> replaces the peer tuple (single-line model). The range is conservative — it
+> declares only what was verified, so a release already inside it changes
+> nothing. Signal: `npm view @deepseek-ai/dsh dist-tags`;
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
 > prerelease published under another tag is a manual pre-release check).
 >

@@ -66,22 +66,22 @@ npm publish --access public
 
 DSH 仍在 rc 阶段，npm 的 prerelease 匹配规则要求 peer 范围与宿主版本
 **同 `[major, minor, patch]` 元组**才能匹配。因此 peerDependencies 采用
-**每一条 DSH 线一个 peer 元组**（如 `^0.1.2-rc.1`），DSH 发新元组时**替换**而非追加。
+**每一条 DSH 线一个 peer 元组**（如 `^0.1.2-rc.1`）；范围是保守的，只声明实际验证过的内容。
 
-- **何时需要更新**：仅当 DSH 发布新元组（`0.1.2 → 0.1.3 → 0.2.x`）时；
-  同元组内 rc 滚动（`0.1.2-rc.1 → rc.2`）无需动作。DSH 所有包同版本发布，
-  `npm view @deepseek-ai/dsh version` 即权威信号。
+- **何时需要更新**：**已验证范围**变化时——DSH 发新元组，或主动收窄（例如不再
+  声明内测的 DSH `alpha` 系列）；落在已声明范围内的发布不改变任何东西。DSH 所有包
+  同版本发布；信号是 `npm view @deepseek-ai/dsh dist-tags`。
 - **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm `latest`
   dist-tag 版本对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读
   `latest` tag**；发布在其它 tag 的 pre-release 走**手动发布前检查**
   ——见上文"升版前手动确认"。
-- **更新步骤**：把每个 `@deepseek-ai/dsh-*` peer 的元组**替换**为 `^<最新版>`
-  → devDependencies 同步升到最新 → `npm install` → `npm run check` → 发版。
+- **更新步骤**：把每个 `@deepseek-ai/dsh-*` peer 与 devDependency 指向已验证
+  范围 → `npm install` → `npm run check` → 发版。
 - **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则
   限制，peer 可收敛为稳定的 `^0.1.x` 单范围，此节即可删除。
 - **声明的最低运行时（`dsh.engines.dsh`）**：与 peer 元组一起，每个发布在
   `dsh.engines.dsh` 声明 DSH 运行时下限（如 `>=0.1.2-rc.1`），供插件管理器
-  更新守卫读取。**与 peer 元组持平的同一发布里一并 bump**；不可只升代码、
+  更新守卫读取。**与 peer 范围持平的同一发布里一并 bump**；不可只升代码、
   声明下限停留在旧值。仅支持 `>=X.Y.Z[-pre]` 形式（`^`/`~`/多范围会被视为
   「无法校验」而 fail-closed）。
 

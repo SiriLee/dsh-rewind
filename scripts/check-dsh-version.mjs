@@ -8,9 +8,9 @@
  * npm's prerelease matching rule only accepts a prerelease candidate when the
  * range contains a comparator on the SAME [major, minor, patch] tuple, so a
  * peer range like "^0.1.2-rc.1" silently stops matching the day DSH bumps to a
- * new tuple (0.2.x, …) — while same-tuple rc rolls (0.1.2-rc.1 → rc.2) keep
- * working and need no action. The single-line model replaces the tuple rather
- * than appending an OR term.
+ * new tuple (0.2.x, …) — while a release already inside the declared range
+ * changes nothing. The single-line model replaces the tuple rather than
+ * appending an OR term.
  *
  * Only the `latest` dist-tag is probed, by design: `latest` is what a plain
  * `npm install @deepseek-ai/dsh` resolves to, and it is the anchor this
@@ -18,8 +18,8 @@
  * another tag (`alpha`, `rc`, `next`) is deliberately NOT tracked here —
  * `npm view @deepseek-ai/dsh dist-tags` is the manual pre-release check.
  * Consequence: while the plugin sits on a pre-release line that `latest` has
- * not reached yet (peers on `^0.1.5-alpha.1` while `latest` is still
- * `0.1.2-rc.1`), this script exits 1 even though nothing needs to change. A
+ * not reached yet (the peers declare a newer tuple than `latest`), this script
+ * exits 1 even though nothing needs to change. A
  * non-zero exit therefore means "the declared tuple and `latest` disagree",
  * NOT "downgrade the tuple to `latest`".
  *

@@ -73,28 +73,28 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
 
 DSH is still in rc; npm's prerelease matching rules require a peer range to
 share the host version's `[major, minor, patch]` tuple. So `peerDependencies`
-uses one peer tuple per DSH line (e.g. `^0.1.2-rc.1`), replaced (never
-appended) when DSH releases a new tuple.
+uses one peer tuple per DSH line (e.g. `^0.1.2-rc.1`). The range is
+conservative: it declares only what was verified, and guarantees nothing
+outside it.
 
-- **When to update**: only when DSH releases a new tuple (`0.1.2 → 0.1.3 →
-  0.2.x`); rc rolling within a tuple (`0.1.2-rc.1 → rc.2`) needs nothing. All
-  `@deepseek-ai/*` packages release together; `npm view @deepseek-ai/dsh version`
-  is the authoritative signal.
+- **When to update**: when the verified range changes — a new DSH tuple, or a
+  deliberate narrowing (e.g. dropping the internal `alpha` series); a release
+  already inside the range changes nothing. All `@deepseek-ai/*` packages
+  release together; `npm view @deepseek-ai/dsh dist-tags` is the signal.
 - **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
   compares the `latest` dist-tag version against the tuple the peers cover
   (exit 0 = nothing to do, exit 1 = update). It reads the `latest` tag only; a
   pre-release published under another tag or bundled without
   going to npm is a manual pre-release check — see the "Before bumping" step above.
-- **Update steps**: replace every `@deepseek-ai/dsh-*` peer's tuple with
-  `^<latest>` → bump devDependencies to the latest → `npm install` →
-  `npm run check` → release.
+- **Update steps**: point every `@deepseek-ai/dsh-*` peer and devDependency at
+  the verified range → `npm install` → `npm run check` → release.
 - **After DSH goes final**: final releases are not bound by the prerelease
   tuple rule, so the peers can converge to a single stable range (e.g.
   `^0.1.x`); this section can then be deleted.
 - **Declared minimum (`dsh.engines.dsh`)**: alongside the peer tuple, each
   release declares the DSH runtime floor under `dsh.engines.dsh` (e.g.
   `>=0.1.2-rc.1`), consumed by the plugin-manager update guard. Bump it in
-  the same release that raises the peer tuple; never leave code raised while
+  the same release that changes the peer range; never leave code raised while
   the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is
   supported (`^`/`~`/multi-range are treated as "cannot verify" and
   fail closed).
