@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.2-rc.1` (matches `package-lock.json`).
+> Targeted version: npm `@deepseek-ai/*@0.1.5-alpha.2` (the `0.1.5` line's current release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
@@ -18,16 +18,16 @@
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
 > prerelease published under another tag is a manual pre-release check).
 >
-> The plugin targets a single DSH version line (`0.1.2-rc.1`); compatibility
-> with earlier lines is not kept.
+> The plugin targets a single DSH version line; compatibility with earlier
+> lines is not kept.
 
-### Single channel (`0.1.2-rc.1`)
+### Single channel
 
-The plugin targets one DSH channel. Each seam below reads the 0.1.2-rc.1 shape
-only (no `Session.events` / `[data-time-hover-root]` / `<textarea>` / face-`chat`
-legacy branch).
+The plugin targets one DSH channel. Each seam below reads the targeted
+version's shape only (no `Session.events` / `[data-time-hover-root]` /
+`<textarea>` / face-`chat` legacy branch).
 
-| Seam | 0.1.2-rc.1 implementation |
+| Seam | Implementation at the targeted version |
 | --- | --- |
 | Host session log | `session.snapshotEvents()` |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
