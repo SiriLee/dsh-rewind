@@ -15,7 +15,7 @@ import {
   toolPairingBalancedAfter,
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
-import { planRewind, rewindMarkerSource } from '../src/rewind.ts'
+import { planRewind, REWIND_MARKER_SOURCE } from '../src/rewind.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
@@ -45,8 +45,8 @@ export function assistantMessage(text: string): AssistantMessage {
 }
 
 /** The `(empty message)`-content `user/message` rewind marker the host appends. */
-export function rewindMarker(targetSeq = 0): UserMessage {
-  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: rewindMarkerSource(targetSeq) })
+export function rewindMarker(): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: REWIND_MARKER_SOURCE })
 }
 
 /**
@@ -110,7 +110,7 @@ export function buildTurnedSession(): Session {
  */
 export function applyRewind(session: Session, targetSeq: number): number {
   const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
-  const event = session.append('user/message', rewindMarker(targetSeq), {
+  const event = session.append('user/message', rewindMarker(), {
     surfaceOp: { op: 'replace', startSeq: plan.surfaceStart as SessionSeq, endSeq: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })

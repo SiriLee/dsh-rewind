@@ -88,24 +88,15 @@ export interface RewindPlan {
 }
 
 /**
- * The rewind-marker brand: the backend-independent identity shared by every
- * marker the plugin appends. A `user/message` whose source carries this brand
- * is what a harness recognises as the rewind marker; the shape mirrors the
- * /compact checkpoint marker (`compactCheckpointSource`), but adds `targetSeq`
- * so the marker self-describes the user message it rewound to.
+ * The rewind-marker source: the backend-independent identity carried by every
+ * marker the plugin appends. It is the plain third-party plugin source shape
+ * `{ kind: 'plugin', plugin: 'dsh-rewind' }` — no extra fields, because a
+ * plugin source is a CLOSED shape in the harness (only `kind`/`plugin`, plus
+ * the context-injection `form`/`sections`/`summary`; see `MessageSourceMap` and
+ * the released-format source validator). A plugin extends the source map by
+ * adding a new `kind`, never by hanging private fields off `plugin`.
  */
-const REWIND_MARKER_BRAND = Object.freeze({ kind: 'plugin', plugin: 'dsh-rewind' } as const)
-
-/**
- * Create rewind-marker provenance correlated with one rewind target.
- * @param targetSeq - absolute log seq of the user message rewound to.
- * @returns immutable rewind-marker source.
- */
-export function rewindMarkerSource(
-  targetSeq: number,
-): Readonly<{ kind: 'plugin'; plugin: 'dsh-rewind'; targetSeq: number }> {
-  return Object.freeze({ ...REWIND_MARKER_BRAND, targetSeq } as const)
-}
+export const REWIND_MARKER_SOURCE = Object.freeze({ kind: 'plugin', plugin: 'dsh-rewind' } as const)
 
 /**
  * Test whether a persisted message source identifies a rewind marker.
@@ -113,7 +104,7 @@ export function rewindMarkerSource(
  * @returns whether the source carries the backend-independent rewind brand.
  */
 export function isRewindMarker(source: MessageSource): boolean {
-  return source.kind === 'plugin' && source.plugin === REWIND_MARKER_BRAND.plugin
+  return source.kind === 'plugin' && source.plugin === REWIND_MARKER_SOURCE.plugin
 }
 
 /** Preview length cap for candidate listings. */

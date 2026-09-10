@@ -6,7 +6,7 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
   formatCandidate, formatCandidateList, isRewindMarker, listRewindCandidates, messagePreview, parseRewindTarget,
-  planRewind, RewindError, rewindMarkerSource,
+  planRewind, REWIND_MARKER_SOURCE, RewindError,
 } from '../src/rewind.ts'
 
 function userEvent(seq: number, text: string, time = seq * 60_000): SessionEvent<'user/message'> {
@@ -295,30 +295,32 @@ describe('planRewind', () => {
 })
 
 describe('rewind marker message shape', () => {
-  it('the marker is a user/message with the plugin brand and the (empty message) content (v3 surface replace)', () => {
+  it('the marker is a user/message with the conformant plugin source and the (empty message) content (v3 surface replace)', () => {
     // The marker content is a constant `(empty message)` placeholder so it is
     // accepted by every provider: the session log is immutable but the model
     // serving it may change (Issue #21).
     const marker: UserMessage = createUserMessage({
       content: [{ type: 'text', text: '(empty message)' }],
-      source: rewindMarkerSource(7),
+      source: REWIND_MARKER_SOURCE,
     })
     expect(marker.role).toBe('user')
     expect(marker.source.kind).toBe('plugin')
     expect((marker.source as { plugin?: string }).plugin).toBe('dsh-rewind')
-    expect((marker.source as { targetSeq?: number }).targetSeq).toBe(7)
+    expect(marker.source).toEqual({ kind: 'plugin', plugin: 'dsh-rewind' })
     expect(marker.content).toEqual([{ type: 'text', text: '(empty message)' }])
   })
 
-  it('rewindMarkerSource freezes the provenance and records the target seq', () => {
-    const source = rewindMarkerSource(42)
-    expect(source).toEqual({ kind: 'plugin', plugin: 'dsh-rewind', targetSeq: 42 })
-    expect(Object.isFrozen(source)).toBe(true)
-    expect(isRewindMarker(source)).toBe(true)
+  it('REWIND_MARKER_SOURCE is the frozen, closed third-party plugin source shape', () => {
+    // A plugin source is a CLOSED shape (`kind`/`plugin` only): it must carry
+    // no private field (see docs/compat/audit.md — the released-format source
+    // validator rejects any member outside the allowlist).
+    expect(REWIND_MARKER_SOURCE).toEqual({ kind: 'plugin', plugin: 'dsh-rewind' })
+    expect(Object.isFrozen(REWIND_MARKER_SOURCE)).toBe(true)
+    expect(isRewindMarker(REWIND_MARKER_SOURCE)).toBe(true)
   })
 
   it('isRewindMarker recognises only the dsh-rewind brand', () => {
-    expect(isRewindMarker(rewindMarkerSource(1))).toBe(true)
+    expect(isRewindMarker(REWIND_MARKER_SOURCE)).toBe(true)
     expect(isRewindMarker({ kind: 'plugin', plugin: 'compact' })).toBe(false)
     expect(isRewindMarker({ kind: 'user' })).toBe(false)
     expect(isRewindMarker({ kind: 'plugin', plugin: 'other' })).toBe(false)

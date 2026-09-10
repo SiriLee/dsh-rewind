@@ -41,7 +41,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { unlink } from 'node:fs/promises'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, rewindMarkerSource, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
@@ -275,10 +275,10 @@ const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty mes
  * the token-meter's step machine ignores `user/message` and the session
  * invariant imposes no open-turn requirement on it.
  */
-function buildMarker(targetSeq: SessionSeq): UserMessage {
+function buildMarker(): UserMessage {
   return createUserMessage({
     content: REWIND_MARKER_CONTENT,
-    source: rewindMarkerSource(targetSeq),
+    source: REWIND_MARKER_SOURCE,
   })
 }
 
@@ -504,7 +504,7 @@ async function executeRewind(
       return rewindErrorResult(error)
     }
 
-    const marker = buildMarker(plan.targetSeq as SessionSeq)
+    const marker = buildMarker()
     let event: ReturnType<Session['append']>
     try {
       // The marker is a `user/message` carrying the surface-replace op.

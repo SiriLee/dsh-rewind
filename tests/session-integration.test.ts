@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, UserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type SessionEvent, type SessionSeq } from '@deepseek-ai/dsh-session'
-import { planRewind, rewindMarkerSource } from '../src/rewind.ts'
+import { planRewind, REWIND_MARKER_SOURCE } from '../src/rewind.ts'
 
 function textMessage(text: string): UserMessage {
   return createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -28,8 +28,8 @@ function assistantMessage(text: string): AssistantMessage {
 }
 
 /** The `(empty message)`-content `user/message` rewind marker the host appends. */
-function rewindMarker(targetSeq: number): UserMessage {
-  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: rewindMarkerSource(targetSeq) })
+function rewindMarker(): UserMessage {
+  return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: REWIND_MARKER_SOURCE })
 }
 
 /**
@@ -40,7 +40,7 @@ function rewindMarker(targetSeq: number): UserMessage {
  * open-turn requirement on it.
  */
 function applyRewind(session: Session, plan: ReturnType<typeof planRewind>): number {
-  const event = session.append('user/message', rewindMarker(plan.targetSeq), {
+  const event = session.append('user/message', rewindMarker(), {
     surfaceOp: { op: 'replace', startSeq: plan.surfaceStart as SessionSeq, endSeq: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
   })
