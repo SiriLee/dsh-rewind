@@ -35,8 +35,10 @@ DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消�
 
 ## 安装
 
+确认本机 DSH 版本后，在 [Release](https://github.com/SiriLee/dsh-rewind/releases) 找到适配的插件版本。
+
 ```sh
-dsh plugin --profile web add dsh-rewind-plugin
+dsh plugin --profile web add dsh-rewind-plugin@<版本>
 ```
 
 > ⚠️ npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
@@ -66,6 +68,19 @@ dsh plugin --profile web add dsh-rewind-plugin
 另提供**全局自动清理**（默认关闭）：把长期不活跃的会话快照整目录移除，不影响活动会话与对话日志。可在 `设置→插件→插件配置→快照清理` 面板查看与配置（自动清理开关、失活天数），也可用 `/snapshot-auto-cleanup` 命令查看、设置和运行。详见：[快照自动清理](docs/snapshot-auto-cleanup.zh.md)。
 
 <img src="assets/screenshots/cleanup-setting.png" alt="快照清理设置：自动清理与失活天数" width="600">
+
+## 卸载
+
+```sh
+# 卸载插件
+dsh plugin --profile web remove dsh-rewind-plugin
+
+# 如需同时删除本地数据
+rm -rf <dsh home>/rewind-snapshots
+rm <dsh home>/snapshot-cleanup-last-sweep.json
+```
+
+插件的自动清理设置保存在设置文档（`<dsh home>/settings.yaml`）中。如需彻底清理，可手动删除对应键。
 
 ## 本插件的优势
 

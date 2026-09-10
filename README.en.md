@@ -35,8 +35,11 @@ Every user message carries a **↶ rewind** button in its action row. Clicking i
 
 ## Install
 
+Check your local DSH version, then find the matching plugin version in
+[Releases](https://github.com/SiriLee/dsh-rewind/releases).
+
 ```sh
-dsh plugin --profile web add dsh-rewind-plugin
+dsh plugin --profile web add dsh-rewind-plugin@<version>
 ```
 
 > ⚠️ The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
@@ -76,6 +79,20 @@ cleanup** panel (the auto-cleanup switch and the idle-day cutoff), or use the
 [Snapshot cleanup](docs/snapshot-auto-cleanup.md).
 
 <img src="assets/screenshots/cleanup-setting.png" alt="Snapshot cleanup settings: auto-cleanup and idle days" width="600">
+
+## Uninstall
+
+```sh
+# Uninstall the plugin
+dsh plugin --profile web remove dsh-rewind-plugin
+
+# To also delete local data
+rm -rf <dsh home>/rewind-snapshots
+rm <dsh home>/snapshot-cleanup-last-sweep.json
+```
+
+The plugin's auto-cleanup settings live in the settings document
+(`<dsh home>/settings.yaml`). To remove them completely, delete the key manually.
 
 ## Why it stands out
 
