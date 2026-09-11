@@ -630,6 +630,42 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
     `${both.text} content=${restored}`)
 }
 
+// 4k. a service stat ERROR is not "the file does not exist": an abort, a
+//     permission/IO failure or a remote backend must abandon the capture, never
+//     record a creation — a creation record makes a later `both` rewind DELETE a
+//     file that exists (and that this plugin never backed up).
+{
+  const errSession = buildSession('verify-stat-error')
+  const errAgent = makeAgent(errSession.id, errSession)
+  errSession.append('user/message', user('stat error anchor question'), { surfaceOp: 'append' })
+  const errAnchor = errSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const errPath = join(wsDir, 'stat-error.txt')
+  await writeFile(errPath, 'orig', 'utf8')
+
+  const originalStat = fs.stat
+  fs.stat = async () => { throw Object.assign(new Error('simulated stat failure'), { code: 'FS_IO_ERROR' }) }
+  try {
+    const exec = { callId: 'staterr1', name: 'write', arguments: { file_path: errPath, content: 'edited' }, agent: errAgent, signal: aborted() }
+    await ctx.waterfall('tools/execute', exec, async () => {
+      await writeFile(errPath, 'edited', 'utf8') // the tool call does land
+      return { isError: false, content: [] }
+    })
+    await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+  } finally {
+    fs.stat = originalStat
+  }
+
+  const members = await readdir(join(snapRoot, errSession.id)).catch(() => [])
+  check('a service stat ERROR is never recorded as a creation',
+    members.filter(name => /^\d+$/.test(name)).length === 0,
+    `members=${members.join(',')}`)
+  const errBoth = await call(errAgent, `@${errAnchor} both`)
+  const afterBoth = await readOrMissing(errPath)
+  check('a service stat ERROR cannot make a rewind delete the file',
+    errBoth.kind === 'success' && afterBoth === 'edited',
+    `${errBoth.text} content=${afterBoth}`)
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift
@@ -645,6 +681,19 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   await ctx.waterfall('tools/post-execute', exec, { isError: true, error: { message: 'denied', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
   const preview = await call(deniedAgent, `preview @${anchorSeq} both`)
   check('denied call is not in the impact list', preview.kind === 'success' && !preview.text.includes(deniedPath), preview.text)
+
+  // A capture that DID stage bytes but whose tool call then failed must release
+  // the staged copy: no entry, no `.pending/` leak (discardCapture).
+  const failedPath = join(wsDir, 'failed-capture.txt')
+  await writeFile(failedPath, 'staged-orig', 'utf8')
+  const failedExec = { callId: 'c4', name: 'write', arguments: { file_path: failedPath, content: 'never lands' }, agent: deniedAgent, signal: aborted() }
+  await ctx.waterfall('tools/execute', failedExec, async () => ({ isError: true, content: [] }))
+  await ctx.waterfall('tools/post-execute', failedExec, { isError: true, error: { message: 'boom', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
+  const pendingNames = await readdir(join(snapRoot, deniedSession.id, '.pending')).catch(() => [])
+  const anchorDirs = (await readdir(join(snapRoot, deniedSession.id)).catch(() => [])).filter(name => /^\d+$/.test(name))
+  check('an abandoned capture releases its staged bytes (no entry, no pending leak)',
+    pendingNames.length === 0 && anchorDirs.length === 0,
+    `pending=${pendingNames.join(',')} anchors=${anchorDirs.join(',')}`)
 }
 
 // 6. relative paths resolve against the session cwd (fs-tools rule)

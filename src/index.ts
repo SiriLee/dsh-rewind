@@ -194,6 +194,17 @@ async function resolveTarget(
 }
 
 /**
+ * True when an fs-service error means "the path does not exist". Anything else
+ * (an abort, a permission or IO failure, a non-local backend) is NOT an
+ * absence: recording it as a creation would let a later `both` rewind DELETE a
+ * file that exists.
+ */
+function isNotFoundError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code
+  return code === 'ENOENT' || code === 'FS_NOT_FOUND'
+}
+
+/**
  * Capture the before-state of a tracked mutation during `tools/execute` (the
  * around-dispatch wrapper): the file still holds the old content, and this
  * stage only runs after any pre-execute approval gate allowed the call — so a
@@ -231,7 +242,14 @@ async function captureBefore(
   const cwd = execSessionCwd(exec, path)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
-  const info = await fs.stat(target, exec.signal).catch(() => undefined)
+  const info = await fs.stat(target, exec.signal).catch((error: unknown) => {
+    // Only an affirmative "not found" answer becomes a creation. Any other
+    // failure abandons the capture (the caller logs it and the tool proceeds
+    // without a backup) — never a "was created" record, which a rewind would
+    // turn into a delete of a file that exists.
+    if (isNotFoundError(error)) return undefined
+    throw error
+  })
   if (session === undefined) return
   // The SERVICE decides whether the file exists. Only `undefined` (no file)
   // records a creation; a non-regular target (directory / FIFO / device) is
