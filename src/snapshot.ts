@@ -1582,6 +1582,13 @@ export class SnapshotStore {
         // Probe failure: conservative — treat as differing. A restore still
         // attempts the write, a delete still attempts the unlink (failures
         // surface per-file in the restore outcome, never silently skipped).
+        // A LOSSY record is the exception: its bytes are already gone, so it
+        // must never be written back — the normal path above skips it for the
+        // same reason, and a throwing probe must not smuggle it through.
+        if (source !== null && source.kind === 'lossyText') {
+          skipped.push(entry.path)
+          continue
+        }
         const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
         if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
         else actions.push({ path: entry.path, action: 'restore', before: source, ...pin })

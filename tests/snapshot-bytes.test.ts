@@ -317,6 +317,19 @@ describe('integrity rules', () => {
     expect(await reopened.impactsAfter(session, 5)).toEqual([])
   })
 
+  it('never writes a lossy record back even when the disk probe throws', async () => {
+    // The planner's "probe failed, attempt anyway" fallback must not smuggle a
+    // lossy record through: its bytes are gone, so the write would replace live
+    // content with U+FFFD.
+    const live = await touch('lossy-throw.txt', Buffer.from('live'))
+    await store.recordEntry(session, { callId: 't1', anchorSeq: 5, path: live, before: 'A\uFFFDB' })
+    const throwing = { ...defaultProbe, matches: async () => { throw new Error('probe blew up') } }
+
+    const outcome = await store.restoreAfter(session, 5, unlink, throwing)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [live], failed: [] })
+    expect(await readFile(live, 'utf8')).toBe('live')
+  })
+
   it('rejects a lossy entry that claims the file was ABSENT', async () => {
     // `lossy: true` + `blob: null` is self-contradictory: a record with lost
     // bytes cannot also assert "the file did not exist". Reading it as a
