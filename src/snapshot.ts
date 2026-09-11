@@ -1742,6 +1742,9 @@ export class SnapshotStore {
     // Best-effort: a filesystem that refuses chmod must never fail a restore
     // whose bytes landed (Windows permission bits, exotic mounts, …).
     if (mode !== undefined) await chmod(path, mode).catch(() => undefined)
+    // No recorded mode (a legacy entry, or a link materialized without one):
+    // the live bits are not ours to change, so only undo the widening.
+    else if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
     return 'restored'
   }
 

@@ -134,6 +134,24 @@ describe('file mode on restore', () => {
     expect(await modeOf(live)).toBe(0o600)
   })
 
+  it('restores a READ-ONLY target with NO recorded mode and leaves its mode alone', async () => {
+    // The R3 pre-step widens a read-only file to write it. With no recorded
+    // mode (a legacy entry), the live bits must be put back exactly.
+    const live = await touch('readonly-legacy.txt', 'A1', 0o644)
+    if (!await chmodSupported(live)) return
+
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'legacy.json'), JSON.stringify({
+      callId: 'legacy', anchorSeq: 5, path: live, before: 'A0', time: 1,
+    }), 'utf8')
+    await chmod(live, 0o444)
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([live])
+    expect(await readFile(live, 'utf8')).toBe('A0')
+    expect(await modeOf(live)).toBe(0o444)
+  })
+
   it('leaves the live mode alone for a legacy entry with no recorded mode', async () => {
     const live = await touch('legacy-mode.txt', 'A1', 0o644)
     if (!await chmodSupported(live)) return
