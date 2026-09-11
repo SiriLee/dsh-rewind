@@ -9,11 +9,11 @@
 ## One-line summary
 
 Rewind **always** restores files edited with the dedicated editing tools
-(`write` / `edit` / `str_replace_editor`) because the plugin snapshots them
-before the edit. Command-line (or hand) edits are covered **only when the file
-was previously registered** by an editing tool in the same conversation — and,
-in that case, the change itself is recorded, but rewinding to a boundary inside
-an unchanged interval is only as precise as the next recorded state (see
+(`write` / `edit`) because the plugin snapshots them before the edit.
+Command-line (or hand) edits are covered **only when the file was previously
+registered** by an editing tool in the same conversation — and, in that case,
+the change itself is recorded, but rewinding to a boundary inside an unchanged
+interval is only as precise as the next recorded state (see
 [Rewind precision](#rewind-precision-for-a-registered-file-changed-outside-editing-tools)).
 
 ## How file changes are classified
