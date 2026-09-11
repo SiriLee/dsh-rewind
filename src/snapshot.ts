@@ -1830,6 +1830,13 @@ export class SnapshotStore {
    * terminal state and not reported. A corrupt journal is reported
    * `recovery-required` — never silently dropped.
    *
+   * Deliberately NOT gated on the session's `store` marker: a journal is fully
+   * self-describing (`version` plus byte references), and refusing to finish an
+   * interrupted op merely because the SESSION marker looks newer would strand a
+   * half-restored workspace — the outcome the legacy-journal support exists to
+   * prevent. A reference the newer build moved shows up as a per-file failure,
+   * never as a silent write.
+   *
    * @param sessionId - session whose journals to reconcile.
    * @param probe - current-disk state probe (defaults to the real FS).
    * @returns one report per non-terminal journal still needing attention.
