@@ -12,9 +12,8 @@ The plugin runs in the DSH host process and therefore holds the host user's
 filesystem authority — it reads and writes files with plain `node:fs`. The
 following are treated as **untrusted inputs**:
 
-- **Model arguments** — the `file_path` / `path` / `command` fields of write,
-  `edit`, and `str_replace_editor` tool calls (they name the paths the
-  checkpoint store records).
+- **Model arguments** — the `file_path` field of `write` / `edit` tool calls
+  (it names the paths the checkpoint store records).
 - **Session log contents** — events are parsed structurally; a hostile or
   malformed id must never escape the store root.
 - **Current worktree state** — restore planning reconciles against the live
@@ -57,7 +56,10 @@ to exactly the apply-start state, and per-file failures are reported rather
 than hidden.
 
 A failed gate fails closed: an invalid target, a missing store, an absent
-backup, or a cancelled invocation aborts the rewind with an error.
+backup, or a cancelled invocation aborts the rewind with an error. A store
+written by a **newer** build is one of those gates: it is refused as a whole —
+no partial restore, no clear, no new entry written into it — while the
+conversation rewind itself still works.
 
 **Automatic store deletion**: two things delete session snapshots. The opt-in
 `snapshot-auto-cleanup` sweep (default off) removes the whole directories of
@@ -68,7 +70,9 @@ positions that no longer line up. Both stay confined to the store root, use
 `lstat` (so they never follow a symlink out of the root), the sweep never targets
 the active session, and neither touches the conversation log. When auto-cleanup
 is disabled (the default), only the format-change clear runs, and only for an
-affected session.
+affected session. A session whose store is **newer** than this build understands
+is never cleared: the store-format guard fails the whole operation closed before
+any format-change clear (see `docs/format.md`).
 
 ## Conversation integrity
 
@@ -91,29 +95,38 @@ transcript.
   `[a-zA-Z0-9._-]` (`safeSessionId` / `safeFileId`) before joining the store
   root; `.` and `..` bare values are replaced — hostile ids cannot traverse
   out of the root.
-- **Never written through links**: symlinked and hard-linked paths
-  (`lstat().nlink > 1`) are skipped and reported, never restored — a symlink
-  would redirect the write outside the checkpoint, and a hard link would
-  clobber every other name of the same inode (e.g. pnpm-installed files).
+- **Never written through a linked final component**: a path whose last
+  component is a symlink or a hard link (`lstat().nlink > 1`) is skipped and
+  reported, never restored — a symlink would redirect the write outside the
+  checkpoint, and a hard link would clobber every other name of the same inode
+  (e.g. pnpm-installed files). Only the final component is checked: a
+  **symlinked ancestor directory** is not detected, so a restore (or the
+  `mkdir` / `copyFile` in front of it) still follows it out of the tracked
+  directory — a known limitation, unchanged from the released v1 build.
 - **Restores name only recorded paths**: the store contains resolved display
   paths of the session's own write-class tool calls (plus boundary re-checks
   over that same tracked set) — a restore can never write an arbitrary path.
 - **Path resolution rule**: relative paths resolve against the session
   workspace cwd, mirroring the fs tools' own rule (`src/session-cwd.ts`).
 - **Bounded backups**: `prune` keeps the newest 100 anchor groups per session
-  (`MAX_ANCHOR_GROUPS`), so backup accumulation cannot grow the store without
-  bound (the exact cap is pinned in `docs/format.md`). Across sessions, the
-  opt-in `pruneStale` sweep removes whole **long-inactive** session directories
-  (measured by the newest member being idle past `maxAgeDays`); it uses `lstat`
-  (no symlink following), skips dot-prefixed temp files, and never targets the
-  active session (`keepActiveId`).
+  (`MAX_ANCHOR_GROUPS`), except groups a non-terminal restore journal still
+  references (pinned so the op can be finished), so backup accumulation stays
+  bounded by the cap plus the number of unresolved journals (the exact cap is
+  pinned in `docs/format.md`). Across sessions, the opt-in `pruneStale` sweep
+  removes whole **long-inactive** session directories (measured by the newest
+  member being idle past `maxAgeDays`); it uses `lstat` (no symlink following),
+  skips dot-prefixed temp files, and never targets the active session
+  (`keepActiveId`).
 
 ## Crash safety
 
-- **Atomic commits**: every JSON write (checkpoint entries, restore journals)
-  goes to a sibling temp file and is renamed over the target. A host crash
-  mid-write can leave only an inert `<target>.tmp` — never a readable
-  half-written file — and readers never pick up temp files.
+- **Ordered commits**: a checkpoint commit places the before-sidecar (a raw
+  byte copy) before publishing the entry JSON, so a crash can leave an
+  unreferenced sidecar but never an entry whose bytes are missing. Every JSON
+  write (checkpoint entries, restore journals) goes to a sibling temp file and
+  is renamed over the target: a host crash mid-write can leave only an inert
+  `<target>.tmp` — never a readable half-written file — and readers never pick
+  up temp files.
 - **Journaled restores**: before mutating anything, the restore captures each
   planned path's pre-restore ("rescue") state and persists an intent journal,
   then marks each action done as it is applied. A crash at any point leaves
@@ -126,7 +139,9 @@ transcript.
 - **Fail-loud vs fail-soft**: a corrupt **journal** is reported
   `recovery-required` — never silently dropped (dropping it would erase the
   interrupted restore's recovery record). Corrupt **checkpoint entries** are
-  silently ignored (they only lose one backup, not the recovery path).
+  silently ignored (they only lose one backup, not the recovery path), and a
+  record whose sidecar is missing or truncated fails only that file — never a
+  delete of the live file.
 - **Journal IO never fails the restore**: if the journal cannot be written the
   restore proceeds with pre-journal semantics (crash safety degrades,
   behavior does not).
@@ -136,9 +151,11 @@ transcript.
 - This plugin does **not** sandbox other processes or stop them from changing
   files concurrently.
 - It does **not** provide confidentiality or tamper resistance against the
-  same operating-system user: state files are created with the process
-  default permissions (no special modes are set — a standard umask applies),
-  and the host user remains trusted.
+  same operating-system user: **store** files are created with the process
+  default permissions (a standard umask applies), and the host user remains
+  trusted. Restored **workspace** files do carry their recorded permission
+  bits: a content restore reapplies them (`chmod`, best-effort), while a mode
+  difference on its own never triggers a restore.
 - It does **not** exclude paths from the store, and it never oversteps: the
   plugin only adds backup/restore on top of permissions DSH already holds. Two
   distinct cases follow:

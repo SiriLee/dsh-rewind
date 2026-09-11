@@ -103,19 +103,22 @@ the `0.9.x` line) and is **removed in the `0.10.x` line**.
 ## Checkpoint pipeline (Claude Code before-backup model)
 
 ```
-tools/execute        captureBefore: for write / edit
-                     (mutating commands only), read the file's BEFORE state;
+tools/execute        captureBefore: for write / edit, stage a raw byte copy of
+                     the file's BEFORE state into the store's .pending/
+                     (node:fs copyFile, never through a string);
                      subagent edits are NOT tracked (Claude Code alignment).
 tools/post-execute   commitEntry: anchor = latest user/message seq; skip
-                     failed calls; write the before-backup to the store.
+                     failed calls; publish the staged bytes as the entry's
+                     sidecar and write the metadata beside them.
 session/event        user/message boundary: reconcileTracked re-reads every
   (user/message)     tracked file and records a new before-backup for any
                      whose disk state changed since last seen — external
                      edits/deletions enter the record this way.
 prune                keeps the newest 100 anchor groups per session, storing
                      identical before-content as in-place links that are
-                     materialized before their group is dropped, and recycles
-                     terminal restore journals.
+                     materialized before their group is dropped, never dropping
+                     a group a non-terminal restore journal still references,
+                     and recycles terminal restore journals.
 pruneStale            cross-session auto-cleanup (default off): whole
                      long-inactive session dirs past the cutoff are removed;
                      the active session is never targeted.
