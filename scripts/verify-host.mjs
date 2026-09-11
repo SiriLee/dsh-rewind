@@ -259,6 +259,13 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1
 }
 
+/**
+ * Read a path for an assertion without aborting the suite when it is gone: the
+ * vulnerable paths this suite probes DELETE files, and an uncaught ENOENT would
+ * hide every later probe instead of reporting one clean FAIL.
+ */
+const readOrMissing = async path => readFile(path, 'utf8').catch(() => '<missing>')
+
 // 1. command registered
 check('command registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
 // `/undo` is a bare alias of `/rewind`: registered and sharing the same handler.
@@ -586,13 +593,15 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
 
   const preview = await call(pinAgent, `preview @${pinAnchor} both`)
   const both = await call(pinAgent, `@${pinAnchor} both`)
+  const outsideDecoy = await readOrMissing(join(outside, 'f.txt'))
+  const movedOriginal = await readOrMissing(join(moved, 'f.txt'))
   check('a repointed ancestor refuses the restore (no write outside the checkpoint)',
-    (await readFile(join(outside, 'f.txt'), 'utf8')) === 'pin-decoy' &&
-      (await readFile(join(moved, 'f.txt'), 'utf8')) === 'pin-edited',
-    `outside=${await readFile(join(outside, 'f.txt'), 'utf8')} moved=${await readFile(join(moved, 'f.txt'), 'utf8')}`)
+    outsideDecoy === 'pin-decoy' && movedOriginal === 'pin-edited',
+    `outside=${outsideDecoy} moved=${movedOriginal}`)
+  const outsideCreated = await readOrMissing(join(outside, 'created.txt'))
   check('a repointed ancestor refuses the creation delete (no unlink outside the checkpoint)',
-    (await readFile(join(outside, 'created.txt'), 'utf8')) === 'pin-decoy-created',
-    `outside=${await readFile(join(outside, 'created.txt'), 'utf8')}`)
+    outsideCreated === 'pin-decoy-created',
+    `outside=${outsideCreated}`)
   check('a repointed ancestor is reported, not silently restored',
     preview.kind === 'success' && /impact=0/.test(preview.text) && both.kind === 'success' && /skip|fail/.test(both.text),
     `${preview.text} | ${both.text}`)
@@ -615,9 +624,10 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   await runWrite(linkAgent, 'link1', viaLink, 'link-edited')
 
   const both = await call(linkAgent, `@${linkAnchor} both`)
+  const restored = await readOrMissing(join(realDir, 'f.txt'))
   check('a stable symlinked ancestor still restores',
-    both.kind === 'success' && (await readFile(join(realDir, 'f.txt'), 'utf8')) === 'link-before',
-    both.text)
+    both.kind === 'success' && restored === 'link-before',
+    `${both.text} content=${restored}`)
 }
 
 // 5. a denied call never commits (no phantom entry)
