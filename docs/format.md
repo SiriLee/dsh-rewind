@@ -53,6 +53,7 @@ interface CheckpointEntryJson {   // one `<base>.json`
   store: 2              // on-disk store format (absent/1 = the released v1 string format)
   callId: string        // the tool call that mutated the file
   file: string          // resolved display path (absolute)
+  parent?: string       // realpath of the file's directory at commit time (the location pin)
   blob: string | null   // sibling sidecar file name; null = the file was created
   size: number          // byte length of the sidecar (0 when `blob` is null)
   mode?: number         // permission bits, applied when content is restored
@@ -61,8 +62,8 @@ interface CheckpointEntryJson {   // one `<base>.json`
 }
 ```
 
-A dedup link (see below) carries `callId`, `file`, `ref` and `time` instead of
-`blob` and `size`.
+A dedup link (see below) carries `callId`, `file`, `ref`, `time` and an
+optional `parent` instead of `blob` and `size`.
 
 Semantics:
 
@@ -74,6 +75,13 @@ Semantics:
 - **`anchorSeq` is the parent directory**, deliberately not a field of the
   entry: rewinding to message N applies every entry anchored at or after N (the
   boundary is inclusive).
+- **`parent` is the location pin**: the `realpath` of `dirname(file)` at commit
+  time. A restore refuses the path when its directory no longer resolves there.
+  Only the path's FINAL component is checked for links (`lstat().nlink > 1` or a
+  symlink; see `SECURITY.md`), so a repointed ancestor directory would otherwise
+  redirect the write — or the unlink of a recorded creation — outside the
+  recorded location. Absent means "no pin" and falls back to the final-component
+  check alone.
 - **`time` is the ordering key within an anchor group**: it is monotonic per
   store instance (bumped past the previous commit), so same-millisecond
   commits stay capture-ordered and a re-read always picks the same "earliest"
@@ -99,8 +107,9 @@ corrupt or hostile ref cannot escape the store root when followed; because refs
 name the actual file, a link may point at a released-v1 entry. Because links
 reference prior entries, `prune` materializes a surviving link whose `ref` lands
 on a group it is about to drop before deleting that group, so no kept link is
-left dangling; the materialized entry keeps the bytes but not the referent's
-`mode` (a link carries no metadata of its own).
+left dangling; the materialized entry keeps the bytes and the link's own
+location pin, but not the referent's `mode` (a link records no permissions of
+its own).
 
 ## Restore journal
 
@@ -129,6 +138,7 @@ interface RestoreJournalAction {
   rescue: ByteRef | null        // pre-restore disk state; null = file was absent
   mode?: number                 // recorded target permissions
   rescueMode?: number           // recorded pre-restore permissions
+  parent?: string               // checkpoint-time location pin (see the entry)
   rescueError?: string          // set when the rescue capture failed (rollback skips it)
   done: boolean                 // true once the action's fs op completed and was marked
   failed?: string               // per-action failure message (the pass never aborts)
@@ -163,6 +173,16 @@ versions on disk.
   leave an unreferenced sidecar but never an entry whose bytes are missing.
   A sidecar that is missing or shorter than `size` is a per-file failure, never
   a silent "the file was created".
+- **Pinned location**: every entry, link and journal action records where the
+  tracked file's directory resolved at commit time (the `parent` pin), and a
+  restore re-checks it before touching the path — the initial pass, a
+  post-restart `continueRestore` and a `rollbackRestore` alike (the journal
+  carries the pin). A directory that resolves elsewhere is refused and reported,
+  so a restore can never write or unlink outside the recorded location. A parent
+  chain that is GONE is still recreated — the plugin restores files whose
+  directory was deleted — but only while its nearest surviving ancestor resolves
+  inside the pin. A stable symlinked ancestor is never refused: both sides of
+  the comparison are `realpath`s.
 - **Journal before mutation**: the rescue state of every planned path is
   captured as a raw byte copy and the intent journal — references only —
   persisted atomically BEFORE the first fs mutation; each action is marked
@@ -191,7 +211,9 @@ versions on disk.
   Contradictions are never guessed at: a `blob: null` with `size !== 0` or with
   `lossy`, a `blob` that is not this entry's sidecar name, and a non-string
   `before` in a v1 record are all corruption, and guessing an entry's kind is
-  how a restore turns into a delete. Two cases are *not* silent skips: an entry
+  how a restore turns into a delete. An absent or malformed `parent` is not
+  corruption: it means "no pin", so the entry falls back to the released
+  final-component rule. Two cases are *not* silent skips: an entry
   whose `store` is newer than this build fails the whole operation closed (see
   Versioning), and a record whose sidecar is missing or too short is a per-file
   failure that the restore reports — never a delete of the live file.

@@ -81,7 +81,8 @@ Key invariants:
   on it, so the marker is appended while idle, outside any turn, as one event.
 - **Restore is reconciled against the live disk** (`planRestore`), so repeated
   rewinds are idempotent and a rewind whose target state already matches is a
-  no-op.
+  no-op. A path whose directory no longer resolves to its commit-time location
+  is skipped and reported, never written through (see `SECURITY.md`).
 
 ### Marker format history
 
@@ -109,7 +110,9 @@ tools/execute        captureBefore: for write / edit, stage a raw byte copy of
                      subagent edits are NOT tracked (Claude Code alignment).
 tools/post-execute   commitEntry: anchor = latest user/message seq; skip
                      failed calls; publish the staged bytes as the entry's
-                     sidecar and write the metadata beside them.
+                     sidecar and write the metadata beside them — including
+                     where the directory resolved (`realpath`), the location
+                     pin a restore re-checks.
 session/event        user/message boundary: reconcileTracked re-reads every
   (user/message)     tracked file and records a new before-backup for any
                      whose disk state changed since last seen — external

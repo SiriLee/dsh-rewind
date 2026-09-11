@@ -95,14 +95,22 @@ transcript.
   `[a-zA-Z0-9._-]` (`safeSessionId` / `safeFileId`) before joining the store
   root; `.` and `..` bare values are replaced — hostile ids cannot traverse
   out of the root.
-- **Never written through a linked final component**: a path whose last
-  component is a symlink or a hard link (`lstat().nlink > 1`) is skipped and
-  reported, never restored — a symlink would redirect the write outside the
-  checkpoint, and a hard link would clobber every other name of the same inode
-  (e.g. pnpm-installed files). Only the final component is checked: a
-  **symlinked ancestor directory** is not detected, so a restore (or the
-  `mkdir` / `copyFile` in front of it) still follows it out of the tracked
-  directory — a known limitation, unchanged from the released v1 build.
+- **Never written through a link or a moved directory**: two checks guard a
+  tracked path before any write or unlink. (1) A path whose last component is a
+  symlink or a hard link (`lstat().nlink > 1`) is skipped and reported, never
+  restored — a symlink would redirect the write outside the checkpoint, and a
+  hard link would clobber every other name of the same inode (e.g.
+  pnpm-installed files). (2) Every entry, link and journal action records the
+  `realpath` of the file's directory at commit time (the location pin), and a
+  restore re-checks it before touching the path — including a post-restart
+  continue or rollback, which reads the pin from the journal: a directory that
+  no longer resolves there (a repointed or moved ancestor) is refused and
+  reported instead of writing outside the recorded location. A parent chain that
+  is gone is still recreated (files whose directory was deleted are restorable),
+  but only while its nearest surviving ancestor resolves inside the pin. A
+  stable symlinked ancestor resolves identically on both sides, so a symlinked
+  workspace or temp root is never a false skip. This matches Claude Code's
+  checkpoint behavior since v2.1.216.
 - **Restores name only recorded paths**: the store contains resolved display
   paths of the session's own write-class tool calls (plus boundary re-checks
   over that same tracked set) — a restore can never write an arbitrary path.
