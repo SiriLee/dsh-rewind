@@ -749,6 +749,45 @@ describe('pruneStale', () => {
     await expect(store.exists(join(root, 'fresh'))).resolves.toBe(true)
   })
 
+  it('treats a fresh staged capture as activity (dot dirs are store members)', async () => {
+    const old = now() - 40 * day
+    await seedSession('staged', '1', 'a', '{}', old)
+    const pendingDir = join(root, 'staged', '.pending')
+    await mkdir(pendingDir, { recursive: true })
+    // A staged capture written into the ALREADY EXISTING `.pending/`: only the
+    // file is fresh, so the freshness must be seen INSIDE the dot directory
+    // (creating the dir would have bumped the session dir's own mtime).
+    await writeFile(join(pendingDir, 'call.before'), 'x', 'utf8')
+    const t = new Date(old)
+    await utimes(join(root, 'staged'), t, t)
+    await utimes(pendingDir, t, t)
+
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(0)
+    await expect(store.exists(join(root, 'staged'))).resolves.toBe(true)
+  })
+
+  it('counts staged-capture bytes in freedBytes', async () => {
+    const old = now() - 40 * day
+    await seedSession('old-pending', '1', 'a', '{}', old)
+    const pendingDir = join(root, 'old-pending', '.pending')
+    await mkdir(pendingDir, { recursive: true })
+    const staged = join(pendingDir, 'call.before')
+    await writeFile(staged, '12345', 'utf8')
+    // Everything in this session is genuinely old (the byte total is what this
+    // test is about), including the staged file itself.
+    const t = new Date(old)
+    await utimes(staged, t, t)
+    await utimes(join(root, 'old-pending'), t, t)
+    await utimes(pendingDir, t, t)
+
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(1)
+    // '{}' (2 bytes entry) + '12345' (5 bytes staged) — the staged bytes are
+    // real store content and must be reported as freed.
+    expect(rep.freedBytes).toBe(7)
+  })
+
   it('measures the newest MEMBER mtime, not the session-dir mtime', async () => {
     await seedSession('nested', '1', 'a', '{}', now() - 40 * day)
     // A fresh file inside an otherwise old anchor group: newest member wins.
@@ -914,6 +953,22 @@ describe('clearSession', () => {
     const handle = await store.lastKnownContent(session, file)
     if (handle === null || handle === undefined || handle.kind !== 'blob') throw new Error('expected a blob handle')
     expect(await readFile(handle.path, 'utf8')).toBe('original')
+  })
+
+  it('clears a session dir that only holds a staged capture', async () => {
+    // A staged capture is store content (it counts in `bytes`), so an explicit
+    // clear must remove it — otherwise the dir survives with content the
+    // report just said it would free.
+    const staged = await store.stageCapture(session, 'orphan')
+    await writeFile(staged, 'x', 'utf8')
+
+    const dry = await store.clearSession(session, { dryRun: true })
+    expect(dry.entries).toBe(0)
+    expect(dry.bytes).toBeGreaterThan(0)
+
+    const rep = await store.clearSession(session)
+    expect(rep.dryRun).toBe(false)
+    await expect(store.exists(store.sessionDir(session))).resolves.toBe(false)
   })
 
   it('apply clears the session dir and resets dedup memory (no dangling link)', async () => {

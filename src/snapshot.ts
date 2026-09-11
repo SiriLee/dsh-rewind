@@ -918,7 +918,11 @@ async function dirSizeAndLastActive(dir: string): Promise<{ size: number; lastAc
       return
     }
     for (const name of names) {
-      if (name.startsWith('.')) continue
+      // Dot-prefixed leftovers are never store members; `.pending/` is the
+      // exception, and it must be visited so a staged capture counts as both
+      // activity and bytes (otherwise a session whose only recent write is a
+      // staged capture looks idle and is swept, and its size is under-reported).
+      if (name.startsWith('.') && name !== PENDING_DIR) continue
       await visit(join(current, name))
     }
   }
@@ -2402,7 +2406,12 @@ export class SnapshotStore {
     const dryRun = opts?.dryRun ?? false
     const stats = await this.sessionStats(sessionId)
     if (!dryRun) {
-      if (stats.anchorGroups > 0 || stats.journals > 0) {
+      // Any store member means the dir is worth removing: entries, journals,
+      // and the byte-only members `sessionStats` counts (a staged capture, a
+      // rescue copy, a marker). `bytes > 0` covers the latter, so a dir that
+      // holds ONLY staged bytes does not survive the clear that just reported
+      // freeing them.
+      if (stats.anchorGroups > 0 || stats.journals > 0 || stats.bytes > 0) {
         await rm(this.sessionDir(sessionId), { recursive: true, force: true })
       }
       // Always reset the in-memory dedup state on an apply — even when the dir
