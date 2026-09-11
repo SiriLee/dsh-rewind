@@ -4,8 +4,9 @@
  * workspace.
  *
  * The lever is schema-level: this build writes entries as
- * `{store: 2, callId, file, blob, size, time}` — it deliberately never reuses
- * the v1 keys `path` / `anchorSeq`, so the released v1 guard
+ * `{store: 2, callId, file, blob, size, parent?, mode?, lossy?, time}` — it
+ * deliberately never reuses the v1 keys `path` / `anchorSeq`, so the released
+ * v1 guard
  *
  *   if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
  *
@@ -112,6 +113,21 @@ describe('a released v1 build cannot act on v2 snapshots', () => {
     }
     // All three shapes were actually covered (real, link, creation).
     expect([...shapes].sort()).toEqual(['creation', 'link', 'real'])
+  })
+
+  it('rejects a v2 entry that carries the location pin', async () => {
+    // The pin (`parent`) is an extra optional field on the same v2 shape: it
+    // must not give the released guard a readable entry, and it must not be the
+    // reason a downgrade starts touching the workspace.
+    await seedV2Store()
+    const pinned: string[] = []
+    for (const file of await entryFiles(session)) {
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
+      if (typeof parsed.parent !== 'string') continue
+      pinned.push(file)
+      expect(await legacyReadEntry(file), `${relative(store.sessionDir(session), file)} must be unreadable to v1`).toBeUndefined()
+    }
+    expect(pinned.length).toBeGreaterThan(0)
   })
 
   it('keeps journals out of the released prefix so v1 reconciles none', async () => {

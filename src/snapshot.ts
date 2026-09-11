@@ -68,7 +68,7 @@
 
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
@@ -190,6 +190,17 @@ export interface CheckpointEntry {
   /** Byte size of `before` (0 when the file was created). */
   readonly size: number
   /**
+   * Checkpoint-time location pin: the `realpath` of `dirname(path)` at the
+   * moment the entry was committed. A restore refuses the path when its parent
+   * directory no longer resolves there, because a repointed or moved ancestor
+   * would otherwise redirect the write (or the unlink) outside the recorded
+   * location — only the path's FINAL component is link-checked. Absent means
+   * "no pin": a released-v1 entry, a v2 entry written before this field
+   * existed, or a commit whose parent could not be resolved; the restore then
+   * falls back to the final-component check alone.
+   */
+  readonly parent?: string
+  /**
    * Permission bits recorded at capture time, when known. Applied only when
    * the CONTENT is restored (a mode-only difference is never a reason to plan
    * a restore); a missing value means "leave the live mode alone".
@@ -227,6 +238,12 @@ export interface LinkEntry {
   readonly path: string
   /** `<anchorSeq>/<callId>.json` of the immediately-prior entry for the path. */
   readonly ref: string
+  /**
+   * Checkpoint-time location pin (see {@link CheckpointEntry.parent}); a link
+   * records its own, so a materialized or resolved entry never loses the
+   * location the path was committed under.
+   */
+  readonly parent?: string
   readonly time: number
   /** Absolute file this link was read from (in-memory only, never serialized). */
   readonly file?: string
@@ -304,6 +321,12 @@ export interface RestoreJournalAction {
   rescueError?: string
   /** Permission bits the restored content should end up with, when recorded. */
   readonly mode?: number
+  /**
+   * Checkpoint-time location pin copied from the entry the action was planned
+   * from (see {@link CheckpointEntry.parent}): a continue or rollback after a
+   * restart re-checks it before touching the path.
+   */
+  readonly parent?: string
   /** Permission bits the file had BEFORE the restore, for a faithful rollback. */
   readonly rescueMode?: number
   /** True once the action's fs op completed and was marked. */
@@ -399,8 +422,8 @@ export type CopyOutcome =
 
 /** One restore action the planner derived from record + disk reconciliation. */
 export type PlannedAction =
-  | { readonly path: string; readonly action: 'restore'; readonly before: ByteSource; readonly mode?: number }
-  | { readonly path: string; readonly action: 'delete' }
+  | { readonly path: string; readonly action: 'restore'; readonly before: ByteSource; readonly mode?: number; readonly parent?: string }
+  | { readonly path: string; readonly action: 'delete'; readonly parent?: string }
 
 /** Streaming byte equality of two files (never loads either one whole). */
 async function sameFileBytes(aPath: string, bPath: string): Promise<boolean> {
@@ -602,6 +625,7 @@ function journalToJson(journal: RestoreJournal, sessionDir: string): Record<stri
       ...(action.rescueError !== undefined ? { rescueError: action.rescueError } : {}),
       ...(action.mode !== undefined ? { mode: action.mode } : {}),
       ...(action.rescueMode !== undefined ? { rescueMode: action.rescueMode } : {}),
+      ...(action.parent !== undefined ? { parent: action.parent } : {}),
       done: action.done,
       ...(action.failed !== undefined ? { failed: action.failed } : {}),
     })),
@@ -624,6 +648,7 @@ function journalFromJson(raw: Record<string, unknown>, sessionDir: string): Rest
       ...(typeof value.rescueError === 'string' ? { rescueError: value.rescueError } : {}),
       ...(typeof value.mode === 'number' ? { mode: value.mode } : {}),
       ...(typeof value.rescueMode === 'number' ? { rescueMode: value.rescueMode } : {}),
+      ...(typeof value.parent === 'string' && value.parent.length > 0 ? { parent: value.parent } : {}),
       done: value.done as boolean,
       ...(typeof value.failed === 'string' ? { failed: value.failed } : {}),
     })
@@ -685,6 +710,7 @@ function entryToJson(entry: CheckpointEntry): Record<string, unknown> {
     callId: entry.callId,
     file: entry.path,
     time: entry.time,
+    ...(entry.parent !== undefined ? { parent: entry.parent } : {}),
     ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
     ...(entry.lossy === true ? { lossy: true } : {}),
   }
@@ -695,7 +721,14 @@ function entryToJson(entry: CheckpointEntry): Record<string, unknown> {
 
 /** Serialize one in-memory dedup link for disk (the current byte format). */
 function linkToJson(link: LinkEntry): Record<string, unknown> {
-  return { store: 2, callId: link.callId, file: link.path, ref: link.ref, time: link.time }
+  return {
+    store: 2,
+    callId: link.callId,
+    file: link.path,
+    ref: link.ref,
+    time: link.time,
+    ...(link.parent !== undefined ? { parent: link.parent } : {}),
+  }
 }
 
 /**
@@ -728,7 +761,10 @@ async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry |
   const origin = { file }
   if (parsed.store === 2) {
     if (typeof parsed.file !== 'string') return undefined
-    const base = { callId, anchorSeq, path: parsed.file, time, ...origin }
+    // Optional metadata: a malformed pin is ignored (the path falls back to the
+    // final-component check), never treated as corruption.
+    const parent = typeof parsed.parent === 'string' && parsed.parent.length > 0 ? parsed.parent : undefined
+    const base = { callId, anchorSeq, path: parsed.file, time, ...(parent !== undefined ? { parent } : {}), ...origin }
     if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
     if (parsed.blob === null) {
       // "Did not exist" is only meaningful with a zero size, and never with a
@@ -1214,6 +1250,10 @@ export class SnapshotStore {
     // instance, so same-millisecond commits stay capture-ordered.
     const time = Math.max(Date.now(), this.lastEntryTime + 1)
     this.lastEntryTime = time
+    // The location pin: where this path's directory resolved at commit time.
+    // Best-effort — an unresolvable parent simply means "no pin" (legacy
+    // behavior), never a failed commit.
+    const parent = await realpath(dirname(entry.path)).catch(() => undefined)
     await this.ensureDedupSeeded(sessionId)
     // Never write into a store a newer build owns: the marker would be
     // overwritten and the formats mixed. The failure is loud (the host logs
@@ -1242,6 +1282,7 @@ export class SnapshotStore {
         anchorSeq: entry.anchorSeq,
         path: entry.path,
         ref: prior.ref,
+        ...(parent !== undefined ? { parent } : {}),
         time,
       }
       // The staged copy is redundant now: drop it before publishing the link
@@ -1262,6 +1303,7 @@ export class SnapshotStore {
         // reader cannot mistake its re-encoded bytes for a faithful backup.
         ...(incoming?.kind === 'lossyText' ? { lossy: true } : {}),
         ...(content.mode !== undefined ? { mode: content.mode } : {}),
+        ...(parent !== undefined ? { parent } : {}),
         time,
       }
       await writeJsonAtomic(file, entryToJson(committed), () => opts?.crash?.('after-temp-write'))
@@ -1457,7 +1499,8 @@ export class SnapshotStore {
         }
         const same = await probe.matches(source, entry.path)
         if (same === true) continue // identical content (or still absent): a no-op
-        if (source === null) actions.push({ path: entry.path, action: 'delete' })
+        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
+        if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
         else {
           // `mode` never MAKES an action (a mode-only difference is a no-op),
           // but restoring content also restores the recorded permissions.
@@ -1467,14 +1510,16 @@ export class SnapshotStore {
             action: 'restore',
             before: source,
             ...(mode !== undefined ? { mode } : {}),
+            ...pin,
           })
         }
       } catch {
         // Probe failure: conservative — treat as differing. A restore still
         // attempts the write, a delete still attempts the unlink (failures
         // surface per-file in the restore outcome, never silently skipped).
-        if (source === null) actions.push({ path: entry.path, action: 'delete' })
-        else actions.push({ path: entry.path, action: 'restore', before: source })
+        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
+        if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
+        else actions.push({ path: entry.path, action: 'restore', before: source, ...pin })
       }
     }
     return { actions, skipped, failed }
@@ -1674,6 +1719,7 @@ export class SnapshotStore {
         before: action.action === 'restore' ? action.before : null,
         rescue,
         ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+        ...(action.parent !== undefined ? { parent: action.parent } : {}),
         ...(rescueMode !== undefined ? { rescueMode: rescueMode & 0o7777 } : {}),
         done: false,
       }
@@ -2170,6 +2216,10 @@ export class SnapshotStore {
         // entry's `mode` (a link carries no metadata of its own). A later
         // restore therefore treats the file's live permissions as its own —
         // the safe default — rather than replaying a mode it only inferred.
+        // The link's own location pin DOES travel with it: dropping it would
+        // silently re-open the repointed-ancestor hole for every entry prune
+        // has materialized.
+        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
         let real: CheckpointEntry
         if (source === null) {
           real = {
@@ -2178,6 +2228,7 @@ export class SnapshotStore {
             path: entry.path,
             before: null,
             size: 0,
+            ...pin,
             time: entry.time,
           }
         } else {
@@ -2193,6 +2244,7 @@ export class SnapshotStore {
             before: { kind: 'blob', path: dest },
             size: st.size,
             ...(source.kind === 'lossyText' ? { lossy: true } : {}),
+            ...pin,
             time: entry.time,
           }
         }
