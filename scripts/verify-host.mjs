@@ -336,6 +336,38 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('restore emits present observation for the restored file', observed.some(o => o.path === aPath && o.kind === 'present' && o.version !== undefined && o.ownerIsSession), JSON.stringify(observed))
 }
 
+// 4b. a non-UTF-8 / binary file round-trips byte-exactly through the real
+//     capture → commit → restore pipeline (the issue #23 regression)
+{
+  const binPath = join(wsDir, 'binary.bin')
+  // GBK text with an embedded NUL and a raw 0xFF: not decodable as UTF-8.
+  const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x00, 0xff, 0x89, 0x50, 0x4e, 0x47])
+  await writeFile(binPath, gbk)
+  session.append('user/message', user('binary anchor question'), { surfaceOp: 'append' })
+  const binAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'bin1', binPath, 'replaced by a tracked edit')
+  await writeFile(binPath, Buffer.from([0x00, 0x01, 0x02])) // later out-of-band change
+
+  const binPreview = await call(agent, `preview @${binAnchor} both`)
+  check('binary preview reports the file impact', binPreview.kind === 'success' && binPreview.text.includes(binPath), binPreview.text)
+  const binBoth = await call(agent, `@${binAnchor} both`)
+  check('binary rewind both succeeds', binBoth.kind === 'success' && binBoth.text.includes('restored 1 file(s)'), binBoth.text)
+  const restoredBytes = await readFile(binPath)
+  check('non-UTF-8 file restored byte-exactly', Buffer.compare(restoredBytes, gbk) === 0, `got ${restoredBytes.toString('hex')}`)
+
+  // The bytes live in a raw sidecar, not in the entry JSON.
+  const sidecars = []
+  const walk = async dir => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) await walk(full)
+      else if (entry.name.endsWith('.before')) sidecars.push(full)
+    }
+  }
+  await walk(join(snapRoot, session.id))
+  check('binary backup is a raw sidecar file', sidecars.length >= 1, `sidecars=${sidecars.length}`)
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift

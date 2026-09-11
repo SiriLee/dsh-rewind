@@ -34,16 +34,16 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
+import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { unlink } from 'node:fs/promises'
+import { copyFile, rm, stat, unlink } from 'node:fs/promises'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
   CLEANUP_SETTINGS_NAMESPACE,
   CleanupConfigSchema,
@@ -107,8 +107,24 @@ function usage(): string {
 interface PendingCapture {
   /** Resolved display path (absolute) of the file the call will mutate. */
   readonly path: string
-  /** Full content before the change; undefined when the file does not exist (a creation). */
-  readonly before: string | undefined
+  /** Staged raw before-bytes, or null when the file does not exist (a creation). */
+  readonly backup: PendingBackup | null
+}
+
+/** Drop a staged capture's bytes (a no-op when nothing was staged). */
+async function discardCapture(capture: PendingCapture | undefined): Promise<void> {
+  if (capture === undefined || capture.backup === null) return
+  try {
+    await rm(capture.backup.file, { force: true })
+  } catch {
+    // The staged copy lives inside the store's own `.pending/`, which `prune`
+    // collects when stale; a failed unlink is never worth failing a tool call.
+  }
+}
+
+/** True when an error means "the path does not exist". */
+function isEnoentError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
 }
 
 /** Extract the file path a tracked tool call mutates, or undefined. */
@@ -172,17 +188,6 @@ async function resolveTarget(
   }
 }
 
-/** Read a target's full text, or undefined when the file is absent. */
-async function readTextOrUndefined(fs: FileSystem, target: FsTarget, signal?: AbortSignal): Promise<string | undefined> {
-  try {
-    return await fs.readText(target, signal)
-  } catch (error) {
-    const code = (error as { code?: string })?.code
-    if (code === 'ENOENT' || code === 'FS_NOT_FOUND') return undefined
-    throw error
-  }
-}
-
 /**
  * Capture the before-state of a tracked mutation during `tools/execute` (the
  * around-dispatch wrapper): the file still holds the old content, and this
@@ -191,9 +196,18 @@ async function readTextOrUndefined(fs: FileSystem, target: FsTarget, signal?: Ab
  * cannot skip the capture, and a denied call never captures (no pending leak).
  * The recorded path is the RESOLVED display path, so restores always name the
  * real file regardless of how the model spelled it.
+ *
+ * The content is staged as a RAW BYTE COPY (`copyFile` into the store's
+ * `.pending/`) — never through a decoded string, so binary and non-UTF-8 files
+ * survive the round trip byte-exactly. The fs service provides the path
+ * resolution and the `stat` fence (`type !== 'file'` is never copied: a
+ * directory, FIFO or device must not be handed to `copyFile`), while the bytes
+ * move through plain `node:fs` — the same local-worktree assumption the
+ * restore path has always made.
  */
 async function captureBefore(
   fs: FileSystem,
+  store: SnapshotStore,
   exec: ToolExecution,
   pending: Map<string, PendingCapture>,
 ): Promise<void> {
@@ -204,21 +218,41 @@ async function captureBefore(
   // rewind of the parent session — it would only leak on disk (the subagent
   // log is short, so the per-session 100-group prune never fires for it).
   // Skipping the capture here mirrors Claude Code's behavior exactly.
-  const header = exec.agent?.session.header
+  const session = exec.agent?.session
+  const header = session?.header
   if (header !== undefined && (header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
   const cwd = execSessionCwd(exec, path)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
-  const before = await readTextOrUndefined(fs, target, exec.signal)
-  pending.set(`${exec.agent?.id ?? 'anon'}:${exec.callId}`, { path: target.displayPath, before })
+  const info = await fs.stat(target, exec.signal).catch(() => undefined)
+  // Only regular files are backed up: a directory / FIFO / device would either
+  // hang the copy or produce a meaningless "backup".
+  if (info !== undefined && info.type !== 'file') return
+  if (session === undefined) return
+  const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
+  const staged = await store.stageCapture(session.id, key)
+  let backup: PendingBackup | null = null
+  try {
+    await copyFile(target.displayPath, staged)
+    const st = await stat(staged)
+    backup = { file: staged, size: st.size }
+  } catch (error) {
+    // Never leave a partial/failed stage behind: `pending` only ever points at
+    // a complete copy, and `prune` collects anything that escapes.
+    await rm(staged, { force: true })
+    // stat said the file existed but it vanished before the copy: that is the
+    // same "was created" state as a missing file (Claude Code tolerates it).
+    if (!isEnoentError(error)) throw error
+  }
+  pending.set(key, { path: target.displayPath, backup })
 }
 
 /**
  * Commit one tracked mutation during `tools/post-execute`: resolve the turn
- * anchor and write the before-backup to the checkpoint store. Failed calls
- * never commit (the pending capture is dropped).
+ * anchor and MOVE the staged before-bytes into the checkpoint store. Failed
+ * calls never commit (the staged capture is dropped).
  */
 async function commitEntry(
   store: SnapshotStore,
@@ -232,17 +266,25 @@ async function commitEntry(
   const capture = pending.get(key)
   if (capture === undefined) return
   pending.delete(key)
-  if (result.isError) return
+  if (result.isError) {
+    await discardCapture(capture)
+    return
+  }
   const agent = exec.agent
-  if (agent === undefined) return
+  if (agent === undefined) {
+    await discardCapture(capture)
+    return
+  }
   const anchorSeq = anchorSeqOf(agent.session, anchorCache)
-  if (anchorSeq === undefined) return
-  await store.recordEntry(agent.session.id, {
+  if (anchorSeq === undefined) {
+    await discardCapture(capture)
+    return
+  }
+  await store.recordBackup(agent.session.id, {
     callId: exec.callId,
     anchorSeq,
     path: capture.path,
-    before: capture.before ?? null,
-  })
+  }, capture.backup)
   // The path is now a tracked file: remember it for the boundary re-check
   // (the per-session set may not have been loaded yet — seed it lazily).
   let tracked = trackedBySession.get(agent.session.id)
@@ -1030,7 +1072,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     fsService = fs
     scope.on('tools/execute', async (exec: ToolExecution, next): Promise<ToolExecutionResult> => {
       try {
-        await captureBefore(fs, exec, pending)
+        await captureBefore(fs, store, exec, pending)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] before-capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -1056,10 +1098,13 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       // still produces a post-result, so the body path keeps post-execute) —
       // short-circuits the registry's catch straight to `final-result`,
       // skipping `tools/post-execute`; its before-capture would otherwise leak
-      // in `pending` forever (holding a full file content in memory).
-      // `tools/result` fires on BOTH the normal and the throw path: delete
-      // here as the safety net (a no-op when commitEntry already consumed it).
-      pending.delete(`${exec.agent?.id ?? 'anon'}:${exec.callId}`)
+      // in `pending` forever (staged bytes on disk, not just memory).
+      // `tools/result` fires on BOTH the normal and the throw path: drop the
+      // staged copy here as the safety net (a no-op once commit consumed it).
+      const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
+      const capture = pending.get(key)
+      pending.delete(key)
+      void discardCapture(capture)
       return undefined
     })
   })
