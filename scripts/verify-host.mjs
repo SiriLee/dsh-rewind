@@ -446,6 +446,23 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('session start leaves the newer store marker at its version', await readFile(join(dir, 'store'), 'utf8').catch(() => '') === '3', 'store marker changed')
 }
 
+// 4f. a non-regular target is never captured: no staged copy, no entry, no
+//     hang (the directory/FIFO/device guard in the capture path).
+{
+  const guardSession = buildSession('verify-guard')
+  const guardAgent = makeAgent(guardSession.id, guardSession)
+  guardSession.append('user/message', user('guard anchor question'), { surfaceOp: 'append' })
+  const exec = { callId: 'guard1', name: 'write', arguments: { file_path: wsDir }, agent: guardAgent, signal: aborted() }
+  await ctx.waterfall('tools/execute', exec, async () => ({ isError: true, content: [] }))
+  await ctx.waterfall('tools/post-execute', exec, { isError: true, content: [] }, async () => ({ kind: 'accept' }))
+
+  const guardDir = join(snapRoot, guardSession.id)
+  const members = await readdir(guardDir).catch(() => [])
+  // A staged `.pending/` directory here would mean the capture tried to copy
+  // the directory instead of refusing it up front.
+  check('non-regular target is never captured', members.length === 0, `members=${members.join(',')}`)
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift

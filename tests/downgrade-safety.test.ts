@@ -196,3 +196,67 @@ describe('v1 entries and v2 entries compose in one window', () => {
     expect(await readFile(bytePath, 'utf8')).toBe('old')
   })
 })
+
+describe('untrusted journal references', () => {
+  it('refuses a journal byte reference that escapes the session dir', async () => {
+    const sessionDir = store.sessionDir(session)
+    await mkdir(sessionDir, { recursive: true })
+    const victim = join(root, 'ws', 'victim.txt')
+    await mkdir(join(root, 'ws'), { recursive: true })
+    await writeFile(victim, 'untouched', 'utf8')
+
+    for (const [name, ref] of [
+      ['traversal', '../../../../etc/passwd'],
+      ['absolute', '/etc/passwd'],
+      ['parent-segment', 'rescue/../../x.before'],
+    ] as const) {
+      await writeFile(join(sessionDir, `journal-op-${name}.json`), JSON.stringify({
+        version: 2,
+        id: `op-${name}`,
+        sessionId: session,
+        targetSeq: 5,
+        startedAt: 1,
+        state: 'running',
+        actions: [{ path: victim, action: 'restore', before: { blob: ref }, rescue: null, done: false }],
+      }), 'utf8')
+    }
+
+    const reports = await store.reconcileRestores(session)
+    expect(reports).toHaveLength(3)
+    for (const report of reports) {
+      expect(report.state).toBe('recovery-required')
+      expect(report.corrupt).toBeDefined()
+      expect(report.restored).toEqual([])
+      expect(report.pending).toEqual([])
+    }
+    // Nothing was written from the hostile journals.
+    expect(await readFile(victim, 'utf8')).toBe('untouched')
+  })
+
+  it('treats an in-store reference to a missing sidecar as dangling, not corrupt', async () => {
+    // Containment and existence are different questions: a well-formed ref
+    // that points INSIDE the store but at a missing file is a dangling link
+    // (reported as interrupted), never a traversal.
+    const sessionDir = store.sessionDir(session)
+    await mkdir(sessionDir, { recursive: true })
+    const victim = join(root, 'ws', 'victim.txt')
+    await mkdir(join(root, 'ws'), { recursive: true })
+    await writeFile(victim, 'untouched', 'utf8')
+    await writeFile(join(sessionDir, 'journal-op-dangling.json'), JSON.stringify({
+      version: 2,
+      id: 'op-dangling',
+      sessionId: session,
+      targetSeq: 5,
+      startedAt: 1,
+      state: 'running',
+      actions: [{ path: victim, action: 'restore', before: { blob: '5/missing.before' }, rescue: null, done: false }],
+    }), 'utf8')
+
+    const reports = await store.reconcileRestores(session)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.corrupt).toBeUndefined()
+    expect(reports[0]!.state).toBe('interrupted')
+    expect(reports[0]!.pending).toEqual([victim])
+    expect(await readFile(victim, 'utf8')).toBe('untouched')
+  })
+})
