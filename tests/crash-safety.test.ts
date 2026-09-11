@@ -10,8 +10,8 @@
  *  - restore passes are JOURNALED: intent + per-action done-marks on disk;
  *  - reconcileRestores() reports "restored up to where, what changed" from
  *    the REAL disk (disk is truth, not the marks);
- *  - continueRestore() (补做) finishes an interrupted op deterministically;
- *  - rollbackRestore() (回滚) returns the workspace to the exact pre-restore
+ *  - continueRestore() finishes an interrupted op deterministically;
+ *  - rollbackRestore() returns the workspace to the exact pre-restore
  *    state, idempotently across repeated crashes;
  *  - journal corruption is reported fail-loud, journal IO failure is
  *    non-fatal, and journal files never disturb the existing store paths;
@@ -172,7 +172,7 @@ describe('a crash mid-restore is journaled and reconciled after a host restart',
     expect([...report.pending].sort()).toEqual([b, c])
     expect(report.failed).toEqual([])
 
-    // 补做: continueRestore applies exactly what is still pending — the
+    // continueRestore applies exactly what is still pending — the
     // already-restored a is marked done without being rewritten.
     const outcome = await restarted.continueRestore(session, report.opId, unlink)
     expect([...outcome.restored].sort()).toEqual([b])
@@ -193,15 +193,16 @@ describe('a crash mid-restore is journaled and reconciled after a host restart',
     expect(await readFile(b, 'utf8')).toBe('B0')
     expect(await store.exists(c)).toBe(false)
 
-    // The journal pins the per-action progress marks ("逐 action 完成后标记").
+    // The journal pins the per-action progress marks (done after each action).
     const journal = (await readJournals(store, session))[0]!
     expect(journal.state).toBe('running')
     expect(journal.actions.map(action => action.path)).toEqual([a, b, c])
     expect(journal.actions.map(action => action.done)).toEqual([true, true, false])
     expect(journal.actions.map(action => action.rescue)).toEqual(['A1', 'B1', 'C1'])
 
-    // 回滚: everything is returned to the pre-restore state — including the
-    // delete that landed (c comes back) — regardless of the done-marks.
+    // rollbackRestore: everything is returned to the pre-restore state —
+    // including the delete that landed (c comes back) — regardless of the
+    // done-marks.
     const restarted = new SnapshotStore(root)
     const rollback = await restarted.rollbackRestore(session, journal.id, unlink)
     expect([...rollback.restored].sort()).toEqual([a, b, c])

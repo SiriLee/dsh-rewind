@@ -1200,7 +1200,7 @@ export class SnapshotStore {
   }
 
   /**
-   * 补做 (redo) an interrupted restore: finish the op by applying every action
+   * Continue (redo) an interrupted restore: finish the op by applying every action
    * whose disk state does not yet match its goal — the restore target for
    * `running` journals. Actions are decided by the REAL disk (the same "disk
    * is truth" rule as reconciliation), so a crash between an fs op and its
@@ -1272,7 +1272,7 @@ export class SnapshotStore {
   }
 
   /**
-   * 回滚 (roll back) an interrupted restore: undo every action whose disk
+   * Roll back an interrupted restore: undo every action whose disk
    * state does not match its rescue (pre-restore) record, returning the
    * workspace to the exact state it had before the restore started. Decided
    * by the REAL disk, so actions the crash left applied-but-unmarked are
