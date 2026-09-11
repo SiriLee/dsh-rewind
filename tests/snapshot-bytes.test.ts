@@ -252,6 +252,22 @@ describe('integrity rules', () => {
     expect(await readFile(live, 'utf8')).toBe('live')
   })
 
+  it('ignores a v1 entry with NO content field instead of deleting the file', async () => {
+    // The released reader coerced a missing `before` to `null` ("was created"),
+    // which is exactly how a corrupt record used to turn a rewind into a
+    // DELETE of the live file (issue #23's worst outcome) — never again.
+    const live = await touch('no-before.txt', Buffer.from('live'))
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'broken.json'), JSON.stringify({
+      callId: 'broken', anchorSeq: 5, path: live, time: 1,
+    }), 'utf8')
+
+    expect(await store.entriesAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+    expect(await readFile(live, 'utf8')).toBe('live')
+  })
+
   it('keeps composing v1 and v2 entries in one window', async () => {
     const live = await touch('mixed.bin', Buffer.from('v1-content'))
     // A released-v1 real entry (inline string)…
