@@ -463,6 +463,39 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('non-regular target is never captured', members.length === 0, `members=${members.join(',')}`)
 }
 
+// 4g. a file the SERVICE reports must never be recorded as a creation: on a
+//     backend whose display path is not a readable host path (a remote or
+//     sandboxed fs, ADR-11) a failed local copy must abandon the capture, not
+//     record "was created" — that entry would DELETE the path on a rewind.
+{
+  const remoteSession = buildSession('verify-remote')
+  const remoteAgent = makeAgent(remoteSession.id, remoteSession)
+  remoteSession.append('user/message', user('remote anchor question'), { surfaceOp: 'append' })
+  const remoteAnchor = remoteSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const remotePath = join(wsDir, 'remote-only.txt') // does NOT exist on this host
+
+  // The fs double claims a regular file at a path the host cannot read: the
+  // service answer and the local disk disagree, exactly like a remote backend.
+  const originalStat = fs.stat
+  fs.stat = async () => ({ version: FsVersion('v'), type: 'file' })
+  try {
+    const exec = { callId: 'remote1', name: 'write', arguments: { file_path: remotePath, content: 'written' }, agent: remoteAgent, signal: aborted() }
+    await ctx.waterfall('tools/execute', exec, async () => {
+      await writeFile(remotePath, 'written', 'utf8') // the tool call does land
+      return { isError: false, content: [] }
+    })
+    await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+  } finally {
+    fs.stat = originalStat
+  }
+
+  const remotePreview = await call(remoteAgent, `preview @${remoteAnchor} both`)
+  check('a service-present file the host cannot read is not recorded as a creation',
+    remotePreview.kind === 'success' && !remotePreview.text.includes(`delete:${remotePath}`) && /impact=0/.test(remotePreview.text),
+    remotePreview.text)
+  await rm(remotePath, { force: true })
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift

@@ -227,13 +227,19 @@ async function captureBefore(
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
   const info = await fs.stat(target, exec.signal).catch(() => undefined)
-  // Only regular files are backed up: a directory / FIFO / device would either
-  // hang the copy or produce a meaningless "backup".
-  if (info !== undefined && info.type !== 'file') return
   if (session === undefined) return
+  // The SERVICE decides whether the file exists. Only `undefined` (no file)
+  // records a creation; a non-regular target (directory / FIFO / device) is
+  // never copied — it would either hang the copy or produce a meaningless
+  // "backup".
+  if (info !== undefined && info.type !== 'file') return
   const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
+  if (info === undefined) {
+    pending.set(key, { path: target.displayPath, backup: null })
+    return
+  }
   const staged = await store.stageCapture(session.id, key)
-  let backup: PendingBackup | null = null
+  let backup: PendingBackup
   try {
     await copyFile(target.displayPath, staged)
     const st = await stat(staged)
@@ -246,12 +252,13 @@ async function captureBefore(
       ...(source !== undefined ? { mode: source.mode & 0o7777 } : {}),
     }
   } catch (error) {
-    // Never leave a partial/failed stage behind: `pending` only ever points at
-    // a complete copy, and `prune` collects anything that escapes.
+    // The service reported a regular file, so a failed LOCAL copy is NOT "the
+    // file does not exist": the display path is not a readable host path (a
+    // non-local backend — ADR-11) or the file raced away. Recording a creation
+    // here would let a later rewind DELETE that path, so the capture is
+    // abandoned instead (the caller logs it) and nothing is staged.
     await rm(staged, { force: true })
-    // stat said the file existed but it vanished before the copy: that is the
-    // same "was created" state as a missing file (Claude Code tolerates it).
-    if (!isEnoentError(error)) throw error
+    throw error
   }
   pending.set(key, { path: target.displayPath, backup })
 }
