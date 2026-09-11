@@ -9,7 +9,7 @@
  * images, NUL bytes, CRLF, empty files and large files — plus the integrity
  * rules that must hold when a sidecar is missing or a dedup handle goes stale.
  */
-import { mkdtemp, mkdir, readFile, readdir, rm, utimes, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -116,8 +116,12 @@ describe('byte-exact capture and restore', () => {
     const entryName = names.find(name => name.endsWith('.json'))
     if (entryName === undefined) throw new Error('expected a committed entry')
     const raw = await readFile(join(store.anchorDir(session, 5), entryName), 'utf8')
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    // Metadata only: no inline content field of any shape.
+    expect('before' in parsed).toBe(false)
+    expect('text' in parsed).toBe(false)
     expect(raw).not.toContain('中')
-    expect(JSON.parse(raw)).toMatchObject({
+    expect(parsed).toMatchObject({
       store: 2, callId: 'c1', file: live, blob: entryName.replace(/\.json$/, '.before'), size: 4,
     })
   })
@@ -232,6 +236,22 @@ describe('integrity rules', () => {
     expect(await readFile(b, 'utf8')).toBe('B')
   })
 
+  it('rejects a "created" entry whose metadata contradicts itself', async () => {
+    // `blob: null` means "did not exist", which is only meaningful with a zero
+    // size. Guessing "created" from a contradictory record would DELETE a file
+    // the store cannot otherwise restore.
+    const live = await touch('contradiction.txt', Buffer.from('live'))
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'bad.json'), JSON.stringify({
+      store: 2, callId: 'bad', file: live, blob: null, size: 4, time: 1,
+    }), 'utf8')
+
+    expect(await store.entriesAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+    expect(await readFile(live, 'utf8')).toBe('live')
+  })
+
   it('keeps composing v1 and v2 entries in one window', async () => {
     const live = await touch('mixed.bin', Buffer.from('v1-content'))
     // A released-v1 real entry (inline string)…
@@ -277,11 +297,11 @@ describe('residual risks (R1 / R2 / staged captures)', () => {
     // Simulate a crash mid-write: the journal says "restore A0" but the disk
     // holds a truncated prefix — reconcile reports it pending, and the redo
     // rewrites the complete bytes.
-    await store.restoreAfter(session, 5, unlink, defaultProbe, {
+    await expect(store.restoreAfter(session, 5, unlink, defaultProbe, {
       crash: (point) => {
         if (point === 'before-action') throw new Error('simulated host crash')
       },
-    }).catch(() => undefined)
+    })).rejects.toThrow('simulated host crash')
     await writeFile(live, Buffer.from('A'))
 
     const reports = await store.reconcileRestores(session)
@@ -302,6 +322,52 @@ describe('residual risks (R1 / R2 / staged captures)', () => {
 
     await store.prune(session, 1)
     const names = await readdir(join(store.sessionDir(session), '.pending'))
-    expect(names).toEqual(['fresh.before'])
+    expect(names).toHaveLength(1)
+    expect(names[0]!.startsWith('fresh-') && names[0]!.endsWith('.before')).toBe(true)
+  })
+})
+
+/** Recursive byte total of a directory tree (the ground truth for `bytes`). */
+async function dirBytes(dir: string): Promise<number> {
+  let total = 0
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.isDirectory()) total += await dirBytes(full)
+    else if (entry.isFile()) total += (await stat(full)).size
+  }
+  return total
+}
+
+describe('footprint reporting and reclamation', () => {
+  it('reports a byte count that matches the session directory (sidecars included)', async () => {
+    const live = await touch('stats.bin', Buffer.from([1, 2, 3, 4, 5, 6, 7, 8]))
+    await captureAndRecord('c1', 5, live)
+    await writeFile(live, Buffer.from('x'))
+    await store.restoreAfter(session, 5, unlink) // leaves a journal + a rescue copy
+
+    const report = await store.clearSession(session, { dryRun: true })
+    expect(report.dryRun).toBe(true)
+    expect(report.anchorGroups).toBe(1)
+    expect(report.entries).toBe(1)
+    expect(report.journals).toBe(1)
+    // Entry JSON + 8-byte sidecar + journal + rescue copy.
+    expect(report.bytes).toBe(await dirBytes(store.sessionDir(session)))
+    expect(report.bytes).toBeGreaterThan(8)
+  })
+
+  it('reclaims a terminal journal together with its rescue copy', async () => {
+    const live = await touch('rescue.bin', Buffer.from('A0'))
+    await captureAndRecord('c1', 5, live)
+    await writeFile(live, Buffer.from('A1'))
+    await store.restoreAfter(session, 5, unlink)
+
+    const sessionDir = store.sessionDir(session)
+    const rescueDir = join(sessionDir, 'rescue')
+    await expect(readdir(rescueDir)).resolves.toHaveLength(1)
+
+    await store.prune(session, 1)
+    // The terminal journal is recycled and its rescue copy goes with it — the
+    // bytes are dead weight once the op finished.
+    await expect(readdir(rescueDir)).resolves.toHaveLength(0)
   })
 })

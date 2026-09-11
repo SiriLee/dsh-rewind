@@ -722,7 +722,13 @@ async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry |
     if (typeof parsed.file !== 'string') return undefined
     const base = { callId, anchorSeq, path: parsed.file, time, ...origin }
     if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
-    if (parsed.blob === null) return { ...base, before: null, size: 0 }
+    if (parsed.blob === null) {
+      // "Did not exist" is only meaningful with a zero size. A contradiction
+      // is corruption, and guessing an entry's kind from a corrupt field is
+      // exactly how a restore turns into a delete.
+      if (typeof parsed.size === 'number' && parsed.size !== 0) return undefined
+      return { ...base, before: null, size: 0 }
+    }
     if (typeof parsed.blob !== 'string') return undefined
     // Invariant: the sidecar sits next to its entry, named after it.
     if (parsed.blob !== sidecarName(basename(file))) return undefined
@@ -1010,7 +1016,10 @@ export class SnapshotStore {
   async stageCapture(sessionId: string, key: string): Promise<string> {
     const dir = join(this.sessionDir(sessionId), PENDING_DIR)
     await mkdir(dir, { recursive: true })
-    return join(dir, `${safeFileId(key)}${SIDECAR_SUFFIX}`)
+    // The digest disambiguates two keys that `safeFileId` would collapse onto
+    // the same staged name (a collision would let the second capture overwrite
+    // the first one's bytes before either is committed).
+    return join(dir, `${safeFileId(key)}-${hashId(key)}${SIDECAR_SUFFIX}`)
   }
 
   /**
@@ -1722,9 +1731,13 @@ export class SnapshotStore {
       }
     }
     if (content === null) throw new Error(`restore of ${path} has no recorded content`)
+    // A `lossyText` target only occurs when CONTINUING a legacy journal: the
+    // released build had already decided to write that content, and refusing
+    // now would strand a half-restored workspace. A legacy ENTRY is never
+    // written back (see `planRestore`), which is where the choice matters.
     await mkdir(dirname(path), { recursive: true })
     // A read-only target cannot be written: add owner-write for the attempt
-    // and put the live mode back if the write fails (R3).
+    // and take it back afterwards (R3).
     const current = (await stat(path).catch(() => undefined))?.mode
     let widened = false
     if (current !== undefined && (current & 0o200) === 0) {
@@ -2079,6 +2092,10 @@ export class SnapshotStore {
           if (error instanceof UnknownStoreVersionError) throw error
           continue // already-dangling link: not caused by this eviction
         }
+        // NOTE: the materialized entry keeps the BYTES, not the resolved
+        // entry's `mode` (a link carries no metadata of its own). A later
+        // restore therefore treats the file's live permissions as its own —
+        // the safe default — rather than replaying a mode it only inferred.
         let real: CheckpointEntry
         if (source === null) {
           real = {
@@ -2269,11 +2286,16 @@ export class SnapshotStore {
 
   /**
    * Summarize a session's on-disk footprint for a clear dry-run: anchor-group
-   * count, committed checkpoint-entry count, restore-journal count, and total
-   * bytes. Walks with `lstat` (never follows a symlink, so a hostile symlink
-   * cannot escape the store root or inflate the measurement) and skips
-   * dot-prefixed temp leftovers and non-`.json` members — they are never
-   * checkpoint entries.
+   * count, committed checkpoint-entry count (one per `.json` in an anchor
+   * group), restore-journal count (both journal prefixes), and the total bytes
+   * the session dir occupies — entry JSONs, raw byte sidecars, `rescue/**` and
+   * the staged `.pending/**` copies alike, so the number matches what a `du` of
+   * that directory reports.
+   *
+   * Walks with `lstat` (never follows a symlink, so a hostile symlink cannot
+   * escape the store root or inflate the measurement) and skips dot-prefixed
+   * temp leftovers (the one exception is `.pending/`, whose staged bytes are
+   * real store content).
    */
   private async sessionStats(sessionId: string): Promise<{ anchorGroups: number; entries: number; journals: number; bytes: number }> {
     const sessionDir = this.sessionDir(sessionId)
@@ -2289,14 +2311,17 @@ export class SnapshotStore {
     let journals = 0
     let bytes = 0
     for (const name of names) {
-      // Dot-prefixed temp leftovers are never store members; `.pending/` is
-      // the one exception (staged captures are real bytes on disk).
+      // Dot-prefixed temp leftovers are never store members; `.pending/` (and
+      // the `rescue/` tree below) is the exception — staged and rescue bytes
+      // are real store content.
       if (name.startsWith('.') && name !== PENDING_DIR) continue
       const full = join(sessionDir, name)
       const st = await lstat(full).catch(() => undefined)
       if (st === undefined) continue // raced away or unreadable: skip
       if (st.isDirectory()) {
-        if (name === PENDING_DIR) {
+        // Staged captures and pre-restore rescue copies are real store content:
+        // they have no entry/journal count, but their bytes belong in the total.
+        if (name === PENDING_DIR || name === RESCUE_DIR) {
           bytes += await dirBytes(full)
           continue
         }
