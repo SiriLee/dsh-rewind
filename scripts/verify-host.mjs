@@ -565,6 +565,31 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('str_replace_editor view is not captured', viewMembers.length === 0, `members=${viewMembers.join(',')}`)
 }
 
+// 4i. `edit` — the third documented write-class tool — is tracked as well, so
+//     the tracked-tool contract is pinned for every name the docs promise
+//     (`write`, `edit`, `str_replace_editor`).
+{
+  const editSession = buildSession('verify-edit')
+  const editAgent = makeAgent(editSession.id, editSession)
+  editSession.append('user/message', user('edit anchor question'), { surfaceOp: 'append' })
+  const editAnchor = editSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const editPath = join(wsDir, 'edit.txt')
+  await writeFile(editPath, 'edit-before', 'utf8')
+
+  const edit = { callId: 'edit1', name: 'edit', arguments: { file_path: editPath, old_string: 'before', new_string: 'after' }, agent: editAgent, signal: aborted() }
+  await ctx.waterfall('tools/execute', edit, async () => {
+    await writeFile(editPath, 'edit-after', 'utf8')
+    return { isError: false, content: [] }
+  })
+  await ctx.waterfall('tools/post-execute', edit, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+  await writeFile(editPath, 'edit-later', 'utf8')
+
+  const editPreview = await call(editAgent, `preview @${editAnchor} both`)
+  check('edit mutations are captured', editPreview.kind === 'success' && editPreview.text.includes(editPath), editPreview.text)
+  const editBoth = await call(editAgent, `@${editAnchor} both`)
+  check('edit is restored', editBoth.kind === 'success' && (await readFile(editPath, 'utf8')) === 'edit-before', `content=${await readFile(editPath, 'utf8')}`)
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift
