@@ -268,6 +268,53 @@ describe('integrity rules', () => {
     expect(await readFile(live, 'utf8')).toBe('live')
   })
 
+  it('does not launder a legacy lossy record into a writable byte backup', async () => {
+    // A v1 record that lost bytes must stay "compare-only" even after prune
+    // MATERIALIZES its link: converting it to a sidecar would otherwise make
+    // the lossy bytes a normal restore target and overwrite live data with
+    // U+FFFD — the exact harm issue #23 reports.
+    const live = await touch('launder.bin', Buffer.from([0xd6, 0xd0]))
+    await mkdir(store.anchorDir(session, 1), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 1), 'real.json'), JSON.stringify({
+      callId: 'real', anchorSeq: 1, path: live, before: '\uFFFD\uFFFD', time: 1,
+    }), 'utf8')
+    await mkdir(store.anchorDir(session, 2), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 2), 'link.json'), JSON.stringify({
+      store: 2, callId: 'link', file: live, ref: '1/real.json', time: 2,
+    }), 'utf8')
+
+    await store.prune(session, 1) // drops group 1 → materializes the surviving link
+    const liveNow = Buffer.from([0x00, 0x01])
+    await writeFile(live, liveNow)
+
+    const outcome = await store.restoreAfter(session, 2, unlink)
+    expect(outcome.restored).toEqual([])
+    expect(outcome.skipped).toEqual([live])
+    expect(await readFile(live)).toEqual(liveNow)
+  })
+
+  it('never restores text recorded with a replacement character', async () => {
+    // `recordEntry` takes text; a U+FFFD in it marks the record as lossy, so
+    // the re-encoded sidecar can never become a writable target — not even
+    // after a restart, which is where the marker has to survive.
+    const live = await touch('replacement.txt', Buffer.from('live'))
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: live, before: 'A\uFFFDB' })
+
+    const names = await readdir(store.anchorDir(session, 5))
+    const entryName = names.find(name => name.endsWith('.json'))
+    if (entryName === undefined) throw new Error('expected a committed entry')
+    expect((JSON.parse(await readFile(join(store.anchorDir(session, 5), entryName), 'utf8')) as Record<string, unknown>).lossy).toBe(true)
+
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [live], failed: [] })
+    expect(await readFile(live, 'utf8')).toBe('live')
+
+    // A fresh process reads the same refusal from the marker on disk.
+    const reopened = new SnapshotStore(root)
+    expect(await reopened.impactsAfter(session, 5)).toEqual([])
+  })
+
   it('keeps composing v1 and v2 entries in one window', async () => {
     const live = await touch('mixed.bin', Buffer.from('v1-content'))
     // A released-v1 real entry (inline string)…

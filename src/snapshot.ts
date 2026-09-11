@@ -195,6 +195,13 @@ export interface CheckpointEntry {
    * a restore); a missing value means "leave the live mode alone".
    */
   readonly mode?: number
+  /**
+   * Set when this entry's sidecar holds re-encoded LOSSY text (a released-v1
+   * record that was decoded with replacement characters, e.g. after `prune`
+   * materialized its link). The bytes are comparable but must never be written
+   * back: a reader turns such an entry into a `lossyText` source again.
+   */
+  readonly lossy?: boolean
   /** Epoch ms the entry was committed (stable ordering within a group). */
   readonly time: number
   /**
@@ -679,6 +686,7 @@ function entryToJson(entry: CheckpointEntry): Record<string, unknown> {
     file: entry.path,
     time: entry.time,
     ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+    ...(entry.lossy === true ? { lossy: true } : {}),
   }
   if (entry.before === null) return { ...base, blob: null, size: 0 }
   if (entry.before.kind !== 'blob') throw new Error(`entry for ${entry.path} is not blob-backed`)
@@ -734,6 +742,18 @@ async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry |
     if (parsed.blob !== sidecarName(basename(file))) return undefined
     const size = typeof parsed.size === 'number' && parsed.size >= 0 ? parsed.size : 0
     const mode = typeof parsed.mode === 'number' ? parsed.mode : undefined
+    if (parsed.lossy === true) {
+      // The sidecar holds the UTF-8 re-encoding of a LOSSY v1 string: read it
+      // back as that string so the planner can compare it but never write it.
+      // An unreadable sidecar makes the entry unusable — skipped, never a
+      // delete and never a whole-operation failure.
+      try {
+        const text = await readFile(join(dirname(file), parsed.blob), 'utf8')
+        return { ...base, before: { kind: 'lossyText', text }, size, lossy: true, ...(mode !== undefined ? { mode } : {}) }
+      } catch {
+        return undefined
+      }
+    }
     return {
       ...base,
       before: { kind: 'blob', path: join(dirname(file), parsed.blob) },
@@ -1201,6 +1221,10 @@ export class SnapshotStore {
         path: entry.path,
         before: placed?.source ?? null,
         size: placed?.size ?? 0,
+        // Content that was already lossy when it reached the store (a v1
+        // string, or a materialized link to one) stays marked, so a later
+        // reader cannot mistake its re-encoded bytes for a faithful backup.
+        ...(incoming?.kind === 'lossyText' ? { lossy: true } : {}),
         ...(content.mode !== undefined ? { mode: content.mode } : {}),
         time,
       }
@@ -2118,6 +2142,7 @@ export class SnapshotStore {
             path: entry.path,
             before: { kind: 'blob', path: dest },
             size: st.size,
+            ...(source.kind === 'lossyText' ? { lossy: true } : {}),
             time: entry.time,
           }
         }
