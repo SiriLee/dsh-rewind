@@ -3,11 +3,11 @@
  * before-backups grouped by anchor message seq, with real files under a
  * temporary directory — exactly the production restore path.
  */
-import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, writeFile, readFile, utimes, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
+import { reconcileTracked, SnapshotStore, isLinkEntry, defaultProbe, type ByteSource, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -236,23 +236,27 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
   })
 
   it('plans exactly the real differences (injected probe)', async () => {
-    const a = await touch('a.txt', '')
-    const b = await touch('b.txt', '')
-    const c = await touch('c.txt', '')
+    const a = await touch('a.txt', 'A0')
+    const b = await touch('b.txt', 'B1')
+    const c = await touch('c.txt', 'created')
     await store.recordEntry(session, { callId: 'a', anchorSeq: 5, path: a, before: 'A0' })
     await store.recordEntry(session, { callId: 'b', anchorSeq: 5, path: b, before: 'B0' })
     await store.recordEntry(session, { callId: 'c', anchorSeq: 5, path: c, before: null })
+    // Byte-exact fake probe: decides by comparing the RECORDED bytes with the
+    // live file, so the planner must hand it the right source.
     const probe: DiskProbe = {
       isLink: async () => false,
-      readText: async (path: string) => {
-        if (path === a) return 'A0' // identical → no impact
-        if (path === b) return 'B1' // differs → restore
-        if (path === c) return undefined // creation already absent → no impact
-        return undefined
+      matches: async (source, path) => {
+        if (source === null) return false // the created file is back on disk
+        if (source.kind === 'blob') return (await readFile(source.path)).equals(await readFile(path))
+        if (source.kind === 'text') return (await readFile(path)).equals(source.bytes)
+        return (await readFile(path)).toString('utf8') === source.text
       },
+      copy: async () => ({ kind: 'absent' }),
     }
     expect(await store.impactsAfter(session, 5, probe)).toEqual([
       { path: b, action: 'restore' },
+      { path: c, action: 'delete' },
     ])
   })
 
@@ -261,9 +265,10 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
     const failingProbe: DiskProbe = {
       isLink: async () => false,
-      readText: async () => {
+      matches: async () => {
         throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
       },
+      copy: async () => ({ kind: 'absent' }),
     }
     // An unreadable file is never silently dropped: the plan treats it as
     // differing, so the restore still attempts the write.
@@ -272,6 +277,143 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
     ])
     const outcome = await store.restoreAfter(session, 5, unlink, failingProbe)
     expect(outcome.restored).toEqual([file])
+  })
+
+  it('never writes a legacy LOSSY record back over the live file', async () => {
+    // A released-v1 record that contains U+FFFD lost the original bytes: it is
+    // comparable but must never become a restore target, so the path is
+    // skipped and the live bytes stay untouched.
+    const file = await touch('gbk.txt', 'x')
+    await writeFile(file, Buffer.from([0xd6, 0xd0, 0xce, 0xc4])) // GBK "中文"
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'c1.json'), JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: '\uFFFD', time: 1,
+    }), 'utf8')
+
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [file], failed: [] })
+    expect(await readFile(file)).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+  })
+
+  it('treats a legacy lossy record that still matches the disk as unchanged', async () => {
+    const file = await touch('gbk-same.txt', 'x')
+    await writeFile(file, Buffer.from([0xd6, 0xd0])) // lossy decode: two U+FFFD
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'c1.json'), JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: '\uFFFD\uFFFD', time: 1,
+    }), 'utf8')
+
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    expect(await store.restoreAfter(session, 5, unlink))
+      .toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+  })
+
+  it('restores a faithful legacy text record byte-exactly', async () => {
+    // A v1 string without U+FFFD is byte-exact UTF-8, so it restores normally.
+    const file = await touch('text.txt', 'x')
+    await writeFile(file, Buffer.from([0xd6, 0xd0]))
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'c1.json'), JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: 'text', time: 1,
+    }), 'utf8')
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('text')
+  })
+
+  it('still deletes a created file whose current bytes are not valid UTF-8', async () => {
+    // A delete needs no content, so a binary file must not suppress it:
+    // rewinding past the file's creation still removes it.
+    const created = await touch('created.bin', '')
+    await writeFile(created, Buffer.from([0x89, 0x50, 0x4e, 0x47])) // PNG magic
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 6, path: created, before: null })
+
+    expect(await store.impactsAfter(session, 5)).toEqual([{ path: created, action: 'delete' }])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.deleted).toEqual([created])
+    expect(await store.exists(created)).toBe(false)
+  })
+
+  it('fails the path — never deletes — when content cannot be resolved', async () => {
+    // A dangling dedup link is a per-file integrity failure. Falling back to
+    // "the file was created" would plan a DELETE of a file we cannot restore.
+    const file = await touch('dangling.txt', 'live content')
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'dangling.json'), JSON.stringify({
+      callId: 'dangling', anchorSeq: 5, path: file, ref: '6/missing.json', time: 1,
+    }), 'utf8')
+
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.deleted).toEqual([])
+    expect(outcome.restored).toEqual([])
+    expect(outcome.failed.map(f => f.path)).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('live content')
+  })
+
+  it('fails the path — never deletes — when the recorded sidecar is missing', async () => {
+    const file = await touch('gone-sidecar.txt', 'live content')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'recorded' })
+    const sidecar = (await readdir(store.anchorDir(session, 5))).find(name => name.endsWith('.before'))
+    if (sidecar === undefined) throw new Error('expected a staged sidecar')
+    await rm(join(store.anchorDir(session, 5), sidecar), { force: true })
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.deleted).toEqual([])
+    expect(outcome.failed.map(f => f.path)).toEqual([file])
+    expect(outcome.failed[0]!.message).toContain('missing backup sidecar')
+    expect(await readFile(file, 'utf8')).toBe('live content')
+  })
+})
+
+describe('defaultProbe (byte-exact comparisons)', () => {
+  it('treats an absent path as the recorded "created" state', async () => {
+    const missing = join(root, 'nope.txt')
+    expect(await defaultProbe.matches(null, missing)).toBe(true)
+    const file = await touch('present.txt', 'x')
+    expect(await defaultProbe.matches(null, file)).toBe(false)
+  })
+
+  it('compares a file against in-memory text bytes', async () => {
+    const file = await touch('text.txt', 'hello')
+    expect(await defaultProbe.matches({ kind: 'text', bytes: Buffer.from('hello') }, file)).toBe(true)
+    expect(await defaultProbe.matches({ kind: 'text', bytes: Buffer.from('other') }, file)).toBe(false)
+    expect(await defaultProbe.matches({ kind: 'text', bytes: Buffer.from('hello') }, join(root, 'gone.txt'))).toBe(false)
+  })
+
+  it('compares a file against a sidecar across multiple read chunks', async () => {
+    // 160 KiB exercises the streaming path (chunked, never whole-file).
+    const bytes = Buffer.alloc(160 * 1024, 7)
+    const live = await touch('big.bin', '')
+    await writeFile(live, bytes)
+    const sidecar = join(root, 'big.before')
+    await writeFile(sidecar, bytes)
+    expect(await defaultProbe.matches({ kind: 'blob', path: sidecar }, live)).toBe(true)
+
+    const changed = Buffer.from(bytes)
+    changed[bytes.length - 1] = 8
+    await writeFile(sidecar, changed)
+    expect(await defaultProbe.matches({ kind: 'blob', path: sidecar }, live)).toBe(false)
+  })
+
+  it('compares a legacy lossy string with the same lossy decode', async () => {
+    const file = await touch('gbk.bin', '')
+    await writeFile(file, Buffer.from([0xd6, 0xd0]))
+    const lossy: ByteSource = { kind: 'lossyText', text: '\uFFFD\uFFFD' }
+    expect(await defaultProbe.matches(lossy, file)).toBe(true)
+    expect(await defaultProbe.matches({ kind: 'lossyText', text: 'x' }, file)).toBe(false)
+  })
+
+  it('stages a raw byte copy, reporting absent and failed outcomes', async () => {
+    const file = await touch('copy.txt', 'payload')
+    const dest = join(root, 'staged.before')
+    expect(await defaultProbe.copy(file, dest)).toEqual({ kind: 'copied', size: 7 })
+    expect(await readFile(dest, 'utf8')).toBe('payload')
+    expect(await defaultProbe.copy(join(root, 'nope.txt'), dest)).toEqual({ kind: 'absent' })
+    const failed = await defaultProbe.copy(file, join(root, 'no-such-dir', 'x.before'))
+    expect(failed.kind).toBe('failed')
   })
 })
 
@@ -338,6 +480,28 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: link, before: 'x' })
     const tracked = await store.trackedPaths(session)
     expect(await reconcileTracked(store, session, 7, tracked)).toBe(0)
+  })
+
+  it('records a non-UTF-8 file byte-exactly instead of as absent', async () => {
+    // A decode failure must never become `before: null` (a later rewind would
+    // DELETE the file); the boundary stages the CURRENT bytes instead.
+    const file = await touch('binary.bin', 'original')
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
+    const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4]) // GBK "中文"
+    await writeFile(file, gbk)
+    const tracked = await store.trackedPaths(session)
+
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(1)
+    const outcome = await store.restoreAfter(session, 7, unlink)
+    expect(outcome.deleted).toEqual([])
+    expect(await readFile(file)).toEqual(gbk)
+
+    // The captured state is byte-exact: change the file and rewind to the
+    // boundary to get exactly those bytes back.
+    await writeFile(file, Buffer.from([0x00, 0xff]))
+    const restored = await store.restoreAfter(session, 7, unlink)
+    expect(restored.restored).toEqual([file])
+    expect(await readFile(file)).toEqual(gbk)
   })
 })
 
@@ -470,7 +634,9 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     expect(entries).toHaveLength(1)
     const survivor = entries[0]!
     if (isLinkEntry(survivor)) throw new Error('expected a materialized real snapshot')
-    expect(survivor.before).toBe('A')
+    if (survivor.before === null || survivor.before.kind !== 'blob') throw new Error('expected a materialized blob source')
+    expect(await readFile(survivor.before.path, 'utf8')).toBe('A')
+    expect(survivor.size).toBe(1)
     // Reopen on disk and confirm the surviving entry restores without a dangling link.
     const reopened = new SnapshotStore(root)
     await writeFile(file, 'changed', 'utf8')
@@ -581,6 +747,64 @@ describe('pruneStale', () => {
     expect(rep.freedBytes).toBeGreaterThan(0)
     await expect(store.exists(join(root, 'old'))).resolves.toBe(false)
     await expect(store.exists(join(root, 'fresh'))).resolves.toBe(true)
+  })
+
+  it('treats a fresh staged capture as activity (dot dirs are store members)', async () => {
+    const old = now() - 40 * day
+    await seedSession('staged', '1', 'a', '{}', old)
+    const pendingDir = join(root, 'staged', '.pending')
+    await mkdir(pendingDir, { recursive: true })
+    // A staged capture written into the ALREADY EXISTING `.pending/`: only the
+    // file is fresh, so the freshness must be seen INSIDE the dot directory
+    // (creating the dir would have bumped the session dir's own mtime).
+    await writeFile(join(pendingDir, 'call.before'), 'x', 'utf8')
+    const t = new Date(old)
+    await utimes(join(root, 'staged'), t, t)
+    await utimes(pendingDir, t, t)
+
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(0)
+    await expect(store.exists(join(root, 'staged'))).resolves.toBe(true)
+  })
+
+  it('counts staged-capture bytes in freedBytes', async () => {
+    const old = now() - 40 * day
+    await seedSession('old-pending', '1', 'a', '{}', old)
+    const pendingDir = join(root, 'old-pending', '.pending')
+    await mkdir(pendingDir, { recursive: true })
+    const staged = join(pendingDir, 'call.before')
+    await writeFile(staged, '12345', 'utf8')
+    // Everything in this session is genuinely old (the byte total is what this
+    // test is about), including the staged file itself.
+    const t = new Date(old)
+    await utimes(staged, t, t)
+    await utimes(join(root, 'old-pending'), t, t)
+    await utimes(pendingDir, t, t)
+
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(1)
+    // '{}' (2 bytes entry) + '12345' (5 bytes staged) — the staged bytes are
+    // real store content and must be reported as freed.
+    expect(rep.freedBytes).toBe(7)
+  })
+
+  it('forgets in-memory state for the sessions it deleted', async () => {
+    const old = now() - 40 * day
+    const file = join(root, 'ws', 'gone.txt')
+    await mkdir(join(root, 'ws'), { recursive: true })
+    await writeFile(file, 'x', 'utf8')
+    await seedSession(session, '5', 'c1', JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: 'x', time: 1,
+    }), old)
+
+    // Seeding from disk puts a handle in memory (the dedup state).
+    await expect(store.lastKnownContent(session, file)).resolves.not.toBeUndefined()
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(1)
+    // The dir is gone, so the handle must be gone too — otherwise the store
+    // keeps state for a session it just deleted (and skips re-stamping its
+    // markers on the next commit).
+    await expect(store.lastKnownContent(session, file)).resolves.toBeUndefined()
   })
 
   it('measures the newest MEMBER mtime, not the session-dir mtime', async () => {
@@ -745,7 +969,25 @@ describe('clearSession', () => {
     expect(rep.entries).toBe(1)
     expect(await store.exists(store.sessionDir(session))).toBe(true)
     expect(await store.trackedPaths(session)).toEqual(new Set([file]))
-    expect(await store.lastKnownContent(session, file)).toBe('original')
+    const handle = await store.lastKnownContent(session, file)
+    if (handle === null || handle === undefined || handle.kind !== 'blob') throw new Error('expected a blob handle')
+    expect(await readFile(handle.path, 'utf8')).toBe('original')
+  })
+
+  it('clears a session dir that only holds a staged capture', async () => {
+    // A staged capture is store content (it counts in `bytes`), so an explicit
+    // clear must remove it — otherwise the dir survives with content the
+    // report just said it would free.
+    const staged = await store.stageCapture(session, 'orphan')
+    await writeFile(staged, 'x', 'utf8')
+
+    const dry = await store.clearSession(session, { dryRun: true })
+    expect(dry.entries).toBe(0)
+    expect(dry.bytes).toBeGreaterThan(0)
+
+    const rep = await store.clearSession(session)
+    expect(rep.dryRun).toBe(false)
+    await expect(store.exists(store.sessionDir(session))).resolves.toBe(false)
   })
 
   it('apply clears the session dir and resets dedup memory (no dangling link)', async () => {

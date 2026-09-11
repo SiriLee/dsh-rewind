@@ -46,7 +46,8 @@ import { planProjectionDefinition as planProjection } from '@deepseek-ai/dsh-pla
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rename, rm, symlink, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
+import { createHash, randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
@@ -84,7 +85,14 @@ class FakeFs extends FileSystem {
   async readText(target) { return readFile(target.displayPath, 'utf8') }
   async writeText(target, content) { await writeFile(target.displayPath, content, 'utf8'); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
   async stat(target) {
-    try { await readFile(target.displayPath); return { version: FsVersion('v'), type: 'file' } } catch { return undefined }
+    // Mirror the fs service contract (FsInfo.type): regular file, directory or
+    // other — the plugin's capture guard depends on it.
+    try {
+      const info = await stat(target.displayPath)
+      if (info.isFile()) return { version: FsVersion('v'), type: 'file' }
+      if (info.isDirectory()) return { version: FsVersion('v'), type: 'directory' }
+      return { version: FsVersion('v'), type: 'other' }
+    } catch { return undefined }
   }
 }
 
@@ -251,6 +259,13 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1
 }
 
+/**
+ * Read a path for an assertion without aborting the suite when it is gone: the
+ * vulnerable paths this suite probes DELETE files, and an uncaught ENOENT would
+ * hide every later probe instead of reporting one clean FAIL.
+ */
+const readOrMissing = async path => readFile(path, 'utf8').catch(() => '<missing>')
+
 // 1. command registered
 check('command registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
 // `/undo` is a bare alias of `/rewind`: registered and sharing the same handler.
@@ -336,6 +351,321 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('restore emits present observation for the restored file', observed.some(o => o.path === aPath && o.kind === 'present' && o.version !== undefined && o.ownerIsSession), JSON.stringify(observed))
 }
 
+// 4b. a non-UTF-8 / binary file round-trips byte-exactly through the real
+//     capture → commit → restore pipeline (the issue #23 regression)
+{
+  const binPath = join(wsDir, 'binary.bin')
+  // GBK text with an embedded NUL and a raw 0xFF: not decodable as UTF-8.
+  const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x00, 0xff, 0x89, 0x50, 0x4e, 0x47])
+  await writeFile(binPath, gbk)
+  session.append('user/message', user('binary anchor question'), { surfaceOp: 'append' })
+  const binAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'bin1', binPath, 'replaced by a tracked edit')
+  await writeFile(binPath, Buffer.from([0x00, 0x01, 0x02])) // later out-of-band change
+
+  const binPreview = await call(agent, `preview @${binAnchor} both`)
+  check('binary preview reports the file impact', binPreview.kind === 'success' && binPreview.text.includes(binPath), binPreview.text)
+  const binBoth = await call(agent, `@${binAnchor} both`)
+  check('binary rewind both succeeds', binBoth.kind === 'success' && binBoth.text.includes('restored 1 file(s)'), binBoth.text)
+  const restoredBytes = await readFile(binPath)
+  check('non-UTF-8 file restored byte-exactly', Buffer.compare(restoredBytes, gbk) === 0, `got ${restoredBytes.toString('hex')}`)
+
+  // The bytes live in a raw sidecar, not in the entry JSON.
+  const sidecars = []
+  const walk = async dir => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) await walk(full)
+      else if (entry.name.endsWith('.before')) sidecars.push(full)
+    }
+  }
+  await walk(join(snapRoot, session.id))
+  check('binary backup is a raw sidecar file', sidecars.length >= 1, `sidecars=${sidecars.length}`)
+
+  // The reporter's own repro (issue #23): 4096 random bytes, touched by a
+  // tracked tool call, then a rewind — the digest must be unchanged.
+  const blobPath = join(wsDir, 'blob.bin')
+  const blob = randomBytes(4096)
+  const digest = b => createHash('sha256').update(b).digest('hex')
+  const blobDigest = digest(blob)
+  await writeFile(blobPath, blob)
+  session.append('user/message', user('blob anchor question'), { surfaceOp: 'append' })
+  const blobAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'blob1', blobPath, 'agent touched this file')
+  await writeFile(blobPath, randomBytes(4096)) // the file drifts after the edit
+  const blobBoth = await call(agent, `@${blobAnchor} both`)
+  const restoredBlob = await readFile(blobPath)
+  check('issue #23 repro: sha256 is unchanged after a rewind',
+    blobBoth.kind === 'success' && restoredBlob.length === 4096 && digest(restoredBlob) === blobDigest,
+    `sha=${digest(restoredBlob).slice(0, 16)} expected=${blobDigest.slice(0, 16)}`)
+}
+
+// 4c. snapshots written by a NEWER build fail the FILE restore closed: the
+//     conversation rewind still succeeds, the workspace is untouched, and the
+//     user sees why (ADR-10).
+{
+  const futurePath = join(wsDir, 'future.bin')
+  await writeFile(futurePath, Buffer.from('original'), 'utf8')
+  session.append('user/message', user('future anchor question'), { surfaceOp: 'append' })
+  const futureAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'future1', futurePath, 'edited by the tracked call')
+  await writeFile(futurePath, 'changed again', 'utf8')
+
+  const sessionDir = join(snapRoot, session.id)
+  const markerFile = join(sessionDir, 'store')
+  const previousMarker = await readFile(markerFile, 'utf8').catch(() => undefined)
+  await writeFile(markerFile, '3', 'utf8')
+  try {
+    // Preview first: the rewind below withdraws the target from the surface,
+    // so it can no longer be previewed afterwards.
+    const preview = await call(agent, `preview @${futureAnchor} both`)
+    check('newer store preview reports the refusal instead of "no changes"', preview.kind === 'error' && /newer store format/.test(preview.text), preview.text)
+    const result = await call(agent, `@${futureAnchor} both`)
+    check('newer store fails the file restore closed, rewind still succeeds', result.kind === 'success' && /newer store format/.test(result.text), result.text)
+    check('newer store leaves the workspace untouched', await readFile(futurePath, 'utf8') === 'changed again', await readFile(futurePath, 'utf8'))
+  } finally {
+    if (previousMarker === undefined) await rm(markerFile, { force: true })
+    else await writeFile(markerFile, previousMarker, 'utf8')
+  }
+}
+
+// 4d. the recorded permission bits travel with the restored bytes
+{
+  const modePath = join(wsDir, 'mode.txt')
+  await writeFile(modePath, 'mode-original', 'utf8')
+  await chmod(modePath, 0o640)
+  if (((await stat(modePath)).mode & 0o7777) === 0o640) {
+    session.append('user/message', user('mode anchor question'), { surfaceOp: 'append' })
+    const modeAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+    await runWrite(agent, 'mode1', modePath, 'mode-edited')
+    await chmod(modePath, 0o600)
+    const result = await call(agent, `@${modeAnchor} both`)
+    const restoredMode = (await stat(modePath)).mode & 0o7777
+    check('mode rewind both succeeds', result.kind === 'success', result.text)
+    check('content restored with the recorded mode', (await readFile(modePath, 'utf8')) === 'mode-original' && restoredMode === 0o640, `mode=${restoredMode.toString(8)}`)
+  } else {
+    console.log('skip permission-bit check (chmod unsupported on this filesystem)')
+  }
+}
+
+// 4e. session start must not clear snapshots written by a NEWER build: the
+//     store-version guard runs BEFORE the session-format reconcile (whose
+//     whole-directory clear would delete snapshots this build cannot read).
+{
+  const futureSession = buildSession('verify-future-store')
+  const futureAgent = makeAgent(futureSession.id, futureSession)
+  const dir = join(snapRoot, futureSession.id)
+  await mkdir(join(dir, '5'), { recursive: true })
+  await writeFile(join(dir, '5', 'entry.json'), JSON.stringify({ callId: 'c', anchorSeq: 5, path: join(wsDir, 'x.txt'), before: 'x', time: 1 }), 'utf8')
+  await writeFile(join(dir, 'store'), '3', 'utf8')
+  // A session-format marker that does NOT match the loaded session: on the
+  // wrong order this alone triggers the whole-directory clear.
+  await writeFile(join(dir, 'format'), '0', 'utf8')
+
+  // The handler is fire-and-forget, so poll for a POSITIVE signal that it ran
+  // (the guard's warning) instead of sleeping: otherwise a slow machine could
+  // leave the negative assertions below passing vacuously.
+  const warnings = []
+  const originalWarn = ctx.logger.warn
+  ctx.logger.warn = (...args) => {
+    warnings.push(String(args[0] ?? ''))
+    return originalWarn.apply(ctx.logger, args)
+  }
+  try {
+    ctx.emit('agent/session-start', { agent: futureAgent })
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && !warnings.some(text => text.includes('file restore disabled'))) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+  } finally {
+    ctx.logger.warn = originalWarn
+  }
+  check('session start reports the unsupported store', warnings.some(text => text.includes('file restore disabled')), `warnings=${warnings.join(' | ')}`)
+
+  const members = await readdir(dir).catch(() => [])
+  check('session start does not clear a newer store', members.includes('5') && members.includes('store'), `members=${members.join(',')}`)
+  check('session start does not rewrite the format marker of a newer store', await readFile(join(dir, 'format'), 'utf8').catch(() => '') === '0', 'format marker changed')
+  check('session start leaves the newer store marker at its version', await readFile(join(dir, 'store'), 'utf8').catch(() => '') === '3', 'store marker changed')
+}
+
+// 4f. a non-regular target is never captured: no staged copy, no entry, no
+//     hang (the directory/FIFO/device guard in the capture path).
+{
+  const guardSession = buildSession('verify-guard')
+  const guardAgent = makeAgent(guardSession.id, guardSession)
+  guardSession.append('user/message', user('guard anchor question'), { surfaceOp: 'append' })
+  const exec = { callId: 'guard1', name: 'write', arguments: { file_path: wsDir }, agent: guardAgent, signal: aborted() }
+  await ctx.waterfall('tools/execute', exec, async () => ({ isError: true, content: [] }))
+  await ctx.waterfall('tools/post-execute', exec, { isError: true, content: [] }, async () => ({ kind: 'accept' }))
+
+  const guardDir = join(snapRoot, guardSession.id)
+  const members = await readdir(guardDir).catch(() => [])
+  // A staged `.pending/` directory here would mean the capture tried to copy
+  // the directory instead of refusing it up front.
+  check('non-regular target is never captured', members.length === 0, `members=${members.join(',')}`)
+}
+
+// 4g. a file the SERVICE reports must never be recorded as a creation: on a
+//     backend whose display path is not a readable host path (a remote or
+//     sandboxed fs, ADR-11) a failed local copy must abandon the capture, not
+//     record "was created" — that entry would DELETE the path on a rewind.
+{
+  const remoteSession = buildSession('verify-remote')
+  const remoteAgent = makeAgent(remoteSession.id, remoteSession)
+  remoteSession.append('user/message', user('remote anchor question'), { surfaceOp: 'append' })
+  const remoteAnchor = remoteSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const remotePath = join(wsDir, 'remote-only.txt') // does NOT exist on this host
+
+  // The fs double claims a regular file at a path the host cannot read: the
+  // service answer and the local disk disagree, exactly like a remote backend.
+  const originalStat = fs.stat
+  fs.stat = async () => ({ version: FsVersion('v'), type: 'file' })
+  try {
+    const exec = { callId: 'remote1', name: 'write', arguments: { file_path: remotePath, content: 'written' }, agent: remoteAgent, signal: aborted() }
+    await ctx.waterfall('tools/execute', exec, async () => {
+      await writeFile(remotePath, 'written', 'utf8') // the tool call does land
+      return { isError: false, content: [] }
+    })
+    await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+  } finally {
+    fs.stat = originalStat
+  }
+
+  const remotePreview = await call(remoteAgent, `preview @${remoteAnchor} both`)
+  check('a service-present file the host cannot read is not recorded as a creation',
+    remotePreview.kind === 'success' && !remotePreview.text.includes(`delete:${remotePath}`) && /impact=0/.test(remotePreview.text),
+    remotePreview.text)
+  await rm(remotePath, { force: true })
+}
+
+// 4h. `edit` is tracked as well, so the contract is pinned for every tool the
+//     plugin actually follows (`write`, `edit`). `str_replace_editor` is NOT
+//     tracked by design: it stopped being a default DSH tool in 0.1.3.
+{
+  const editSession = buildSession('verify-edit')
+  const editAgent = makeAgent(editSession.id, editSession)
+  editSession.append('user/message', user('edit anchor question'), { surfaceOp: 'append' })
+  const editAnchor = editSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const editPath = join(wsDir, 'edit.txt')
+  await writeFile(editPath, 'edit-before', 'utf8')
+
+  const edit = { callId: 'edit1', name: 'edit', arguments: { file_path: editPath, old_string: 'before', new_string: 'after' }, agent: editAgent, signal: aborted() }
+  await ctx.waterfall('tools/execute', edit, async () => {
+    await writeFile(editPath, 'edit-after', 'utf8')
+    return { isError: false, content: [] }
+  })
+  await ctx.waterfall('tools/post-execute', edit, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+  await writeFile(editPath, 'edit-later', 'utf8')
+
+  const editPreview = await call(editAgent, `preview @${editAnchor} both`)
+  check('edit mutations are captured', editPreview.kind === 'success' && editPreview.text.includes(editPath), editPreview.text)
+  const editBoth = await call(editAgent, `@${editAnchor} both`)
+  check('edit is restored', editBoth.kind === 'success' && (await readFile(editPath, 'utf8')) === 'edit-before', `content=${await readFile(editPath, 'utf8')}`)
+}
+
+// 4i. a tracked file whose ancestor directory was replaced by a symlink is
+//     refused: only the path's FINAL component is link-checked, so without the
+//     checkpoint-time parent pin a restore would write — and a creation delete
+//     would UNLINK — through the link, outside the recorded location.
+{
+  const pinSession = buildSession('verify-pin')
+  const pinAgent = makeAgent(pinSession.id, pinSession)
+  pinSession.append('user/message', user('pin anchor question'), { surfaceOp: 'append' })
+  const pinAnchor = pinSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const dir = join(wsDir, 'pinned')
+  const live = join(dir, 'f.txt')
+  await mkdir(dir, { recursive: true })
+  await writeFile(live, 'pin-before', 'utf8')
+  await runWrite(pinAgent, 'pin1', live, 'pin-edited')
+  // A second record under the same directory whose content DID NOT exist: the
+  // restore wants to unlink that path.
+  const created = join(dir, 'created.txt')
+  await runWrite(pinAgent, 'pin2', created, 'pin-created')
+
+  // Repoint the whole directory: move the real one aside, symlink a decoy in.
+  const moved = join(wsDir, 'pinned-real')
+  const outside = join(tmpRoot, 'pin-outside')
+  await rename(dir, moved)
+  await mkdir(outside, { recursive: true })
+  await writeFile(join(outside, 'f.txt'), 'pin-decoy', 'utf8')
+  await writeFile(join(outside, 'created.txt'), 'pin-decoy-created', 'utf8')
+  await symlink(outside, dir, 'dir')
+
+  const preview = await call(pinAgent, `preview @${pinAnchor} both`)
+  const both = await call(pinAgent, `@${pinAnchor} both`)
+  const outsideDecoy = await readOrMissing(join(outside, 'f.txt'))
+  const movedOriginal = await readOrMissing(join(moved, 'f.txt'))
+  check('a repointed ancestor refuses the restore (no write outside the checkpoint)',
+    outsideDecoy === 'pin-decoy' && movedOriginal === 'pin-edited',
+    `outside=${outsideDecoy} moved=${movedOriginal}`)
+  const outsideCreated = await readOrMissing(join(outside, 'created.txt'))
+  check('a repointed ancestor refuses the creation delete (no unlink outside the checkpoint)',
+    outsideCreated === 'pin-decoy-created',
+    `outside=${outsideCreated}`)
+  check('a repointed ancestor is reported, not silently restored',
+    preview.kind === 'success' && /impact=0/.test(preview.text) && both.kind === 'success' && /skip|fail/.test(both.text),
+    `${preview.text} | ${both.text}`)
+}
+
+// 4j. the pin must never cause a false skip for a STABLE symlinked ancestor (a
+//     symlinked workspace or temp root): the pin and the check are both
+//     realpaths, so they resolve identically.
+{
+  const linkSession = buildSession('verify-pin-stable')
+  const linkAgent = makeAgent(linkSession.id, linkSession)
+  linkSession.append('user/message', user('stable link anchor question'), { surfaceOp: 'append' })
+  const linkAnchor = linkSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const realDir = join(wsDir, 'linked-real')
+  await mkdir(realDir, { recursive: true })
+  const linkDir = join(wsDir, 'linked')
+  await symlink(realDir, linkDir, 'dir')
+  const viaLink = join(linkDir, 'f.txt')
+  await writeFile(viaLink, 'link-before', 'utf8')
+  await runWrite(linkAgent, 'link1', viaLink, 'link-edited')
+
+  const both = await call(linkAgent, `@${linkAnchor} both`)
+  const restored = await readOrMissing(join(realDir, 'f.txt'))
+  check('a stable symlinked ancestor still restores',
+    both.kind === 'success' && restored === 'link-before',
+    `${both.text} content=${restored}`)
+}
+
+// 4k. a service stat ERROR is not "the file does not exist": an abort, a
+//     permission/IO failure or a remote backend must abandon the capture, never
+//     record a creation — a creation record makes a later `both` rewind DELETE a
+//     file that exists (and that this plugin never backed up).
+{
+  const errSession = buildSession('verify-stat-error')
+  const errAgent = makeAgent(errSession.id, errSession)
+  errSession.append('user/message', user('stat error anchor question'), { surfaceOp: 'append' })
+  const errAnchor = errSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const errPath = join(wsDir, 'stat-error.txt')
+  await writeFile(errPath, 'orig', 'utf8')
+
+  const originalStat = fs.stat
+  fs.stat = async () => { throw Object.assign(new Error('simulated stat failure'), { code: 'FS_IO_ERROR' }) }
+  try {
+    const exec = { callId: 'staterr1', name: 'write', arguments: { file_path: errPath, content: 'edited' }, agent: errAgent, signal: aborted() }
+    await ctx.waterfall('tools/execute', exec, async () => {
+      await writeFile(errPath, 'edited', 'utf8') // the tool call does land
+      return { isError: false, content: [] }
+    })
+    await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
+  } finally {
+    fs.stat = originalStat
+  }
+
+  const members = await readdir(join(snapRoot, errSession.id)).catch(() => [])
+  check('a service stat ERROR is never recorded as a creation',
+    members.filter(name => /^\d+$/.test(name)).length === 0,
+    `members=${members.join(',')}`)
+  const errBoth = await call(errAgent, `@${errAnchor} both`)
+  const afterBoth = await readOrMissing(errPath)
+  check('a service stat ERROR cannot make a rewind delete the file',
+    errBoth.kind === 'success' && afterBoth === 'edited',
+    `${errBoth.text} content=${afterBoth}`)
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift
@@ -351,6 +681,19 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   await ctx.waterfall('tools/post-execute', exec, { isError: true, error: { message: 'denied', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
   const preview = await call(deniedAgent, `preview @${anchorSeq} both`)
   check('denied call is not in the impact list', preview.kind === 'success' && !preview.text.includes(deniedPath), preview.text)
+
+  // A capture that DID stage bytes but whose tool call then failed must release
+  // the staged copy: no entry, no `.pending/` leak (discardCapture).
+  const failedPath = join(wsDir, 'failed-capture.txt')
+  await writeFile(failedPath, 'staged-orig', 'utf8')
+  const failedExec = { callId: 'c4', name: 'write', arguments: { file_path: failedPath, content: 'never lands' }, agent: deniedAgent, signal: aborted() }
+  await ctx.waterfall('tools/execute', failedExec, async () => ({ isError: true, content: [] }))
+  await ctx.waterfall('tools/post-execute', failedExec, { isError: true, error: { message: 'boom', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
+  const pendingNames = await readdir(join(snapRoot, deniedSession.id, '.pending')).catch(() => [])
+  const anchorDirs = (await readdir(join(snapRoot, deniedSession.id)).catch(() => [])).filter(name => /^\d+$/.test(name))
+  check('an abandoned capture releases its staged bytes (no entry, no pending leak)',
+    pendingNames.length === 0 && anchorDirs.length === 0,
+    `pending=${pendingNames.join(',')} anchors=${anchorDirs.join(',')}`)
 }
 
 // 6. relative paths resolve against the session cwd (fs-tools rule)

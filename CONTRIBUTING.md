@@ -58,9 +58,10 @@ npm run verify:host    # end-to-end host verification (full check suite)
 ## Testing expectations
 
 - Pure planning (`rewind.ts`, `hidden.ts`) → unit tests in `tests/`.
-- Store behavior (`snapshot.ts`) → `tests/snapshot.test.ts`, plus crash-safety
-  scenarios in `tests/crash-safety.test.ts` via the test-only `crash` seam
-  (`RestoreRunOptions.crash`).
+- Store behavior (`snapshot.ts`) → `tests/snapshot.test.ts` plus the focused
+  suites (`snapshot-bytes`, `snapshot-mode`, `downgrade-safety`,
+  `parent-guard`), and crash-safety scenarios in `tests/crash-safety.test.ts`
+  via the test-only `crash` seam (`RestoreRunOptions.crash`).
 - Harness interaction → the compatibility suites
   (`compat-invariants` / `compat-interop` / `compat-gaps`) and
   `scripts/verify-host.mjs`.

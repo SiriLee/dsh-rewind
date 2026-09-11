@@ -34,16 +34,16 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import type { FileSystem, FsTarget } from '@deepseek-ai/dsh-fs'
+import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
-import { unlink } from 'node:fs/promises'
+import { copyFile, rm, stat, unlink } from 'node:fs/promises'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
   CLEANUP_SETTINGS_NAMESPACE,
   CleanupConfigSchema,
@@ -74,7 +74,17 @@ export interface RewindConfig {
   readonly dedup?: boolean
 }
 
-/** Tool names whose mutations the checkpoint tracker follows. */
+/**
+ * Tool names whose mutations the checkpoint tracker follows.
+ *
+ * `str_replace_editor` is deliberately ABSENT even though it still exists as an
+ * optional DSH package: it stopped being a DEFAULT tool in DSH 0.1.3, and the
+ * plugin dropped it with the rest of the dead branches then (see the 0.10.x
+ * "adapt to DSH 0.1.3-alpha.2" commit). The references left in DSH's client
+ * packages render HISTORICAL transcripts, and the mentions in this repo's docs
+ * are stale promises from before that removal — do not re-add it here without
+ * also deciding to support opt-in deployments of that tool.
+ */
 const TRACKED_TOOLS = new Set(['write', 'edit'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
@@ -107,8 +117,19 @@ function usage(): string {
 interface PendingCapture {
   /** Resolved display path (absolute) of the file the call will mutate. */
   readonly path: string
-  /** Full content before the change; undefined when the file does not exist (a creation). */
-  readonly before: string | undefined
+  /** Staged raw before-bytes, or null when the file does not exist (a creation). */
+  readonly backup: PendingBackup | null
+}
+
+/** Drop a staged capture's bytes (a no-op when nothing was staged). */
+async function discardCapture(capture: PendingCapture | undefined): Promise<void> {
+  if (capture === undefined || capture.backup === null) return
+  try {
+    await rm(capture.backup.file, { force: true })
+  } catch {
+    // The staged copy lives inside the store's own `.pending/`, which `prune`
+    // collects when stale; a failed unlink is never worth failing a tool call.
+  }
 }
 
 /** Extract the file path a tracked tool call mutates, or undefined. */
@@ -172,15 +193,15 @@ async function resolveTarget(
   }
 }
 
-/** Read a target's full text, or undefined when the file is absent. */
-async function readTextOrUndefined(fs: FileSystem, target: FsTarget, signal?: AbortSignal): Promise<string | undefined> {
-  try {
-    return await fs.readText(target, signal)
-  } catch (error) {
-    const code = (error as { code?: string })?.code
-    if (code === 'ENOENT' || code === 'FS_NOT_FOUND') return undefined
-    throw error
-  }
+/**
+ * True when an fs-service error means "the path does not exist". Anything else
+ * (an abort, a permission or IO failure, a non-local backend) is NOT an
+ * absence: recording it as a creation would let a later `both` rewind DELETE a
+ * file that exists.
+ */
+function isNotFoundError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | undefined)?.code
+  return code === 'ENOENT' || code === 'FS_NOT_FOUND'
 }
 
 /**
@@ -191,9 +212,18 @@ async function readTextOrUndefined(fs: FileSystem, target: FsTarget, signal?: Ab
  * cannot skip the capture, and a denied call never captures (no pending leak).
  * The recorded path is the RESOLVED display path, so restores always name the
  * real file regardless of how the model spelled it.
+ *
+ * The content is staged as a RAW BYTE COPY (`copyFile` into the store's
+ * `.pending/`) — never through a decoded string, so binary and non-UTF-8 files
+ * survive the round trip byte-exactly. The fs service provides the path
+ * resolution and the `stat` fence (`type !== 'file'` is never copied: a
+ * directory, FIFO or device must not be handed to `copyFile`), while the bytes
+ * move through plain `node:fs` — the same local-worktree assumption the
+ * restore path has always made.
  */
 async function captureBefore(
   fs: FileSystem,
+  store: SnapshotStore,
   exec: ToolExecution,
   pending: Map<string, PendingCapture>,
 ): Promise<void> {
@@ -204,21 +234,62 @@ async function captureBefore(
   // rewind of the parent session — it would only leak on disk (the subagent
   // log is short, so the per-session 100-group prune never fires for it).
   // Skipping the capture here mirrors Claude Code's behavior exactly.
-  const header = exec.agent?.session.header
+  const session = exec.agent?.session
+  const header = session?.header
   if (header !== undefined && (header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
   const cwd = execSessionCwd(exec, path)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
-  const before = await readTextOrUndefined(fs, target, exec.signal)
-  pending.set(`${exec.agent?.id ?? 'anon'}:${exec.callId}`, { path: target.displayPath, before })
+  const info = await fs.stat(target, exec.signal).catch((error: unknown) => {
+    // Only an affirmative "not found" answer becomes a creation. Any other
+    // failure abandons the capture (the caller logs it and the tool proceeds
+    // without a backup) — never a "was created" record, which a rewind would
+    // turn into a delete of a file that exists.
+    if (isNotFoundError(error)) return undefined
+    throw error
+  })
+  if (session === undefined) return
+  // The SERVICE decides whether the file exists. Only `undefined` (no file)
+  // records a creation; a non-regular target (directory / FIFO / device) is
+  // never copied — it would either hang the copy or produce a meaningless
+  // "backup".
+  if (info !== undefined && info.type !== 'file') return
+  const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
+  if (info === undefined) {
+    pending.set(key, { path: target.displayPath, backup: null })
+    return
+  }
+  const staged = await store.stageCapture(session.id, key)
+  let backup: PendingBackup
+  try {
+    await copyFile(target.displayPath, staged)
+    const st = await stat(staged)
+    // Permission bits are recorded best-effort next to the bytes: they belong
+    // to the file's state, but they never decide whether a restore happens.
+    const source = await stat(target.displayPath).catch(() => undefined)
+    backup = {
+      file: staged,
+      size: st.size,
+      ...(source !== undefined ? { mode: source.mode & 0o7777 } : {}),
+    }
+  } catch (error) {
+    // The service reported a regular file, so a failed LOCAL copy is NOT "the
+    // file does not exist": the display path is not a readable host path (a
+    // non-local backend — ADR-11) or the file raced away. Recording a creation
+    // here would let a later rewind DELETE that path, so the capture is
+    // abandoned instead (the caller logs it) and nothing is staged.
+    await rm(staged, { force: true })
+    throw error
+  }
+  pending.set(key, { path: target.displayPath, backup })
 }
 
 /**
  * Commit one tracked mutation during `tools/post-execute`: resolve the turn
- * anchor and write the before-backup to the checkpoint store. Failed calls
- * never commit (the pending capture is dropped).
+ * anchor and MOVE the staged before-bytes into the checkpoint store. Failed
+ * calls never commit (the staged capture is dropped).
  */
 async function commitEntry(
   store: SnapshotStore,
@@ -232,17 +303,25 @@ async function commitEntry(
   const capture = pending.get(key)
   if (capture === undefined) return
   pending.delete(key)
-  if (result.isError) return
+  if (result.isError) {
+    await discardCapture(capture)
+    return
+  }
   const agent = exec.agent
-  if (agent === undefined) return
+  if (agent === undefined) {
+    await discardCapture(capture)
+    return
+  }
   const anchorSeq = anchorSeqOf(agent.session, anchorCache)
-  if (anchorSeq === undefined) return
-  await store.recordEntry(agent.session.id, {
+  if (anchorSeq === undefined) {
+    await discardCapture(capture)
+    return
+  }
+  await store.recordBackup(agent.session.id, {
     callId: exec.callId,
     anchorSeq,
     path: capture.path,
-    before: capture.before ?? null,
-  })
+  }, capture.backup)
   // The path is now a tracked file: remember it for the boundary re-check
   // (the per-session set may not have been loaded yet — seed it lazily).
   let tracked = trackedBySession.get(agent.session.id)
@@ -542,18 +621,30 @@ async function executeRewind(
       // service would refuse as stale/absent. That is safe only because the
       // action set is the closed `planRestore`-derived one: paths the session
       // recorded, no symlink/hard link, differing from the disk.
-      const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
-      // The restore wrote through plain node:fs, invisible to the harness
-      // observation policy: re-sync it so the session's next write of a
-      // restored/deleted file is not judged against the stale pre-restore
-      // observation (see syncRestoreObservations).
-      await syncRestoreObservations(ctx, fs, agent, outcome)
-      const parts: string[] = []
-      if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
-      if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
-      if (outcome.skipped.length > 0) parts.push(t('skip.count', { count: outcome.skipped.length }))
-      restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
-      restore += renderFailures(outcome.failed)
+      let outcome: RestoreOutcome | undefined
+      try {
+        outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
+      } catch (error) {
+        // Snapshots written by a newer build: fail the FILE RESTORE closed
+        // (nothing was changed) while the conversation rewind above already
+        // succeeded — the two are independent.
+        if (!(error instanceof UnknownStoreVersionError)) throw error
+        const version = await store.readStoreVersion(agent.session.id)
+        restore = `；${t('storeUnsupported', { version: version ?? error.version })}`
+      }
+      if (outcome !== undefined) {
+        // The restore wrote through plain node:fs, invisible to the harness
+        // observation policy: re-sync it so the session's next write of a
+        // restored/deleted file is not judged against the stale pre-restore
+        // observation (see syncRestoreObservations).
+        await syncRestoreObservations(ctx, fs, agent, outcome)
+        const parts: string[] = []
+        if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
+        if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
+        if (outcome.skipped.length > 0) parts.push(t('skip.count', { count: outcome.skipped.length }))
+        restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
+        restore += renderFailures(outcome.failed)
+      }
     }
 
     // Every rewind withdraws the target message and everything after it; its
@@ -618,7 +709,16 @@ async function handleRewind(
     } catch (error) {
       return rewindErrorResult(error)
     }
-    const impacts = await store.impactsAfter(session.id, plan.targetSeq)
+    const impacts = await store.impactsAfter(session.id, plan.targetSeq).catch((error: unknown) => {
+      // A store format newer than this build: report it instead of pretending
+      // there is nothing to restore (the preview must not lie in either
+      // direction). Nothing is changed either way.
+      if (error instanceof UnknownStoreVersionError) return undefined
+      throw error
+    })
+    if (impacts === undefined) {
+      return { kind: 'error', text: t('storeUnsupported', { version: await store.readStoreVersion(session.id) ?? 0 }) }
+    }
     return { kind: 'success', text: formatPlan(plan, impacts) }
   }
 
@@ -974,9 +1074,21 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     void (async () => {
       try {
         // Stamp snapshots recorded after this point with the loaded session's
-        // format, so a future format change is detected; then clear any
-        // snapshots anchored under a different (now-migrated) format.
+        // format, so a future format change is detected.
         store.setFormatVersion(session.header.version)
+        // Plugin store-format guard FIRST: snapshots written by a NEWER build
+        // are never touched (no clear, no write, no restore plan — ADR-10).
+        // The order matters: the session-format reconcile below CLEARS the
+        // whole session dir on a mismatch, which would delete snapshots this
+        // build cannot even read.
+        try {
+          await store.assertKnownStoreVersion(session.id)
+        } catch (error) {
+          ctx.logger.warn(`[dsh-rewind] file restore disabled for ${session.id}: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+        // Clear snapshots anchored under a different (now-migrated) session
+        // format: their seq references would be mis-mapped by the migration.
         const result = await store.reconcileFormatVersion(session.id, session.header.version)
         if (result.cleared) {
           ctx.logger.warn(`[dsh-rewind] cleared snapshots for ${session.id}: session format changed (v${session.header.version})`)
@@ -1030,7 +1142,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     fsService = fs
     scope.on('tools/execute', async (exec: ToolExecution, next): Promise<ToolExecutionResult> => {
       try {
-        await captureBefore(fs, exec, pending)
+        await captureBefore(fs, store, exec, pending)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] before-capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }
@@ -1056,10 +1168,13 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       // still produces a post-result, so the body path keeps post-execute) —
       // short-circuits the registry's catch straight to `final-result`,
       // skipping `tools/post-execute`; its before-capture would otherwise leak
-      // in `pending` forever (holding a full file content in memory).
-      // `tools/result` fires on BOTH the normal and the throw path: delete
-      // here as the safety net (a no-op when commitEntry already consumed it).
-      pending.delete(`${exec.agent?.id ?? 'anon'}:${exec.callId}`)
+      // in `pending` forever (staged bytes on disk, not just memory).
+      // `tools/result` fires on BOTH the normal and the throw path: drop the
+      // staged copy here as the safety net (a no-op once commit consumed it).
+      const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
+      const capture = pending.get(key)
+      pending.delete(key)
+      void discardCapture(capture)
       return undefined
     })
   })

@@ -13,8 +13,10 @@
  *   around-dispatch stage, so an approval `ask` short-circuit cannot skip it
  *   and a denied call never records.
  * - The entry is committed to disk at `tools/post-execute` under the turn's
- *   anchor seq: `<root>/<sessionId>/<anchorSeq>/<callId>.json`, carrying the
- *   path and the before content (`before: null` = the file was created).
+ *   anchor seq: `<root>/<sessionId>/<anchorSeq>/<callId>.json` carries the
+ *   metadata, and the before content lives beside it as a RAW BYTE sidecar
+ *   (`<callId>.before`, copied with `copyFile`). Content never travels through
+ *   a JS string, so binary and non-UTF-8 files round-trip byte-exactly.
  * - Because entries live on disk under the dsh data directory, they survive a
  *   host restart, are bounded (the newest 100 anchor groups per session are
  *   kept), and restores read/write the real file system with plain `node:fs`
@@ -26,17 +28,18 @@
  * file (e.g. `.env`) is a model-permission concern (see `SECURITY.md`).
  *
  * Crash safety (this module's own engineering asset):
- *  - Checkpoint commits are ATOMIC: the entry JSON is written to a sibling
- *    temp file and renamed over the target, so a host crash mid-write can
- *    never leave a readable half-written entry — at worst an inert `.tmp`
- *    leftover that the next commit of the same file overwrites and that no
- *    reader ever picks up.
+ *  - Checkpoint commits are ATOMIC: the sidecar is fully written first, then
+ *    the entry JSON is written to a sibling temp file and renamed over the
+ *    target, so a host crash mid-write can never leave a readable entry
+ *    without its bytes — at worst an unreferenced orphan sidecar, or an inert
+ *    `.tmp` leftover that the next commit of the same file overwrites and that
+ *    no reader ever picks up.
  *  - Every restore pass is JOURNALED. Before mutating anything the store
- *    captures the pre-restore ("rescue") state of each planned path and
- *    persists an intent journal (`restore-journal-<op>.json` in the session
- *    dir), then marks each action done as it is applied. A crash at any point
- *    leaves the journal on disk; after a host restart
- *    `reconcileRestores(sessionId)` re-derives from the REAL disk which
+ *    captures the pre-restore ("rescue") state of each planned path as a raw
+ *    byte copy and persists an intent journal (`journal-<op>.json` in the
+ *    session dir) holding only references, then marks each action done as it
+ *    is applied. A crash at any point leaves the journal on disk; after a host
+ *    restart `reconcileRestores(sessionId)` re-derives from the REAL disk which
  *    paths already match the target and which are still pending (reporting
  *    "restored up to where, what changed"), auto-heals journals whose goal is
  *    already reached, and `continueRestore` / `rollbackRestore` finish the
@@ -51,17 +54,50 @@
  * creation. Symlinked and hard-linked paths are skipped and reported, never
  * written through.
  *
+ * Format compatibility: entries written before this module stored bytes
+ * (released v1: `{callId, anchorSeq, path, before: string | null}` plus the
+ * `restore-journal-` prefix) are still READ — their string content is the
+ * exact UTF-8 bytes it always was, except for records that were decoded
+ * lossily (they contain U+FFFD: comparable, but never written back). New
+ * writes are always the byte format; the marker contract that keeps a
+ * downgraded v1 build from touching the workspace lives in
+ * `tests/downgrade-safety.test.ts`.
+ *
  * @module dsh-rewind/snapshot
  */
 
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
-import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** Sub-directory of the harness home holding this plugin's snapshots. */
 const SNAPSHOT_DIR_NAME = 'rewind-snapshots'
+
+/** Suffix of the raw byte copy holding one entry's before-content. */
+const SIDECAR_SUFFIX = '.before'
+
+/** Session-dir sub-directory holding captures that are staged but not committed. */
+const PENDING_DIR = '.pending'
+
+/** Session-dir sub-directory holding one pre-restore ("rescue") copy per op. */
+const RESCUE_DIR = 'rescue'
+
+/** Journal-file prefix of the current format. */
+const JOURNAL_PREFIX = 'journal-'
+
+/** Journal-file prefix written by the released v1 build (read-only compatibility). */
+const LEGACY_JOURNAL_PREFIX = 'restore-journal-'
+
+/** Age after which an uncommitted `.pending/` capture is collected by `prune`. */
+const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+/** Chunk size of the streaming byte comparisons (never load a whole file). */
+const COMPARE_CHUNK_BYTES = 64 * 1024
+
+/** The Unicode replacement character a lossy UTF-8 decode produces. */
+const REPLACEMENT_CHAR = '\uFFFD'
 
 /**
  * Default store root: `<harness home>/rewind-snapshots`. Resolved through
@@ -77,6 +113,71 @@ export const SNAPSHOT_ROOT_ENV = 'DSH_REWIND_SNAPSHOT_DIR'
 /** Number of newest anchor groups (user messages) kept per session. */
 export const MAX_ANCHOR_GROUPS = 100
 
+/**
+ * Current on-disk store format version (the session's `store` marker value and
+ * the `store` field of every entry this build writes). A value ABOVE this one
+ * means the snapshots were written by a NEWER build: readers must then fail
+ * closed (no file restore, nothing changed) instead of guessing what the extra
+ * fields mean. A missing marker (or `1`) means the released v1 string format,
+ * which is still read.
+ */
+export const CURRENT_STORE_VERSION = 2
+
+/**
+ * Thrown when snapshots carry a store format newer than this build understands
+ * (ADR-10: whole-operation fail-closed — never a partial restore, never a
+ * clear). The session rewind itself does not depend on snapshots and still
+ * works.
+ */
+export class UnknownStoreVersionError extends Error {
+  constructor(
+    /** The version found on disk. */
+    readonly version: number,
+    /** Where it was found (a marker or an entry file). */
+    readonly source: string,
+  ) {
+    super(`snapshot store version ${version} is newer than this plugin understands (${source})`)
+    this.name = 'UnknownStoreVersionError'
+  }
+}
+
+/**
+ * Recorded before-content — always bytes, never a decoded string:
+ *
+ * - `blob`: a raw byte copy inside the store (the format every new write uses).
+ * - `text`: the exact UTF-8 bytes of a released-v1 string record (a v1 record
+ *   that was decoded from valid UTF-8 is byte-exact, so restoring it is safe).
+ * - `lossyText`: a released-v1 string record that contains U+FFFD, i.e. one
+ *   the v1 build produced by a LOSSY decode of non-UTF-8 bytes. The original
+ *   bytes are unknowable, so it can be compared against the disk but must
+ *   never be written back as a restore target (that would destroy live data).
+ */
+export type ByteSource =
+  | { readonly kind: 'blob'; readonly path: string }
+  | { readonly kind: 'text'; readonly bytes: Buffer }
+  | { readonly kind: 'lossyText'; readonly text: string }
+
+/** Classify a released-v1 string record (U+FFFD means the decode lost bytes). */
+function textSourceOf(text: string): ByteSource {
+  return text.includes(REPLACEMENT_CHAR)
+    ? { kind: 'lossyText', text }
+    : { kind: 'text', bytes: Buffer.from(text, 'utf8') }
+}
+
+/** A staged raw byte copy waiting to be committed (`recordBackup`). */
+export interface PendingBackup {
+  /** Absolute path of the staged file (inside the session's `.pending/`). */
+  readonly file: string
+  /** Byte size of the staged content. */
+  readonly size: number
+  /**
+   * Permission bits of the source file (`stat().mode & 0o7777`), captured
+   * best-effort. Restored alongside the content — never on its own, and never
+   * as part of the change decision (ADR-9).
+   */
+  readonly mode?: number
+}
+
 /** One committed before-backup, keyed by tool call. */
 export interface CheckpointEntry {
   readonly callId: string
@@ -84,23 +185,52 @@ export interface CheckpointEntry {
   readonly anchorSeq: number
   /** Resolved display path (absolute) of the tracked file. */
   readonly path: string
-  /** Full content before the change; null when the file was created. */
-  readonly before: string | null
+  /** Byte source of the content before the change; null when the file was created. */
+  readonly before: ByteSource | null
+  /** Byte size of `before` (0 when the file was created). */
+  readonly size: number
+  /**
+   * Checkpoint-time location pin: the `realpath` of `dirname(path)` at the
+   * moment the entry was committed. A restore refuses the path when its parent
+   * directory no longer resolves there, because a repointed or moved ancestor
+   * would otherwise redirect the write (or the unlink) outside the recorded
+   * location — only the path's FINAL component is link-checked. Absent means
+   * "no pin": a released-v1 entry, a v2 entry written before this field
+   * existed, or a commit whose parent could not be resolved; the restore then
+   * falls back to the final-component check alone.
+   */
+  readonly parent?: string
+  /**
+   * Permission bits recorded at capture time, when known. Applied only when
+   * the CONTENT is restored (a mode-only difference is never a reason to plan
+   * a restore); a missing value means "leave the live mode alone".
+   */
+  readonly mode?: number
+  /**
+   * Set when this entry's sidecar holds re-encoded LOSSY text (a released-v1
+   * record that was decoded with replacement characters, e.g. after `prune`
+   * materialized its link). The bytes are comparable but must never be written
+   * back: a reader turns such an entry into a `lossyText` source again.
+   */
+  readonly lossy?: boolean
   /** Epoch ms the entry was committed (stable ordering within a group). */
   readonly time: number
+  /**
+   * Absolute file this entry was READ from (in-memory only, never serialized):
+   * a dedup reference must name the file that actually exists, which for an
+   * entry written by an older build is not necessarily the name the current
+   * naming function would produce.
+   */
+  readonly file?: string
 }
 
 /**
  * One in-place dedup link, keyed by tool call. When a tracked file is
  * recorded with a `before` content identical to the immediately-prior entry
  * for that path, the entry is stored as a LINK instead of a full copy: it
- * carries no `before`, only a `ref` naming the prior entry file
+ * carries no content, only a `ref` naming the prior entry file
  * (`<anchorSeq>/<callId>.json`). The linear (predecessor-chained) ref makes
  * restore resolution and prune materialization rewrite-free.
- *
- * The real-entry format ({@link CheckpointEntry}) is unchanged so existing
- * data reads identically; links are a NEW entry kind only the current build
- * understands (old-build reads of links are explicitly out of scope).
  */
 export interface LinkEntry {
   readonly callId: string
@@ -108,7 +238,15 @@ export interface LinkEntry {
   readonly path: string
   /** `<anchorSeq>/<callId>.json` of the immediately-prior entry for the path. */
   readonly ref: string
+  /**
+   * Checkpoint-time location pin (see {@link CheckpointEntry.parent}); a link
+   * records its own, so a materialized or resolved entry never loses the
+   * location the path was committed under.
+   */
+  readonly parent?: string
   readonly time: number
+  /** Absolute file this link was read from (in-memory only, never serialized). */
+  readonly file?: string
 }
 
 /** Any on-disk entry: a full before-backup or an in-place dedup link. */
@@ -172,15 +310,25 @@ export interface RestoreJournalAction {
   readonly path: string
   readonly action: 'restore' | 'delete'
   /** Target content for a restore; null for a delete. */
-  readonly before: string | null
+  readonly before: ByteSource | null
   /**
-   * Pre-restore disk state ("rescue"): the content the file had right before
-   * the restore started, or null when it was absent. Rollback writes this
-   * back, so the pre-restore state is recoverable exactly.
+   * Pre-restore disk state ("rescue"): a raw byte copy of what the file had
+   * right before the restore started, or null when it was absent. Rollback
+   * writes this back, so the pre-restore state is recoverable exactly.
    */
-  readonly rescue: string | null
+  readonly rescue: ByteSource | null
   /** Set when the rescue capture failed: rollback then skips this path. */
   rescueError?: string
+  /** Permission bits the restored content should end up with, when recorded. */
+  readonly mode?: number
+  /**
+   * Checkpoint-time location pin copied from the entry the action was planned
+   * from (see {@link CheckpointEntry.parent}): a continue or rollback after a
+   * restart re-checks it before touching the path.
+   */
+  readonly parent?: string
+  /** Permission bits the file had BEFORE the restore, for a faithful rollback. */
+  readonly rescueMode?: number
   /** True once the action's fs op completed and was marked. */
   done: boolean
   /** Per-action failure message; the restore pass never aborts. */
@@ -189,7 +337,8 @@ export interface RestoreJournalAction {
 
 /** Durable journal for one attempted restore (written atomically). */
 export interface RestoreJournal {
-  readonly version: 1
+  /** On-disk schema version: 2 = byte references, 1 = inline legacy strings. */
+  readonly version: 1 | 2
   readonly id: string
   readonly sessionId: string
   readonly targetSeq: number
@@ -199,6 +348,13 @@ export interface RestoreJournal {
   readonly actions: RestoreJournalAction[]
   /** Set when a rollback pass failed partway (state becomes `recovery-required`). */
   rollbackError?: string
+  /**
+   * Absolute file this journal was read from (in-memory only, never
+   * serialized): a legacy `restore-journal-` file is updated IN PLACE so an
+   * op that was interrupted before the upgrade never ends up with two
+   * divergent versions on disk.
+   */
+  sourceFile?: string
 }
 
 /**
@@ -228,36 +384,127 @@ export interface RestoreReconcileReport {
 }
 
 /**
- * Current-on-disk state probe used by restore planning. Injected so the plan
- * logic runs against a fake FS in tests; the production default reads the
- * real file system with plain `node:fs` (see {@link defaultProbe}).
+ * Current-on-disk state probe used by restore planning and reconciliation.
+ * Injected so the logic runs against a fake FS in tests; the production
+ * default reads the real file system with plain `node:fs` (see
+ * {@link defaultProbe}) and compares byte streams, never whole files in memory.
  */
 export interface DiskProbe {
   /**
-   * Full text of the file, or undefined when the file does not exist.
-   * Any thrown error is treated as a probe failure: restore planning then
-   * conservatively treats the file as DIFFERING from its record (a restore
-   * still attempts the write / a delete still attempts the unlink), so an
-   * unreadable file is never silently skipped.
+   * Compare the recorded content with the file currently at `path`.
+   *
+   * - `true`  = the disk matches the record byte-for-byte (for a `null`
+   *   source: the path is absent).
+   * - `false` = it differs — including "the record says the file did not
+   *   exist but it does" and "the record has content but the file is gone".
+   * - `undefined` = the comparison could not be decided (IO/permission
+   *   failure). Callers stay conservative: a restore is still attempted and a
+   *   delete still attempted, so an unreadable file is never silently skipped.
+   *
+   * A `lossyText` source is compared with the same lossy decode the released
+   * v1 build used (its original bytes cannot be recovered).
    */
-  readText(path: string): Promise<string | undefined>
+  matches(source: ByteSource | null, path: string): Promise<boolean | undefined>
+  /**
+   * Stage a raw byte copy of the file at `path` into `dest` (the store's
+   * rescue area) without loading it into memory.
+   */
+  copy(path: string, dest: string): Promise<CopyOutcome>
   /** True when the path is a symlink or a hard link (never planned/restored). */
   isLink(path: string): Promise<boolean>
 }
 
+/** Result of staging one on-disk byte copy. */
+export type CopyOutcome =
+  | { readonly kind: 'copied'; readonly size: number }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'failed'; readonly message: string }
+
 /** One restore action the planner derived from record + disk reconciliation. */
 export type PlannedAction =
-  | { readonly path: string; readonly action: 'restore'; readonly before: string }
-  | { readonly path: string; readonly action: 'delete' }
+  | { readonly path: string; readonly action: 'restore'; readonly before: ByteSource; readonly mode?: number; readonly parent?: string }
+  | { readonly path: string; readonly action: 'delete'; readonly parent?: string }
 
-/** Production probe: real reads via node:fs, links detected by lstat + nlink. */
+/** Streaming byte equality of two files (never loads either one whole). */
+async function sameFileBytes(aPath: string, bPath: string): Promise<boolean> {
+  const sizes = await Promise.all([stat(aPath), stat(bPath)])
+  if (sizes[0].size !== sizes[1].size) return false
+  const [a, b] = await Promise.all([open(aPath, 'r'), open(bPath, 'r')])
+  try {
+    const aChunk = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES)
+    const bChunk = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES)
+    for (;;) {
+      const [ra, rb] = await Promise.all([
+        a.read(aChunk, 0, COMPARE_CHUNK_BYTES, null),
+        b.read(bChunk, 0, COMPARE_CHUNK_BYTES, null),
+      ])
+      if (ra.bytesRead !== rb.bytesRead) return false
+      if (ra.bytesRead === 0) return true
+      if (!aChunk.subarray(0, ra.bytesRead).equals(bChunk.subarray(0, rb.bytesRead))) return false
+    }
+  } finally {
+    await Promise.all([a.close(), b.close()])
+  }
+}
+
+/** Streaming byte equality of a file against an in-memory buffer. */
+async function sameFileBuffer(path: string, bytes: Buffer): Promise<boolean> {
+  const st = await stat(path)
+  if (st.size !== bytes.length) return false
+  const handle = await open(path, 'r')
+  try {
+    const chunk = Buffer.allocUnsafe(COMPARE_CHUNK_BYTES)
+    let offset = 0
+    for (;;) {
+      const read = await handle.read(chunk, 0, Math.min(COMPARE_CHUNK_BYTES, bytes.length - offset), offset)
+      if (read.bytesRead === 0) return offset === bytes.length
+      if (!chunk.subarray(0, read.bytesRead).equals(bytes.subarray(offset, offset + read.bytesRead))) return false
+      offset += read.bytesRead
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+/** True when the error means "the path does not exist". */
+function isEnoent(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+}
+
+/** Production probe: real byte comparisons via node:fs, links via lstat + nlink. */
 export const defaultProbe: DiskProbe = {
-  async readText(path: string): Promise<string | undefined> {
+  async matches(source: ByteSource | null, path: string): Promise<boolean | undefined> {
     try {
-      return await readFile(path, 'utf8')
+      if (source === null) {
+        // A "created" record matches when the file is still absent.
+        await stat(path)
+        return false
+      }
+      if (source.kind === 'blob') return await sameFileBytes(path, source.path)
+      if (source.kind === 'text') return await sameFileBuffer(path, source.bytes)
+      // Legacy lossy string: compare with the same decode the v1 build used.
+      return (await readFile(path)).toString('utf8') === source.text
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
+      // A missing file differs from any recorded content, but is exactly what a
+      // `null` source records; anything else is an undecidable probe failure.
+      if (isEnoent(error)) return source === null ? true : false
+      return undefined
+    }
+  },
+  async copy(path: string, dest: string): Promise<CopyOutcome> {
+    try {
+      await copyFile(path, dest)
+      const st = await stat(dest)
+      return { kind: 'copied', size: st.size }
+    } catch (error) {
+      if (isEnoent(error)) {
+        // ENOENT covers two very different cases: the SOURCE is gone (nothing
+        // to rescue — "absent") or `dest`'s parent directory does not exist (a
+        // real failure). Only a missing source is "absent".
+        const source = await stat(path).catch(() => undefined)
+        if (source === undefined) return { kind: 'absent' }
+      }
+      return { kind: 'failed', message: error instanceof Error ? error.message : String(error) }
     }
   },
   isLink: isLinkPath,
@@ -297,55 +544,289 @@ async function writeJsonAtomic(file: string, data: unknown, afterTempWrite?: () 
 
 const RESTORE_JOURNAL_STATES = new Set<RestoreJournalState>(['running', 'rollback-running', 'completed', 'rolled-back', 'recovery-required'])
 
+/** True when a serialized journal reference has a readable shape. */
+function isRawJournalRef(value: unknown): boolean {
+  if (value === null) return true
+  if (typeof value === 'string') return true
+  if (typeof value !== 'object') return false
+  const ref = value as Record<string, unknown>
+  return typeof ref.blob === 'string' || typeof ref.text === 'string'
+}
+
 /**
  * Structural validation of a parsed journal. Unlike checkpoint entries (whose
  * corruption is silently skipped), a corrupt journal is reported
  * fail-loud by `reconcileRestores` — silently dropping it would silently
  * erase the ability to recover the interrupted restore.
+ *
+ * Accepts both formats: `version: 2` (byte references), the released
+ * `version: 1` (inline strings) and the legacy prefix that carried no
+ * `version` at all — but never best-effort-coerces a malformed action.
  */
 function isRestoreJournal(value: unknown): value is RestoreJournal {
   if (typeof value !== 'object' || value === null) return false
   const v = value as Record<string, unknown>
   if (typeof v.id !== 'string' || typeof v.sessionId !== 'string' || typeof v.targetSeq !== 'number') return false
+  if (v.version !== undefined && v.version !== 1 && v.version !== 2) return false
   if (typeof v.state !== 'string' || !RESTORE_JOURNAL_STATES.has(v.state as RestoreJournalState)) return false
   if (!Array.isArray(v.actions)) return false
   return v.actions.every(action => {
     if (typeof action !== 'object' || action === null) return false
     const a = action as Record<string, unknown>
-    return typeof a.path === 'string'
-      && (a.action === 'restore' || a.action === 'delete')
-      && (typeof a.before === 'string' || a.before === null)
-      && (typeof a.rescue === 'string' || a.rescue === null)
-      && typeof a.done === 'boolean'
+    if (typeof a.path !== 'string' || (a.action !== 'restore' && a.action !== 'delete')) return false
+    if (typeof a.done !== 'boolean') return false
+    if (!isRawJournalRef(a.before) || !isRawJournalRef(a.rescue)) return false
+    // A restore action must carry target content; a delete must not.
+    if (a.action === 'restore' && a.before === null) return false
+    return true
   })
 }
 
+/** Convert one serialized journal reference into an in-memory byte source. */
+function refToSource(raw: unknown, sessionDir: string): ByteSource | null | undefined {
+  if (raw === null) return null
+  if (typeof raw === 'string') return textSourceOf(raw)
+  if (typeof raw !== 'object') return undefined
+  const ref = raw as Record<string, unknown>
+  if (typeof ref.blob === 'string') {
+    if (!isSafeBackupRef(ref.blob)) return undefined
+    return { kind: 'blob', path: join(sessionDir, ref.blob) }
+  }
+  if (typeof ref.text === 'string') return textSourceOf(ref.text)
+  return undefined
+}
+
+/** Serialize one byte source as a session-relative journal reference. */
+function sourceToRef(source: ByteSource | null, sessionDir: string, entryPath: string): unknown {
+  if (source === null) return null
+  if (source.kind === 'blob') {
+    const blob = relative(sessionDir, source.path)
+    if (!isSafeBackupRef(blob)) throw new Error(`unsafe backup ref ${blob} for ${entryPath}`)
+    return { blob }
+  }
+  return { text: source.kind === 'text' ? source.bytes.toString('utf8') : source.text }
+}
+
+/** Serialized (on-disk) form of a journal action. */
+function journalToJson(journal: RestoreJournal, sessionDir: string): Record<string, unknown> {
+  return {
+    version: 2,
+    id: journal.id,
+    sessionId: journal.sessionId,
+    targetSeq: journal.targetSeq,
+    startedAt: journal.startedAt,
+    ...(journal.finishedAt !== undefined ? { finishedAt: journal.finishedAt } : {}),
+    state: journal.state,
+    actions: journal.actions.map(action => ({
+      path: action.path,
+      action: action.action,
+      before: sourceToRef(action.before, sessionDir, action.path),
+      rescue: sourceToRef(action.rescue, sessionDir, action.path),
+      ...(action.rescueError !== undefined ? { rescueError: action.rescueError } : {}),
+      ...(action.mode !== undefined ? { mode: action.mode } : {}),
+      ...(action.rescueMode !== undefined ? { rescueMode: action.rescueMode } : {}),
+      ...(action.parent !== undefined ? { parent: action.parent } : {}),
+      done: action.done,
+      ...(action.failed !== undefined ? { failed: action.failed } : {}),
+    })),
+    ...(journal.rollbackError !== undefined ? { rollbackError: journal.rollbackError } : {}),
+  }
+}
+
+/** Parse a validated journal's raw shape into the in-memory form. */
+function journalFromJson(raw: Record<string, unknown>, sessionDir: string): RestoreJournal | undefined {
+  const actions: RestoreJournalAction[] = []
+  for (const value of raw.actions as Record<string, unknown>[]) {
+    const before = refToSource(value.before, sessionDir)
+    const rescue = refToSource(value.rescue, sessionDir)
+    if (before === undefined || rescue === undefined) return undefined
+    actions.push({
+      path: value.path as string,
+      action: value.action as 'restore' | 'delete',
+      before: value.action === 'delete' ? null : before,
+      rescue,
+      ...(typeof value.rescueError === 'string' ? { rescueError: value.rescueError } : {}),
+      ...(typeof value.mode === 'number' ? { mode: value.mode } : {}),
+      ...(typeof value.rescueMode === 'number' ? { rescueMode: value.rescueMode } : {}),
+      ...(typeof value.parent === 'string' && value.parent.length > 0 ? { parent: value.parent } : {}),
+      done: value.done as boolean,
+      ...(typeof value.failed === 'string' ? { failed: value.failed } : {}),
+    })
+  }
+  const version = raw.version === 1 ? 1 : 2
+  return {
+    version,
+    id: raw.id as string,
+    sessionId: raw.sessionId as string,
+    targetSeq: raw.targetSeq as number,
+    startedAt: typeof raw.startedAt === 'number' ? raw.startedAt : 0,
+    ...(typeof raw.finishedAt === 'number' ? { finishedAt: raw.finishedAt } : {}),
+    state: raw.state as RestoreJournalState,
+    actions,
+    ...(typeof raw.rollbackError === 'string' ? { rollbackError: raw.rollbackError } : {}),
+  }
+}
+
+/** True when a session-dir member is a restore journal (either prefix). */
+function isJournalName(name: string): boolean {
+  if (!name.endsWith('.json')) return false
+  return name.startsWith(JOURNAL_PREFIX) || name.startsWith(LEGACY_JOURNAL_PREFIX)
+}
+
+/** The op id encoded in a journal file name. */
+function journalOpIdOf(name: string): string {
+  const prefix = name.startsWith(LEGACY_JOURNAL_PREFIX) ? LEGACY_JOURNAL_PREFIX : JOURNAL_PREFIX
+  return name.slice(prefix.length, -'.json'.length)
+}
+
+/** The entry file name one call id maps to (the single naming function). */
+function entryFileName(callId: string): string {
+  // The digest disambiguates call ids that `safeFileId` would collapse onto the
+  // same name (`a:b` vs `a_b`). References always name a file explicitly and
+  // readers never infer a name, so pre-digest entries keep working.
+  return `${safeFileId(callId)}-${shortHash(callId)}.json`
+}
+
+/** Stable 8-hex digest of an arbitrary string (ids, paths, capture keys). */
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 8)
+}
+
+/** The sidecar file name of one entry file (`<base>.json` → `<base>.before`). */
+function sidecarName(entryFile: string): string {
+  return `${entryFile.slice(0, -'.json'.length)}${SIDECAR_SUFFIX}`
+}
+
+/** Anchor seq encoded in a link `ref` (`<anchorSeq>/<file>.json`). */
+function refAnchorOf(ref: string): number {
+  const slash = ref.indexOf('/')
+  return slash === -1 ? Number.NaN : Number(ref.slice(0, slash))
+}
+
+/** Serialize one in-memory entry for disk (the current byte format). */
+function entryToJson(entry: CheckpointEntry): Record<string, unknown> {
+  const base = {
+    store: 2,
+    callId: entry.callId,
+    file: entry.path,
+    time: entry.time,
+    ...(entry.parent !== undefined ? { parent: entry.parent } : {}),
+    ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+    ...(entry.lossy === true ? { lossy: true } : {}),
+  }
+  if (entry.before === null) return { ...base, blob: null, size: 0 }
+  if (entry.before.kind !== 'blob') throw new Error(`entry for ${entry.path} is not blob-backed`)
+  return { ...base, blob: basename(entry.before.path), size: entry.size }
+}
+
+/** Serialize one in-memory dedup link for disk (the current byte format). */
+function linkToJson(link: LinkEntry): Record<string, unknown> {
+  return {
+    store: 2,
+    callId: link.callId,
+    file: link.path,
+    ref: link.ref,
+    time: link.time,
+    ...(link.parent !== undefined ? { parent: link.parent } : {}),
+  }
+}
+
 /**
- * Read one committed entry, or undefined when missing/corrupt. Returns a
- * {@link LinkEntry} when the file carries `ref` (no `before`), else a
- * {@link CheckpointEntry} — a real entry whose `before` is a string (content)
- * or null (the file was created).
+ * Read one committed entry, or undefined when missing/corrupt. Accepts both
+ * formats: the current byte format (`store: 2`, `file`, `blob` + sidecar) and
+ * the released v1 format (`anchorSeq` + inline `before` string).
+ *
+ * The byte format deliberately does NOT carry `anchorSeq` (it equals the
+ * parent directory) and does NOT reuse the v1 key names — a downgraded v1
+ * build rejects such an entry instead of reading it as "created", which is
+ * what keeps a downgrade from deleting workspace files. See
+ * `tests/downgrade-safety.test.ts`.
  */
-async function readEntry(file: string): Promise<StoredEntry | undefined> {
+async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry | undefined> {
+  let parsed: Record<string, unknown>
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
-    if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
-    const base = {
-      callId: String(parsed.callId ?? ''),
-      anchorSeq: parsed.anchorSeq,
-      path: parsed.path,
-      time: typeof parsed.time === 'number' ? parsed.time : 0,
-    }
-    if (typeof parsed.ref === 'string') {
-      return { ...base, ref: parsed.ref }
-    }
-    return {
-      ...base,
-      before: typeof parsed.before === 'string' ? parsed.before : null,
-    }
+    const value: unknown = JSON.parse(await readFile(file, 'utf8'))
+    if (typeof value !== 'object' || value === null) return undefined
+    parsed = value as Record<string, unknown>
   } catch {
     return undefined
   }
+  // A newer format is NOT "no entry": refusing to guess keeps the caller from
+  // planning anything against a shape it does not understand (fail-closed).
+  if (typeof parsed.store === 'number' && parsed.store > CURRENT_STORE_VERSION) {
+    throw new UnknownStoreVersionError(parsed.store, file)
+  }
+  const callId = String(parsed.callId ?? '')
+  const time = typeof parsed.time === 'number' ? parsed.time : 0
+  const origin = { file }
+  if (parsed.store === 2) {
+    if (typeof parsed.file !== 'string') return undefined
+    // Optional metadata: a malformed pin is ignored (the path falls back to the
+    // final-component check), never treated as corruption.
+    const parent = typeof parsed.parent === 'string' && parsed.parent.length > 0 ? parsed.parent : undefined
+    const base = { callId, anchorSeq, path: parsed.file, time, ...(parent !== undefined ? { parent } : {}), ...origin }
+    if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
+    if (parsed.blob === null) {
+      // "Did not exist" is only meaningful with a zero size, and never with a
+      // LOSSY flag (a record that lost bytes cannot also assert absence). A
+      // contradiction is corruption, and guessing an entry's kind from a
+      // corrupt field is exactly how a restore turns into a delete.
+      if (parsed.lossy === true) return undefined
+      if (typeof parsed.size === 'number' && parsed.size !== 0) return undefined
+      return { ...base, before: null, size: 0 }
+    }
+    if (typeof parsed.blob !== 'string') return undefined
+    // Invariant: the sidecar sits next to its entry, named after it.
+    if (parsed.blob !== sidecarName(basename(file))) return undefined
+    const size = typeof parsed.size === 'number' && parsed.size >= 0 ? parsed.size : 0
+    const mode = typeof parsed.mode === 'number' ? parsed.mode : undefined
+    if (parsed.lossy === true) {
+      // The sidecar holds the UTF-8 re-encoding of a LOSSY v1 string: read it
+      // back as that string so the planner can compare it but never write it.
+      // An unreadable sidecar makes the entry unusable — skipped, never a
+      // delete and never a whole-operation failure.
+      try {
+        const text = await readFile(join(dirname(file), parsed.blob), 'utf8')
+        return { ...base, before: { kind: 'lossyText', text }, size, lossy: true, ...(mode !== undefined ? { mode } : {}) }
+      } catch {
+        return undefined
+      }
+    }
+    return {
+      ...base,
+      before: { kind: 'blob', path: join(dirname(file), parsed.blob) },
+      size,
+      ...(mode !== undefined ? { mode } : {}),
+    }
+  }
+  // Released v1: `path` + `anchorSeq`, content inline as a decoded string.
+  if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
+  const base = { callId, anchorSeq: parsed.anchorSeq, path: parsed.path, time, ...origin }
+  if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
+  // Never coerce a malformed `before` to null: null means "was created", and
+  // guessing it from a corrupt field is how a restore turns into a delete.
+  if (parsed.before !== null && typeof parsed.before !== 'string') return undefined
+  if (parsed.before === null) return { ...base, before: null, size: 0 }
+  return { ...base, before: textSourceOf(parsed.before), size: Buffer.byteLength(parsed.before, 'utf8') }
+}
+
+/** Recursive byte total of a directory tree (never follows symlinks). */
+async function dirBytes(dir: string): Promise<number> {
+  let names: string[]
+  try {
+    names = await readdir(dir)
+  } catch {
+    return 0
+  }
+  let total = 0
+  for (const name of names) {
+    const full = join(dir, name)
+    const st = await lstat(full).catch(() => undefined)
+    if (st === undefined) continue
+    if (st.isDirectory()) total += await dirBytes(full)
+    else if (st.isFile()) total += st.size
+  }
+  return total
 }
 
 /**
@@ -365,6 +846,63 @@ async function isLinkPath(path: string): Promise<boolean> {
 }
 
 /**
+ * The nearest ancestor of `dir` (inclusive) that exists on disk, or undefined
+ * when even the root is gone. Used to decide whether a MISSING parent chain can
+ * be recreated safely (see {@link parentStillMatches}).
+ */
+async function nearestExistingAncestor(dir: string): Promise<string | undefined> {
+  let current = dir
+  for (;;) {
+    const st = await lstat(current).catch(() => undefined)
+    if (st !== undefined) return current
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
+}
+
+/**
+ * True when `path`'s parent directory still resolves where it did at checkpoint
+ * time (`recorded`, the entry's location pin). Only the path's FINAL component
+ * is link-checked (see {@link isLinkPath}); without this a repointed ancestor
+ * directory would redirect a restore — or, worse, an unlink — outside the
+ * recorded location.
+ *
+ * - no pin (a legacy entry, or a commit that could not resolve its parent) →
+ *   true: the released behavior is preserved;
+ * - the parent resolves to the pinned location → true. A STABLE symlinked
+ *   ancestor resolves identically on both sides (the pin is a `realpath`), so
+ *   a symlinked workspace root is never a false skip;
+ * - the parent resolves elsewhere → false;
+ * - the parent chain is gone → true only while the nearest surviving ancestor
+ *   still resolves INSIDE the pinned location, which keeps "recreate a deleted
+ *   parent directory" working without following a repointed ancestor;
+ * - anything undecidable (a link loop, an unreadable component) → false:
+ *   refuse rather than write into a location that cannot be verified.
+ */
+async function parentStillMatches(path: string, recorded: string | undefined): Promise<boolean> {
+  if (recorded === undefined) return true
+  const dir = dirname(path)
+  try {
+    return await realpath(dir) === recorded
+  } catch (error) {
+    if (!isEnoent(error)) return false
+  }
+  const ancestor = await nearestExistingAncestor(dir)
+  if (ancestor === undefined) return false
+  try {
+    const real = await realpath(ancestor)
+    // Only a real `..` SEGMENT escapes: a directory merely NAMED `..foo` is a
+    // legitimate location inside the surviving ancestor.
+    const inside = relative(real, recorded)
+    const escapes = inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)
+    return inside !== '' && !escapes
+  } catch {
+    return false
+  }
+}
+
+/**
  * True when a dedup-link `ref` is a SAFE relative reference to a checkpoint
  * entry — `<digits>/<callId>.json`, a single level below the session dir, with
  * no traversal or absolute segment. The plugin always writes refs this way
@@ -375,6 +913,22 @@ async function isLinkPath(path: string): Promise<boolean> {
  */
 function isSafeLinkRef(ref: string): boolean {
   return /^[0-9]+\/[a-zA-Z0-9._-]+\.json$/.test(ref)
+}
+
+/**
+ * True when a journal's byte reference is SAFE and relative to the session
+ * dir: either `<digits>/<name>.before` (an entry sidecar) or
+ * `rescue/<opId>/<index>.before` (a rescue copy). Validated on both write and
+ * read, so a corrupt or hostile journal can never point a restore or a
+ * rollback outside the store (`..`, absolute paths and unknown roots are
+ * rejected).
+ */
+function isSafeBackupRef(ref: string): boolean {
+  if (ref.length === 0 || ref.startsWith('/') || ref.includes('\\')) return false
+  const segments = ref.split('/')
+  if (segments.length !== 2 && segments.length !== 3) return false
+  if (segments.length === 3 && segments[0] !== RESCUE_DIR) return false
+  return segments.every(segment => segment !== '.' && segment !== '..' && /^[a-zA-Z0-9._-]+$/.test(segment))
 }
 
 /**
@@ -459,7 +1013,11 @@ async function dirSizeAndLastActive(dir: string): Promise<{ size: number; lastAc
       return
     }
     for (const name of names) {
-      if (name.startsWith('.')) continue
+      // Dot-prefixed leftovers are never store members; `.pending/` is the
+      // exception, and it must be visited so a staged capture counts as both
+      // activity and bytes (otherwise a session whose only recent write is a
+      // staged capture looks idle and is swept, and its size is under-reported).
+      if (name.startsWith('.') && name !== PENDING_DIR) continue
       await visit(join(current, name))
     }
   }
@@ -474,6 +1032,12 @@ async function dirSizeAndLastActive(dir: string): Promise<{ size: number; lastAc
 export class SnapshotStore {
   /** Debounce window for the per-commit prune (keeps the readdir+sort off the hot path). */
   private static readonly PRUNE_INTERVAL_MS = 1000
+
+  /** Session-format-version marker file inside the session dir. Non-`.json`, so it never counts as a checkpoint entry. */
+  private static readonly FORMAT_FILE = 'format'
+
+  /** Plugin STORE-format marker file inside the session dir (non-`.json`, same reasoning). */
+  private static readonly STORE_FILE = 'store'
 
   private lastPruneAt = 0
 
@@ -499,15 +1063,20 @@ export class SnapshotStore {
 
   /**
    * In-memory per-path "most recent entry" for content dedup, keyed by
-   * `<sessionId>\0<path>`. Each value holds the entry's effective `before`
-   * content and its own file ref, so a new record with the same content links
-   * to the immediately-prior entry (linear chain). Seeded lazily per session
-   * from the bounded on-disk window, so dedup survives a host restart.
+   * `<sessionId>\0<path>`. Each value holds the entry's effective byte source
+   * (a handle, not a copy) and its own file ref, so a new record with the same
+   * content links to the immediately-prior entry (linear chain). Seeded lazily
+   * per session from the bounded on-disk window, so dedup survives a host
+   * restart. A handle whose bytes vanished (pruned out of band) is treated as
+   * "never recorded" — dedup then stores MORE, never less.
    */
-  private readonly lastEntry = new Map<string, { content: string | null; ref: string }>()
+  private readonly lastEntry = new Map<string, { source: ByteSource | null; ref: string }>()
 
   /** Sessions whose dedup state has been seeded from disk this process. */
   private readonly seededSessions = new Set<string>()
+
+  /** Sessions whose store-format marker this process has already stamped. */
+  private readonly storeStamped = new Set<string>()
 
   /**
    * Session-format version snapshots are anchored under, stamped into each
@@ -543,7 +1112,63 @@ export class SnapshotStore {
 
   /** Absolute file ref (relative to the session dir) of an entry. */
   private entryRefOf(sessionId: string, callId: string, anchorSeq: number): string {
-    return `${anchorSeq}/${safeFileId(callId)}.json`
+    return `${anchorSeq}/${entryFileName(callId)}`
+  }
+
+  /**
+   * The session-relative ref of an entry READ from disk: the file that really
+   * holds it. A v1 entry keeps its released name, so recomputing the name from
+   * the call id would produce a dangling reference.
+   */
+  private refOfRead(sessionId: string, entry: StoredEntry): string {
+    if (entry.file !== undefined) return relative(this.sessionDir(sessionId), entry.file)
+    return this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
+  }
+
+  /** Drop every in-memory trace of one session (its directory is gone). */
+  private forgetSession(sessionId: string): void {
+    this.seededSessions.delete(sessionId)
+    this.storeStamped.delete(sessionId)
+    for (const key of [...this.lastEntry.keys()]) {
+      if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
+    }
+  }
+
+  /**
+   * Forget in-memory state for sessions whose directory no longer exists —
+   * after a sweep, or after the user removed a session dir out of band. A
+   * stale handle is SAFE (dedup and the boundary both fail toward storing
+   * more), but keeping it means the store holds state for a session it deleted
+   * and skips re-stamping that session's `format`/`store` markers.
+   */
+  private async forgetMissingSessions(): Promise<void> {
+    const known = new Set<string>([...this.seededSessions, ...this.storeStamped])
+    for (const key of this.lastEntry.keys()) {
+      const separator = key.indexOf('\0')
+      if (separator !== -1) known.add(key.slice(0, separator))
+    }
+    for (const sessionId of known) {
+      // "Cannot tell" keeps the (safe) state rather than failing the sweep
+      // whose deletions already happened.
+      const present = await this.exists(this.sessionDir(sessionId)).catch(() => true)
+      if (!present) this.forgetSession(sessionId)
+    }
+  }
+
+  /**
+   * Stage a capture slot for one tool call: create the session's `.pending/`
+   * area and return the absolute path the caller copies the before-bytes into
+   * (never through memory). The slot lives inside the session dir so the
+   * commit can `rename` it into the anchor group atomically; a slot that is
+   * never committed is either unlinked by its caller or collected by `prune`.
+   */
+  async stageCapture(sessionId: string, key: string): Promise<string> {
+    const dir = join(this.sessionDir(sessionId), PENDING_DIR)
+    await mkdir(dir, { recursive: true })
+    // The digest disambiguates two keys that `safeFileId` would collapse onto
+    // the same staged name (a collision would let the second capture overwrite
+    // the first one's bytes before either is committed).
+    return join(dir, `${safeFileId(key)}-${shortHash(key)}${SIDECAR_SUFFIX}`)
   }
 
   /**
@@ -557,12 +1182,12 @@ export class SnapshotStore {
     this.seededSessions.add(sessionId)
     try {
       // entriesAfter returns newest-first; the first entry per path is its
-      // most recent one. Resolve a link to its effective content.
+      // most recent one. Resolve a link to its effective byte source.
       for (const entry of await this.entriesAfter(sessionId, 0)) {
         const key = `${sessionId}\0${entry.path}`
         if (this.lastEntry.has(key)) continue
-        const content = await this.resolveBefore(sessionId, entry)
-        this.lastEntry.set(key, { content, ref: this.entryRefOf(sessionId, entry.callId, entry.anchorSeq) })
+        const source = await this.resolveBefore(sessionId, entry)
+        this.lastEntry.set(key, { source, ref: this.refOfRead(sessionId, entry) })
       }
     } catch {
       // Seeding is best-effort: an unreadable/corrupt session simply starts
@@ -582,60 +1207,178 @@ export class SnapshotStore {
     sessionId: string,
     entry: StoredEntry,
     seen = new Set<string>(),
-  ): Promise<string | null> {
-    if (!isLinkEntry(entry)) return entry.before
+  ): Promise<ByteSource | null> {
+    if (!isLinkEntry(entry)) return this.validatedSource(entry)
     const key = `${entry.anchorSeq}:${entry.callId}`
     if (seen.has(key)) throw new Error(`link cycle at ${entry.path} (${key})`)
     seen.add(key)
     if (!isSafeLinkRef(entry.ref)) throw new Error(`unsafe link ref ${entry.ref} for ${entry.path}`)
-    const referenced = await readEntry(join(this.sessionDir(sessionId), entry.ref))
+    const referenced = await readEntry(join(this.sessionDir(sessionId), entry.ref), refAnchorOf(entry.ref))
     if (referenced === undefined) throw new Error(`dangling link ${entry.ref} for ${entry.path}`)
     return this.resolveBefore(sessionId, referenced, seen)
   }
 
-  /** Commit one before-backup (or an in-place dedup link) under its anchor. */
-  async recordEntry(
+  /**
+   * Validate a real entry's byte source against the store's own files: a
+   * sidecar that is missing, not a regular file, or a different size than the
+   * metadata records is an INTEGRITY failure (thrown), never a silent skip and
+   * never a fallback to "the file was created" — a restore must not delete a
+   * file whose backup it cannot read.
+   */
+  private async validatedSource(entry: CheckpointEntry): Promise<ByteSource | null> {
+    const source = entry.before
+    if (source === null || source.kind !== 'blob') return source
+    const st = await stat(source.path).catch((error: unknown) => {
+      if (isEnoent(error)) throw new Error(`missing backup sidecar ${source.path} for ${entry.path}`)
+      throw error
+    })
+    if (!st.isFile()) throw new Error(`backup sidecar is not a file: ${source.path}`)
+    if (st.size !== entry.size) {
+      throw new Error(`backup sidecar size mismatch for ${entry.path} (recorded ${entry.size}, found ${st.size})`)
+    }
+    return source
+  }
+
+  /**
+   * True when two recorded byte sources are the same content. Comparison is
+   * STREAMING (size first, then chunks) so large files never enter memory.
+   * Any unreadable handle — or any legacy lossy source, whose original bytes
+   * are unknowable — answers `false`: dedup must fail toward storing more,
+   * never toward claiming "unchanged".
+   */
+  private async sourcesMatch(a: ByteSource | null, b: ByteSource | null): Promise<boolean> {
+    if (a === null || b === null) return a === null && b === null
+    try {
+      if (a.kind === 'blob' && b.kind === 'blob') return await sameFileBytes(a.path, b.path)
+      if (a.kind === 'text' && b.kind === 'text') return a.bytes.equals(b.bytes)
+      if (a.kind === 'blob' && b.kind === 'text') return await sameFileBuffer(a.path, b.bytes)
+      if (a.kind === 'text' && b.kind === 'blob') return await sameFileBuffer(b.path, a.bytes)
+      return false
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Write raw bytes to a sidecar path atomically (temp + rename): a crash
+   * between the steps leaves only a `.tmp` that no reader picks up.
+   */
+  private async writeSidecar(dest: string, source: ByteSource): Promise<void> {
+    const tmp = `${dest}.tmp`
+    if (source.kind === 'blob') await copyFile(source.path, tmp)
+    else if (source.kind === 'text') await writeFile(tmp, source.bytes)
+    else await writeFile(tmp, Buffer.from(source.text, 'utf8'))
+    await rename(tmp, dest)
+  }
+
+  /**
+   * Place one entry's sidecar next to its entry file: MOVE a staged capture
+   * (same filesystem, atomic) or write the bytes from a source. Returns the
+   * blob source and its size, or null for a created file. The sidecar is
+   * always complete before the entry JSON is written.
+   */
+  private async placeSidecar(
+    entryFile: string,
+    content: { readonly source: ByteSource | null; readonly staged?: { readonly file: string } },
+  ): Promise<{ readonly source: ByteSource; readonly size: number } | null> {
+    if (content.source === null) return null
+    const dest = join(dirname(entryFile), sidecarName(basename(entryFile)))
+    if (content.staged !== undefined) await rename(content.staged.file, dest)
+    else await this.writeSidecar(dest, content.source)
+    const st = await stat(dest)
+    return { source: { kind: 'blob', path: dest }, size: st.size }
+  }
+
+  /**
+   * Commit one entry (a full before-backup or an in-place dedup link) under
+   * its anchor group.
+   */
+  private async commit(
     sessionId: string,
-    entry: Omit<CheckpointEntry, 'time'>,
+    entry: { readonly callId: string; readonly anchorSeq: number; readonly path: string },
+    content: {
+      readonly source: ByteSource | null
+      readonly staged?: { readonly file: string }
+      readonly mode?: number
+    },
     opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
   ): Promise<void> {
     // Monotonic time (see lastEntryTime): strictly increasing per store
     // instance, so same-millisecond commits stay capture-ordered.
     const time = Math.max(Date.now(), this.lastEntryTime + 1)
     this.lastEntryTime = time
+    // The location pin: where this path's directory resolved at commit time.
+    // Best-effort — an unresolvable parent simply means "no pin" (legacy
+    // behavior), never a failed commit.
+    const parent = await realpath(dirname(entry.path)).catch(() => undefined)
     await this.ensureDedupSeeded(sessionId)
+    // Never write into a store a newer build owns: the marker would be
+    // overwritten and the formats mixed. The failure is loud (the host logs
+    // the failed commit) and costs snapshots, never workspace data.
+    await this.assertKnownStoreVersion(sessionId)
     const dir = this.anchorDir(sessionId, entry.anchorSeq)
     await mkdir(dir, { recursive: true })
-    const file = join(dir, `${safeFileId(entry.callId)}.json`)
+    const file = join(dir, entryFileName(entry.callId))
     const selfRef = this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
-    // Content dedup: when the new `before` equals the path's most recent
-    // recorded content, store a LINK to that prior entry instead of dup content.
-    // The prior entry is the immediately-preceding one, giving a linear chain.
+    // Content dedup: when the new content equals the path's most recent
+    // recorded content, store a LINK to that prior entry instead of a second
+    // copy. The prior entry is the immediately-preceding one (linear chain).
     // `dedup: false` skips the comparison and always writes a full copy — used
     // by the boundary, which only records CHANGED files and so never links.
     const key = `${sessionId}\0${entry.path}`
     const prior = this.lastEntry.get(key)
-    if (this.dedup && opts?.dedup !== false && prior !== undefined && prior.content === entry.before) {
+    // A staged capture is already a byte file, so it can be compared directly.
+    const incoming: ByteSource | null = content.source === null
+      ? null
+      : content.staged !== undefined ? { kind: 'blob', path: content.staged.file } : content.source
+    const link = this.dedup && opts?.dedup !== false && prior !== undefined
+      && await this.sourcesMatch(prior.source, incoming)
+    if (link) {
       const committed: LinkEntry = {
         callId: entry.callId,
         anchorSeq: entry.anchorSeq,
         path: entry.path,
         ref: prior.ref,
+        ...(parent !== undefined ? { parent } : {}),
         time,
       }
-      await writeJsonAtomic(file, committed, () => opts?.crash?.('after-temp-write'))
-      // The new link is now the most-recent entry for the path (same content).
-      this.lastEntry.set(key, { content: prior.content, ref: selfRef })
+      // The staged copy is redundant now: drop it before publishing the link
+      // (a crash in between leaves an inert orphan, never a lost backup).
+      if (content.staged !== undefined) await rm(content.staged.file, { force: true })
+      await writeJsonAtomic(file, linkToJson(committed), () => opts?.crash?.('after-temp-write'))
+      this.lastEntry.set(key, { source: prior.source, ref: selfRef })
     } else {
-      const committed: CheckpointEntry = { ...entry, time }
-      await writeJsonAtomic(file, committed, () => opts?.crash?.('after-temp-write'))
-      this.lastEntry.set(key, { content: entry.before, ref: selfRef })
+      const placed = await this.placeSidecar(file, content)
+      const committed: CheckpointEntry = {
+        callId: entry.callId,
+        anchorSeq: entry.anchorSeq,
+        path: entry.path,
+        before: placed?.source ?? null,
+        size: placed?.size ?? 0,
+        // Content that was already lossy when it reached the store (a v1
+        // string, or a materialized link to one) stays marked, so a later
+        // reader cannot mistake its re-encoded bytes for a faithful backup.
+        ...(incoming?.kind === 'lossyText' ? { lossy: true } : {}),
+        ...(content.mode !== undefined ? { mode: content.mode } : {}),
+        ...(parent !== undefined ? { parent } : {}),
+        time,
+      }
+      await writeJsonAtomic(file, entryToJson(committed), () => opts?.crash?.('after-temp-write'))
+      this.lastEntry.set(key, { source: committed.before, ref: selfRef })
     }
     // Stamp the session-format marker so this session's snapshots record the
     // session-format version they were written under — the value the
-    // `agent/session-start` reconcile compares against on the next load.
+    // `agent/session-start` reconcile compares against on the next load — and
+    // the plugin's own store-format marker, so a future format bump can fail
+    // closed before reading any entry.
     if (this.formatVersion !== null) {
       await this.markFormatVersion(sessionId, this.formatVersion)
+    }
+    // The store-format marker only ever moves to the CURRENT version in this
+    // build, so stamp it once per process per session.
+    if (!this.storeStamped.has(sessionId)) {
+      await this.markStoreVersion(sessionId, CURRENT_STORE_VERSION)
+      this.storeStamped.add(sessionId)
     }
     // Prune at most once per interval: a turn with many writes would otherwise
     // pay a readdir + sort on every commit. The 100-group cap still holds —
@@ -648,16 +1391,55 @@ export class SnapshotStore {
   }
 
   /**
-   * The effective content recorded by the path's MOST RECENT entry, or
-   * undefined when the path has never been recorded (a fresh tracking sight).
-   * This is the single in-memory "last known state" the boundary uses to
-   * decide whether a tracked file changed — the same source `recordEntry`
-   * dedups against, so there is one content copy and one comparison per
-   * decision, not two. Seeding is idempotent (once per session from disk).
+   * Commit one before-backup whose content the caller already holds as raw
+   * text (the boundary-friendly API: tests, synthetic records). The bytes are
+   * encoded UTF-8, exactly as the released v1 build did for text content.
    */
-  async lastKnownContent(sessionId: string, path: string): Promise<string | null | undefined> {
+  async recordEntry(
+    sessionId: string,
+    entry: {
+      readonly callId: string
+      readonly anchorSeq: number
+      readonly path: string
+      readonly before: string | null
+    },
+    opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
+  ): Promise<void> {
+    await this.commit(sessionId, entry, {
+      source: entry.before === null ? null : textSourceOf(entry.before),
+    }, opts)
+  }
+
+  /**
+   * Commit one before-backup whose content is an existing byte file (the
+   * capture and boundary paths): `backup.file` is MOVED into the anchor group
+   * (same filesystem, so this is atomic), or `null` when the file did not
+   * exist — a creation.
+   */
+  async recordBackup(
+    sessionId: string,
+    entry: { readonly callId: string; readonly anchorSeq: number; readonly path: string },
+    backup: PendingBackup | null,
+    opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
+  ): Promise<void> {
+    await this.commit(sessionId, entry, {
+      source: backup === null ? null : { kind: 'blob', path: backup.file },
+      ...(backup !== null ? { staged: { file: backup.file } } : {}),
+      ...(backup?.mode !== undefined ? { mode: backup.mode } : {}),
+    }, opts)
+  }
+
+  /**
+   * The byte source recorded by the path's MOST RECENT entry, or undefined
+   * when the path has never been recorded (a fresh tracking sight). This is
+   * the single in-memory "last known state" the boundary compares the disk
+   * against — the same source `recordEntry` dedups against, so there is one
+   * handle and one comparison per decision, not two. Seeding is idempotent
+   * (once per session from disk).
+   */
+  async lastKnownContent(sessionId: string, path: string): Promise<ByteSource | null | undefined> {
     await this.ensureDedupSeeded(sessionId)
-    return this.lastEntry.get(`${sessionId}\0${path}`)?.content
+    return this.lastEntry.get(`${sessionId}\0${path}`)?.source
   }
 
   /**
@@ -683,7 +1465,7 @@ export class SnapshotStore {
       const files = await readdir(this.anchorDir(sessionId, anchorSeq)).catch(() => [] as string[])
       for (const file of files) {
         if (!file.endsWith('.json')) continue
-        const entry = await readEntry(join(this.anchorDir(sessionId, anchorSeq), file))
+        const entry = await readEntry(join(this.anchorDir(sessionId, anchorSeq), file), anchorSeq)
         if (entry !== undefined) entries.push(entry)
       }
     }
@@ -719,9 +1501,15 @@ export class SnapshotStore {
    *   `delete` ONLY when the file currently exists; an already-absent file
    *   is a no-op — this kills the "ghost impact" of replaying an entry a
    *   previous rewind already consumed.
-   * - `before === 'X'` plans a `restore` ONLY when the current content
-   *   differs from X (or the file is missing); identical content is a no-op
-   *   — this keeps repeated rewinds idempotent.
+   * - a recorded byte source plans a `restore` ONLY when the current bytes
+   *   differ from it (or the file is missing); identical bytes are a no-op —
+   *   this keeps repeated rewinds idempotent.
+   * - A released-v1 record that lost bytes to a lossy decode (`lossyText`) is
+   *   compared with the same lossy decode but NEVER written back: a skip is
+   *   reported instead of destroying live bytes with U+FFFD content.
+   * - An unreadable / unresolvable record is a per-file FAILURE, never a
+   *   delete: planning a delete for a file we cannot restore is the one
+   *   mistake that loses data.
    * - Symlinked / hard-linked paths are never planned (they are reported as
    *   skipped by the restore pass, never written through).
    * - A probe failure (e.g. a permission error reading the file) plans the
@@ -738,49 +1526,72 @@ export class SnapshotStore {
     targetSeq: number,
     probe: DiskProbe,
   ): Promise<{ actions: PlannedAction[]; skipped: string[]; failed: { path: string; message: string }[] }> {
+    // Whole-operation fail-closed for a store this build does not understand:
+    // a partial restore of a half-known format is worse than no restore.
+    await this.assertKnownStoreVersion(sessionId)
     const actions: PlannedAction[] = []
     const skipped: string[] = []
     const failed: { path: string; message: string }[] = []
     for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
+      // A dedup link resolves to its terminal real content; a dangling link,
+      // an unreadable sidecar and a corrupt record are all per-file integrity
+      // failures, never a silent skip and never a delete.
+      let source: ByteSource | null
+      try {
+        source = await this.resolveBefore(sessionId, entry)
+      } catch (error) {
+        failed.push({ path: entry.path, message: error instanceof Error ? error.message : String(error) })
+        continue
+      }
       try {
         if (await probe.isLink(entry.path)) {
           skipped.push(entry.path)
           continue
         }
-        // A dedup link resolves to its terminal real content; a dangling or
-        // cyclic link is a per-file integrity failure, never a silent skip.
-        let before: string | null
-        try {
-          before = await this.resolveBefore(sessionId, entry)
-        } catch (error) {
-          failed.push({ path: entry.path, message: error instanceof Error ? error.message : String(error) })
+        // Only the path's FINAL component is link-checked above: refuse a path
+        // whose directory no longer resolves to its checkpoint-time location,
+        // so the preview never promises a restore the apply pass would refuse
+        // (and no doomed action ever reaches the journal).
+        if (!(await parentStillMatches(entry.path, entry.parent))) {
+          skipped.push(entry.path)
           continue
         }
-        const current = await probe.readText(entry.path)
-        if (before === null) {
-          // The file was created at/after the target: delete it when it is
-          // still present. An absent file already matches the target state.
-          if (current !== undefined) actions.push({ path: entry.path, action: 'delete' })
-        } else if (current !== before) {
-          // The file differs from its pre-edit content (or is missing):
-          // write the before content back. Identical content is a no-op.
-          actions.push({ path: entry.path, action: 'restore', before })
+        if (source !== null && source.kind === 'lossyText') {
+          // A legacy record that lost bytes: comparable, never writable.
+          const same = await probe.matches(source, entry.path)
+          if (same !== true) skipped.push(entry.path)
+          continue
         }
-      } catch (error) {
+        const same = await probe.matches(source, entry.path)
+        if (same === true) continue // identical content (or still absent): a no-op
+        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
+        if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
+        else {
+          // `mode` never MAKES an action (a mode-only difference is a no-op),
+          // but restoring content also restores the recorded permissions.
+          const mode = isLinkEntry(entry) ? undefined : entry.mode
+          actions.push({
+            path: entry.path,
+            action: 'restore',
+            before: source,
+            ...(mode !== undefined ? { mode } : {}),
+            ...pin,
+          })
+        }
+      } catch {
         // Probe failure: conservative — treat as differing. A restore still
         // attempts the write, a delete still attempts the unlink (failures
         // surface per-file in the restore outcome, never silently skipped).
-        let before: string | null
-        try {
-          before = await this.resolveBefore(sessionId, entry)
-        } catch {
-          before = null
+        // A LOSSY record is the exception: its bytes are already gone, so it
+        // must never be written back — the normal path above skips it for the
+        // same reason, and a throwing probe must not smuggle it through.
+        if (source !== null && source.kind === 'lossyText') {
+          skipped.push(entry.path)
+          continue
         }
-        if (before === null) {
-          actions.push({ path: entry.path, action: 'delete' })
-        } else {
-          actions.push({ path: entry.path, action: 'restore', before })
-        }
+        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
+        if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
+        else actions.push({ path: entry.path, action: 'restore', before: source, ...pin })
       }
     }
     return { actions, skipped, failed }
@@ -840,9 +1651,26 @@ export class SnapshotStore {
       const action = actions[i]!
       opts?.crash?.('before-action', i) // test-only: crash before the fs op
       const journalAction = journal.actions[i]!
-      let applied: 'restored' | 'deleted' | 'enoent'
+      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
       try {
-        applied = await this.applyActionToDisk(action.action, action.path, action.action === 'restore' ? action.before : null, deleteFile)
+        applied = await this.applyActionToDisk(
+          action.action,
+          action.path,
+          action.action === 'restore' ? action.before : null,
+          deleteFile,
+          {
+            ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+            ...(action.parent !== undefined ? { parent: action.parent } : {}),
+          },
+        )
+        if (applied === 'skipped') {
+          // The directory moved between planning and this write: refuse, and
+          // record why so the journal cannot claim the op completed.
+          journalAction.failed = `parent directory moved or repointed: ${dirname(action.path)}`
+          await this.saveJournal(journal)
+          failed.push({ path: action.path, message: journalAction.failed })
+          continue
+        }
         if (applied === 'enoent') {
           // Already absent: the delete is already done — the target state is
           // reached. Mark the action and count nothing (Claude Code tolerates
@@ -875,15 +1703,28 @@ export class SnapshotStore {
     return { restored, deleted, skipped, failed }
   }
 
-  /** Prefix of one restore-op journal file inside the session dir. */
-  private static readonly JOURNAL_PREFIX = 'restore-journal-'
-
-  /** Session-format-version marker file inside the session dir. Non-`.json`, so it never counts as a checkpoint entry. */
-  private static readonly FORMAT_FILE = 'format'
-
-  /** Absolute path of one restore-op journal file. */
+  /** Absolute path of one restore-op journal file (the current prefix). */
   private journalPath(sessionId: string, opId: string): string {
-    return join(this.sessionDir(sessionId), `${SnapshotStore.JOURNAL_PREFIX}${safeFileId(opId)}.json`)
+    return join(this.sessionDir(sessionId), `${JOURNAL_PREFIX}${safeFileId(opId)}.json`)
+  }
+
+  /**
+   * Locate an existing journal file for an op: the current prefix first, then
+   * the prefix the released v1 build wrote (a restore interrupted before the
+   * upgrade must still be continuable / rollbackable).
+   */
+  private async findJournalFile(sessionId: string, opId: string): Promise<string | undefined> {
+    const dir = this.sessionDir(sessionId)
+    for (const name of [`${JOURNAL_PREFIX}${safeFileId(opId)}.json`, `${LEGACY_JOURNAL_PREFIX}${safeFileId(opId)}.json`]) {
+      const file = join(dir, name)
+      try {
+        await stat(file)
+        return file
+      } catch {
+        continue
+      }
+    }
+    return undefined
   }
 
   /**
@@ -891,10 +1732,15 @@ export class SnapshotStore {
    * a restore must never fail because its audit journal could not be written.
    * reconcileRestores() re-derives the true state from the disk, so a missing
    * or stale journal only loses the trail, never the recovery ability.
+   *
+   * A journal read back from a legacy file is rewritten IN PLACE (same file),
+   * so a redo / rollback of a pre-upgrade op never leaves two divergent
+   * versions of the same op on disk.
    */
   private async saveJournal(journal: RestoreJournal): Promise<void> {
     try {
-      await writeJsonAtomic(this.journalPath(journal.sessionId, journal.id), journal)
+      const file = journal.sourceFile ?? this.journalPath(journal.sessionId, journal.id)
+      await writeJsonAtomic(file, journalToJson(journal, this.sessionDir(journal.sessionId)))
     } catch {
       // Non-fatal (see above).
     }
@@ -902,9 +1748,10 @@ export class SnapshotStore {
 
   /**
    * Journal one restore pass before mutating anything: capture the rescue
-   * (pre-restore) state of every planned path and persist the intent
-   * atomically. Returns the in-memory journal; a persist failure degrades to
-   * a journal-less restore (non-fatal, see {@link saveJournal}).
+   * (pre-restore) state of every planned path as a raw byte copy and persist
+   * the intent (references only) atomically. Returns the in-memory journal; a
+   * persist failure degrades to a journal-less restore (non-fatal, see
+   * {@link saveJournal}).
    */
   private async beginRestore(
     sessionId: string,
@@ -919,35 +1766,52 @@ export class SnapshotStore {
     try {
       await this.pruneTerminalJournals(sessionDir, await readdir(sessionDir))
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      if (!isEnoent(error)) throw error
       // Session dir does not exist yet (no entries ever recorded): nothing
       // to recycle.
     }
+    const id = `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+    const rescueDir = join(sessionDir, RESCUE_DIR, safeFileId(id))
+    let rescueDirReady = false
     const journalActions: RestoreJournalAction[] = []
-    for (const action of actions) {
-      let rescue: string | null = null
+    for (const [index, action] of actions.entries()) {
+      let rescue: ByteSource | null = null
       let rescueError: string | undefined
+      const dest = join(rescueDir, `${index}${SIDECAR_SUFFIX}`)
       try {
-        rescue = (await probe.readText(action.path)) ?? null
+        if (!rescueDirReady) {
+          await mkdir(rescueDir, { recursive: true })
+          rescueDirReady = true
+        }
+        const copied = await probe.copy(action.path, dest)
+        if (copied.kind === 'copied') rescue = { kind: 'blob', path: dest }
+        else if (copied.kind === 'failed') rescueError = copied.message
+        // 'absent': the file is gone — rescue stays null, which is exactly
+        // what rollback should restore (an absent path).
       } catch (error) {
-        // Rescue capture failed (e.g. an unreadable file): the restore still
-        // proceeds exactly as before; rollback will skip this path and report
-        // it instead of guessing.
+        // The restore still proceeds exactly as before; rollback will skip
+        // this path and report it instead of guessing.
         rescueError = error instanceof Error ? error.message : String(error)
       }
+      // Pre-restore permissions (best-effort): a rollback must be able to put
+      // back what the restore found, including a read-only file's bits.
+      const rescueMode = (await stat(action.path).catch(() => undefined))?.mode
       const journalAction: RestoreJournalAction = {
         path: action.path,
         action: action.action,
         before: action.action === 'restore' ? action.before : null,
         rescue,
+        ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+        ...(action.parent !== undefined ? { parent: action.parent } : {}),
+        ...(rescueMode !== undefined ? { rescueMode: rescueMode & 0o7777 } : {}),
         done: false,
       }
       if (rescueError !== undefined) journalAction.rescueError = rescueError
       journalActions.push(journalAction)
     }
     const journal: RestoreJournal = {
-      version: 1,
-      id: `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      version: 2,
+      id,
       sessionId,
       targetSeq,
       startedAt: Date.now(),
@@ -964,27 +1828,25 @@ export class SnapshotStore {
    * a journal would silently erase the interrupted restore's recovery record.
    */
   private async readJournal(sessionId: string, opId: string): Promise<RestoreJournal | undefined> {
-    const file = this.journalPath(sessionId, opId)
-    let text: string
-    try {
-      text = await readFile(file, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
+    const file = await this.findJournalFile(sessionId, opId)
+    if (file === undefined) return undefined
     let parsed: unknown
     try {
-      parsed = JSON.parse(text)
+      parsed = JSON.parse(await readFile(file, 'utf8'))
     } catch (error) {
       throw new Error(`restore journal ${file} is corrupt: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (!isRestoreJournal(parsed)) throw new Error(`restore journal ${file} failed schema validation`)
-    return parsed
+    const journal = journalFromJson(parsed as unknown as Record<string, unknown>, this.sessionDir(sessionId))
+    if (journal === undefined) throw new Error(`restore journal ${file} failed schema validation`)
+    journal.sourceFile = file
+    return journal
   }
 
   /**
-   * Every journal file of a session — valid ones plus corrupt ones with their
-   * error — so reconciliation can report corruption instead of dropping it.
+   * Every journal file of a session (both prefixes) — valid ones plus corrupt
+   * ones with their error — so reconciliation can report corruption instead of
+   * dropping it.
    */
   private async listJournals(sessionId: string): Promise<{ journals: RestoreJournal[]; corrupt: { file: string; message: string }[] }> {
     const sessionDir = this.sessionDir(sessionId)
@@ -992,20 +1854,26 @@ export class SnapshotStore {
     try {
       names = await readdir(sessionDir)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { journals: [], corrupt: [] }
+      if (isEnoent(error)) return { journals: [], corrupt: [] }
       throw error
     }
     const journals: RestoreJournal[] = []
     const corrupt: { file: string; message: string }[] = []
     for (const name of names) {
-      if (!name.startsWith(SnapshotStore.JOURNAL_PREFIX) || !name.endsWith('.json')) continue
+      if (!isJournalName(name)) continue
       try {
         const parsed: unknown = JSON.parse(await readFile(join(sessionDir, name), 'utf8'))
         if (!isRestoreJournal(parsed)) {
           corrupt.push({ file: name, message: 'journal failed schema validation' })
           continue
         }
-        journals.push(parsed)
+        const journal = journalFromJson(parsed as unknown as Record<string, unknown>, sessionDir)
+        if (journal === undefined) {
+          corrupt.push({ file: name, message: 'journal references are invalid' })
+          continue
+        }
+        journal.sourceFile = join(sessionDir, name)
+        journals.push(journal)
       } catch (error) {
         corrupt.push({ file: name, message: error instanceof Error ? error.message : String(error) })
       }
@@ -1016,34 +1884,72 @@ export class SnapshotStore {
   /**
    * Execute ONE fs mutation with exactly the pre-journal semantics: a delete
    * runs through the injected deleteFile (ENOENT tolerated — the file is
-   * already absent, i.e. the target state is reached), a restore is a plain
-   * writeFile with a recursive mkdir of the parent. Returns how the outcome
-   * should record it.
+   * already absent, i.e. the target state is reached), a restore copies the
+   * recorded bytes back over the file (creating the parent if needed).
    *
    * This is the only place the store writes restored content to the real FS,
-   * and it is deliberately a raw `writeFile`/`unlink` rather than the fs
-   * service: the caller only ever hands it a path from `planRestore` — one the
-   * session's own write-class tool call recorded and resolved (never a
+   * and it is deliberately raw `copyFile`/`writeFile`/`unlink` rather than the
+   * fs service: the caller only ever hands it a path from `planRestore` — one
+   * the session's own write-class tool call recorded and resolved (never a
    * symlink/hard link) and only when it differs from the live disk. So no
    * arbitrary path, no model input, never automatic.
+   *
+   * The write is IN PLACE (no temp + rename): it keeps the file's inode and
+   * thus its xattrs/ACL, and crash safety is provided by the journal plus disk
+   * reconciliation instead (a half-written file simply does not match the
+   * goal, so a redo rewrites it).
+   *
+   * Permissions are best-effort (ADR-9/R3): the mode is only ever applied as
+   * part of a CONTENT restore (never as a reason to plan one), and a chmod
+   * failure never fails the restore.
    */
   private async applyActionToDisk(
     kind: 'restore' | 'delete',
     path: string,
-    content: string | null,
+    content: ByteSource | null,
     deleteFile: DeleteFile,
-  ): Promise<'restored' | 'deleted' | 'enoent'> {
+    opts?: { readonly mode?: number; readonly parent?: string },
+  ): Promise<'restored' | 'deleted' | 'enoent' | 'skipped'> {
+    // Containment first: never write, create or unlink through an ancestor
+    // directory that no longer resolves to its checkpoint-time location.
+    if (!(await parentStillMatches(path, opts?.parent))) return 'skipped'
     if (kind === 'delete') {
       try {
         await deleteFile(path)
         return 'deleted'
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if (!isEnoent(error)) throw error
         return 'enoent'
       }
     }
+    if (content === null) throw new Error(`restore of ${path} has no recorded content`)
+    // A `lossyText` target only occurs when CONTINUING a legacy journal: the
+    // released build had already decided to write that content, and refusing
+    // now would strand a half-restored workspace. A legacy ENTRY is never
+    // written back (see `planRestore`), which is where the choice matters.
     await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, content!, 'utf8')
+    // A read-only target cannot be written: add owner-write for the attempt
+    // and take it back afterwards (R3).
+    const current = (await stat(path).catch(() => undefined))?.mode
+    let widened = false
+    if (current !== undefined && (current & 0o200) === 0) {
+      await chmod(path, current | 0o200).catch(() => undefined)
+      widened = true
+    }
+    try {
+      if (content.kind === 'blob') await copyFile(content.path, path)
+      else if (content.kind === 'text') await writeFile(path, content.bytes)
+      else await writeFile(path, Buffer.from(content.text, 'utf8'))
+    } catch (error) {
+      if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
+      throw error
+    }
+    // Best-effort: a filesystem that refuses chmod must never fail a restore
+    // whose bytes landed (Windows permission bits, exotic mounts, …).
+    if (opts?.mode !== undefined) await chmod(path, opts.mode).catch(() => undefined)
+    // No recorded mode (a legacy entry, or a link materialized without one):
+    // the live bits are not ours to change, so only undo the widening.
+    else if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
     return 'restored'
   }
 
@@ -1056,6 +1962,13 @@ export class SnapshotStore {
    * terminal state and not reported. A corrupt journal is reported
    * `recovery-required` — never silently dropped.
    *
+   * Deliberately NOT gated on the session's `store` marker: a journal is fully
+   * self-describing (`version` plus byte references), and refusing to finish an
+   * interrupted op merely because the SESSION marker looks newer would strand a
+   * half-restored workspace — the outcome the legacy-journal support exists to
+   * prevent. A reference the newer build moved shows up as a per-file failure,
+   * never as a silent write.
+   *
    * @param sessionId - session whose journals to reconcile.
    * @param probe - current-disk state probe (defaults to the real FS).
    * @returns one report per non-terminal journal still needing attention.
@@ -1065,7 +1978,7 @@ export class SnapshotStore {
     const reports: RestoreReconcileReport[] = []
     for (const bad of corrupt) {
       reports.push({
-        opId: bad.file.slice(SnapshotStore.JOURNAL_PREFIX.length, -'.json'.length),
+        opId: journalOpIdOf(bad.file),
         state: 'recovery-required',
         journalState: 'recovery-required',
         targetSeq: 0,
@@ -1107,9 +2020,8 @@ export class SnapshotStore {
       }
       let reached: boolean
       try {
-        const state = (await probe.readText(action.path)) ?? null
         const goal = rollbackPhase ? action.rescue : action.action === 'delete' ? null : action.before
-        reached = state === goal
+        reached = await probe.matches(goal, action.path) === true
       } catch {
         reached = false // probe failure: conservative — never silently dropped
       }
@@ -1140,7 +2052,7 @@ export class SnapshotStore {
   }
 
   /**
-   * 补做 (redo) an interrupted restore: finish the op by applying every action
+   * Continue (redo) an interrupted restore: finish the op by applying every action
    * whose disk state does not yet match its goal — the restore target for
    * `running` journals. Actions are decided by the REAL disk (the same "disk
    * is truth" rule as reconciliation), so a crash between an fs op and its
@@ -1169,8 +2081,8 @@ export class SnapshotStore {
       opts?.crash?.('before-action', i) // test-only: crash before the fs op
       let reached: boolean
       try {
-        const state = (await probe.readText(action.path)) ?? null
-        reached = state === (action.action === 'delete' ? null : action.before)
+        const goal = action.action === 'delete' ? null : action.before
+        reached = await probe.matches(goal, action.path) === true
       } catch {
         reached = false // probe failure: conservatively attempt the apply
       }
@@ -1182,9 +2094,26 @@ export class SnapshotStore {
         await this.saveJournal(journal)
         continue
       }
-      let applied: 'restored' | 'deleted' | 'enoent'
+      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
       try {
-        applied = await this.applyActionToDisk(action.action, action.path, action.action === 'restore' ? action.before : null, deleteFile)
+        applied = await this.applyActionToDisk(
+          action.action,
+          action.path,
+          action.action === 'restore' ? action.before : null,
+          deleteFile,
+          {
+            ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+            ...(action.parent !== undefined ? { parent: action.parent } : {}),
+          },
+        )
+        if (applied === 'skipped') {
+          // The directory no longer resolves where the op was pinned: refuse
+          // the redo and keep the journal non-terminal, with the reason.
+          action.failed = `parent directory moved or repointed: ${dirname(action.path)}`
+          await this.saveJournal(journal)
+          failed.push({ path: action.path, message: action.failed })
+          continue
+        }
         if (applied === 'enoent') {
           action.done = true
           await this.saveJournal(journal)
@@ -1212,7 +2141,7 @@ export class SnapshotStore {
   }
 
   /**
-   * 回滚 (roll back) an interrupted restore: undo every action whose disk
+   * Roll back an interrupted restore: undo every action whose disk
    * state does not match its rescue (pre-restore) record, returning the
    * workspace to the exact state it had before the restore started. Decided
    * by the REAL disk, so actions the crash left applied-but-unmarked are
@@ -1260,8 +2189,7 @@ export class SnapshotStore {
       opts?.crash?.('before-action', i) // test-only: crash before the fs op
       let reached: boolean
       try {
-        const state = (await probe.readText(action.path)) ?? null
-        reached = state === action.rescue
+        reached = await probe.matches(action.rescue, action.path) === true
       } catch {
         reached = false // probe failure: conservatively attempt the undo
       }
@@ -1271,9 +2199,28 @@ export class SnapshotStore {
         await this.saveJournal(journal)
         continue
       }
-      let applied: 'restored' | 'deleted' | 'enoent'
+      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
       try {
-        applied = await this.applyActionToDisk(action.rescue === null ? 'delete' : 'restore', action.path, action.rescue, deleteFile)
+        applied = await this.applyActionToDisk(
+          action.rescue === null ? 'delete' : 'restore',
+          action.path,
+          action.rescue,
+          deleteFile,
+          {
+            ...(action.rescueMode !== undefined ? { mode: action.rescueMode } : {}),
+            ...(action.parent !== undefined ? { parent: action.parent } : {}),
+          },
+        )
+        if (applied === 'skipped') {
+          // A rollback that cannot verify the location must not claim to have
+          // undone the op: leave it retryable as recovery-required.
+          journal.rollbackError = `parent directory moved or repointed: ${action.path}`
+          journal.state = 'recovery-required'
+          await this.saveJournal(journal)
+          failed.push({ path: action.path, message: journal.rollbackError })
+          rollbackFailed = true
+          continue
+        }
         if (applied === 'enoent') {
           action.done = false
           await this.saveJournal(journal)
@@ -1327,16 +2274,25 @@ export class SnapshotStore {
     try {
       names = await readdir(sessionDir)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      if (isEnoent(error)) return
       throw error
     }
-    // Journal recycling must run even when no anchor group is over the cap
-    // (a restore-only session never overflows the 100 groups).
+    // Journal recycling and staged-capture collection must run even when no
+    // anchor group is over the cap (a restore-only session never overflows the
+    // 100 groups).
     await this.pruneTerminalJournals(sessionDir, names)
+    await this.prunePendingCaptures(join(sessionDir, PENDING_DIR))
     const seqs = names.map(Number).filter(seq => Number.isSafeInteger(seq)).sort((a, b) => a - b)
     const excess = seqs.length - keep
     if (excess <= 0) return
     const doomed = new Set(seqs.slice(0, excess))
+    // A NON-TERMINAL journal still needs the sidecars its actions reference:
+    // evicting them would make the advertised "continue finishes the
+    // interrupted op" impossible (the redo would fail per file). Those groups
+    // are pinned, so the effective window may exceed `keep` until the op is
+    // resolved — bounded by the number of unresolved journals.
+    for (const seq of await this.pinnedAnchors(sessionDir, names)) doomed.delete(seq)
+    if (doomed.size === 0) return
     // Materialize surviving links that reference a doomed group's real
     // snapshot. A link whose referent is ALREADY gone (dangling/corrupt) is
     // skipped — evicting cannot make it worse. But if a materialization WRITE
@@ -1346,49 +2302,151 @@ export class SnapshotStore {
       const files = await readdir(this.anchorDir(sessionId, seq)).catch(() => [] as string[])
       for (const file of files) {
         if (!file.endsWith('.json')) continue
-        const entry = await readEntry(join(this.anchorDir(sessionId, seq), file))
+        const entryFile = join(this.anchorDir(sessionId, seq), file)
+        let entry: StoredEntry | undefined
+        try {
+          entry = await readEntry(entryFile, seq)
+        } catch {
+          // A newer-format entry (or an unreadable one): never touch it and
+          // never let it abort the prune of unrelated groups.
+          continue
+        }
         if (entry === undefined || !isLinkEntry(entry)) continue
         if (!isSafeLinkRef(entry.ref)) continue // unsafe/corrupt ref: never follow it
-        const slash = entry.ref.indexOf('/')
-        const refAnchor = slash === -1 ? Number.NaN : Number(entry.ref.slice(0, slash))
+        const refAnchor = refAnchorOf(entry.ref)
         if (!Number.isSafeInteger(refAnchor) || !doomed.has(refAnchor)) continue
-        let before: string | null
+        let source: ByteSource | null
         try {
-          before = await this.resolveBefore(sessionId, entry)
-        } catch {
+          source = await this.resolveBefore(sessionId, entry)
+        } catch (error) {
+          if (error instanceof UnknownStoreVersionError) throw error
           continue // already-dangling link: not caused by this eviction
         }
-        const real: CheckpointEntry = {
-          callId: entry.callId,
-          anchorSeq: entry.anchorSeq,
-          path: entry.path,
-          before,
-          time: entry.time,
+        // NOTE: the materialized entry keeps the BYTES, not the resolved
+        // entry's `mode` (a link carries no metadata of its own). A later
+        // restore therefore treats the file's live permissions as its own —
+        // the safe default — rather than replaying a mode it only inferred.
+        // The link's own location pin DOES travel with it: dropping it would
+        // silently re-open the repointed-ancestor hole for every entry prune
+        // has materialized.
+        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
+        let real: CheckpointEntry
+        if (source === null) {
+          real = {
+            callId: entry.callId,
+            anchorSeq: entry.anchorSeq,
+            path: entry.path,
+            before: null,
+            size: 0,
+            ...pin,
+            time: entry.time,
+          }
+        } else {
+          // The bytes live in the doomed group: copy them next to the kept
+          // entry as a sidecar of its own before publishing the real entry.
+          const dest = join(dirname(entryFile), sidecarName(basename(entryFile)))
+          await this.writeSidecar(dest, source)
+          const st = await stat(dest)
+          real = {
+            callId: entry.callId,
+            anchorSeq: entry.anchorSeq,
+            path: entry.path,
+            before: { kind: 'blob', path: dest },
+            size: st.size,
+            ...(source.kind === 'lossyText' ? { lossy: true } : {}),
+            ...pin,
+            time: entry.time,
+          }
         }
-        await writeJsonAtomic(join(this.anchorDir(sessionId, seq), file), real, () => opts?.crash?.('after-temp-write'))
+        await writeJsonAtomic(entryFile, entryToJson(real), () => opts?.crash?.('after-temp-write'))
       }
     }
     for (const seq of doomed) {
       await rm(this.anchorDir(sessionId, seq), { recursive: true, force: true })
     }
+    // Dropping groups can invalidate in-memory dedup handles that pointed into
+    // them: forget this session's dedup state so the next commit re-seeds from
+    // the surviving window instead of linking to a deleted sidecar (R1).
+    this.seededSessions.delete(sessionId)
+    for (const key of [...this.lastEntry.keys()]) {
+      if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
+    }
+  }
+
+  /**
+   * Collect staged captures that were never committed and are older than
+   * {@link PENDING_MAX_AGE_MS}: a crash between `tools/execute` and
+   * `tools/post-execute` can leak one, and the process that would have
+   * unlinked it is gone.
+   */
+  private async prunePendingCaptures(pendingDir: string): Promise<void> {
+    let names: string[]
+    try {
+      names = await readdir(pendingDir)
+    } catch {
+      return
+    }
+    const cutoff = Date.now() - PENDING_MAX_AGE_MS
+    for (const name of names) {
+      const file = join(pendingDir, name)
+      const st = await lstat(file).catch(() => undefined)
+      if (st === undefined || !st.isFile() || st.mtimeMs >= cutoff) continue
+      await rm(file, { force: true })
+    }
+  }
+
+  /**
+   * Anchor groups a NON-TERMINAL journal still depends on — the groups holding
+   * the sidecars its actions restore from. `prune` must not evict them while
+   * the op can still be finished. Rescue copies live under `rescue/`, never in
+   * an anchor group, so only `before` references matter; a group is pinned only
+   * for a well-formed, safe reference (a corrupt journal pins nothing).
+   */
+  private async pinnedAnchors(sessionDir: string, names: readonly string[]): Promise<Set<number>> {
+    const pinned = new Set<number>()
+    for (const name of names) {
+      if (!isJournalName(name)) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(await readFile(join(sessionDir, name), 'utf8'))
+      } catch {
+        continue // unreadable: nothing to pin, and never a reason to fail prune
+      }
+      if (!isRestoreJournal(parsed)) continue
+      const journal = journalFromJson(parsed as unknown as Record<string, unknown>, sessionDir)
+      if (journal === undefined) continue
+      if (journal.state === 'completed' || journal.state === 'rolled-back') continue
+      for (const action of journal.actions) {
+        const source = action.before
+        if (source === null || source.kind !== 'blob') continue
+        const ref = relative(sessionDir, source.path)
+        // A byte reference (`<seq>/<base>.before`), not a link ref (`*.json`).
+        if (!isSafeBackupRef(ref)) continue
+        const anchor = refAnchorOf(ref)
+        if (Number.isSafeInteger(anchor)) pinned.add(anchor)
+      }
+    }
+    return pinned
   }
 
   /**
    * Recycle terminal restore journals (`completed` / `rolled-back`): once an
-   * op finished, its journal's before + rescue content is dead weight that
-   * would otherwise accumulate without bound (one journal per both-mode
-   * rewind). Non-terminal journals (crashed ops awaiting reconcile /
-   * continue / rollback) and unclassifiable (corrupt) ones are ALWAYS kept —
-   * a recovery record that cannot be classified is never destroyed.
+   * op finished, its journal and its rescue bytes are dead weight that would
+   * otherwise accumulate without bound (one journal per both-mode rewind).
+   * Non-terminal journals (crashed ops awaiting reconcile / continue /
+   * rollback) and unclassifiable (corrupt) ones are ALWAYS kept — a recovery
+   * record that cannot be classified is never destroyed.
    */
   private async pruneTerminalJournals(sessionDir: string, names: readonly string[]): Promise<void> {
     for (const name of names) {
-      if (!name.startsWith(SnapshotStore.JOURNAL_PREFIX) || !name.endsWith('.json')) continue
+      if (!isJournalName(name)) continue
       const file = join(sessionDir, name)
       try {
         const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<RestoreJournal>
         if (parsed.state === 'completed' || parsed.state === 'rolled-back') {
           await rm(file, { force: true })
+          // A legacy journal has no rescue directory: force:true is a no-op.
+          await rm(join(sessionDir, RESCUE_DIR, safeFileId(journalOpIdOf(name))), { recursive: true, force: true })
         }
       } catch {
         // Corrupt or unreadable: keep — never destroy a recovery record we
@@ -1403,7 +2461,7 @@ export class SnapshotStore {
       await stat(path)
       return true
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+      if (isEnoent(error)) return false
       throw error
     }
   }
@@ -1425,7 +2483,9 @@ export class SnapshotStore {
    *  - a non-positive `maxAgeDays` throws instead of degenerating into a
    *    mass-destructive `cutoff` in the far future;
    *  - the walk uses `lstat` (no symlink following) and skips dot-prefixed
-   *    temp left overs, so measurement stays inside the store root.
+   *    temp left overs — except the real `.pending/` area, whose staged bytes
+   *    are content and whose freshness is activity — so measurement stays
+   *    inside the store root.
    *
    * `dryRun` computes and reports exactly what would be removed without
    * deleting anything — the `/snapshot-auto-cleanup run` preview.
@@ -1480,6 +2540,9 @@ export class SnapshotStore {
         remainingBytes += size
       }
     }
+    // A dry run must not touch memory (its contract): only a real sweep drops
+    // the in-memory state of the sessions it removed.
+    if (!dryRun) await this.forgetMissingSessions()
     return report()
   }
 
@@ -1499,11 +2562,16 @@ export class SnapshotStore {
 
   /**
    * Summarize a session's on-disk footprint for a clear dry-run: anchor-group
-   * count, committed checkpoint-entry count, restore-journal count, and total
-   * bytes. Walks with `lstat` (never follows a symlink, so a hostile symlink
-   * cannot escape the store root or inflate the measurement) and skips
-   * dot-prefixed temp leftovers and non-`.json` members — they are never
-   * checkpoint entries.
+   * count, committed checkpoint-entry count (one per `.json` in an anchor
+   * group), restore-journal count (both journal prefixes), and the total bytes
+   * the session dir occupies — entry JSONs, raw byte sidecars, `rescue/**` and
+   * the staged `.pending/**` copies alike, so the number matches what a `du` of
+   * that directory reports.
+   *
+   * Walks with `lstat` (never follows a symlink, so a hostile symlink cannot
+   * escape the store root or inflate the measurement) and skips dot-prefixed
+   * temp leftovers (the one exception is `.pending/`, whose staged bytes are
+   * real store content).
    */
   private async sessionStats(sessionId: string): Promise<{ anchorGroups: number; entries: number; journals: number; bytes: number }> {
     const sessionDir = this.sessionDir(sessionId)
@@ -1511,7 +2579,7 @@ export class SnapshotStore {
     try {
       names = await readdir(sessionDir)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { anchorGroups: 0, entries: 0, journals: 0, bytes: 0 }
+      if (isEnoent(error)) return { anchorGroups: 0, entries: 0, journals: 0, bytes: 0 }
       throw error
     }
     let anchorGroups = 0
@@ -1519,33 +2587,33 @@ export class SnapshotStore {
     let journals = 0
     let bytes = 0
     for (const name of names) {
-      if (name.startsWith('.')) continue
+      // Dot-prefixed temp leftovers are never store members; `.pending/` (and
+      // the `rescue/` tree below) is the exception — staged and rescue bytes
+      // are real store content.
+      if (name.startsWith('.') && name !== PENDING_DIR) continue
       const full = join(sessionDir, name)
-      let st: Stats
-      try {
-        st = await lstat(full)
-      } catch {
-        continue // raced away or unreadable: skip
-      }
+      const st = await lstat(full).catch(() => undefined)
+      if (st === undefined) continue // raced away or unreadable: skip
       if (st.isDirectory()) {
-        if (!Number.isSafeInteger(Number(name))) continue
-        anchorGroups++
-        let files: string[]
-        try {
-          files = await readdir(full)
-        } catch {
+        // Staged captures and pre-restore rescue copies are real store content:
+        // they have no entry/journal count, but their bytes belong in the total.
+        if (name === PENDING_DIR || name === RESCUE_DIR) {
+          bytes += await dirBytes(full)
           continue
         }
-        for (const file of files) {
-          if (!file.endsWith('.json')) continue
-          entries++
-          const fileSt = await lstat(join(full, file)).catch(() => undefined)
-          if (fileSt !== undefined) bytes += fileSt.size
+        if (!Number.isSafeInteger(Number(name))) continue
+        anchorGroups++
+        for (const file of await readdir(full).catch(() => [] as string[])) {
+          if (file.endsWith('.json')) entries++
         }
-      } else if (name.startsWith(SnapshotStore.JOURNAL_PREFIX) && name.endsWith('.json')) {
-        journals++
-        bytes += st.size
+        // Count EVERY member (entry JSONs and raw byte sidecars alike) so the
+        // reported footprint matches what the session dir actually occupies.
+        bytes += await dirBytes(full)
+        continue
       }
+      if (!st.isFile()) continue
+      if (isJournalName(name)) journals++
+      bytes += st.size
     }
     return { anchorGroups, entries, journals, bytes }
   }
@@ -1585,17 +2653,19 @@ export class SnapshotStore {
     const dryRun = opts?.dryRun ?? false
     const stats = await this.sessionStats(sessionId)
     if (!dryRun) {
-      if (stats.anchorGroups > 0 || stats.journals > 0) {
+      // Any store member means the dir is worth removing: entries, journals,
+      // and the byte-only members `sessionStats` counts (a staged capture, a
+      // rescue copy, a marker). `bytes > 0` covers the latter, so a dir that
+      // holds ONLY staged bytes does not survive the clear that just reported
+      // freeing them.
+      if (stats.anchorGroups > 0 || stats.journals > 0 || stats.bytes > 0) {
         await rm(this.sessionDir(sessionId), { recursive: true, force: true })
       }
       // Always reset the in-memory dedup state on an apply — even when the dir
       // was already empty. A stale in-memory entry (e.g. a session whose dir was
       // removed out-of-band) would otherwise link a later recordEntry to a
       // deleted prior entry, leaving a dangling ref.
-      this.seededSessions.delete(sessionId)
-      for (const key of this.lastEntry.keys()) {
-        if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
-      }
+      this.forgetSession(sessionId)
     }
     return { sessionId, ...stats, dryRun }
   }
@@ -1644,6 +2714,51 @@ export class SnapshotStore {
   }
 
   /**
+   * Read the plugin's STORE-format marker for a session, or null when there is
+   * none (a released-v1 dir, or a session that never recorded a snapshot). The
+   * marker is a quick session-level signal; every entry and journal is also
+   * self-describing (`store` / `version`), so a missing marker never changes
+   * how an entry is read.
+   */
+  async readStoreVersion(sessionId: string): Promise<number | null> {
+    try {
+      const raw = await readFile(join(this.sessionDir(sessionId), SnapshotStore.STORE_FILE), 'utf8')
+      const parsed = Number(raw.trim())
+      return Number.isFinite(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Stamp the store-format marker (atomically, like `format`). Written
+   * alongside every byte-format entry, so a session that only ever holds the
+   * released string format keeps no marker and is read as v1.
+   */
+  async markStoreVersion(sessionId: string, storeVersion: number): Promise<void> {
+    const dir = this.sessionDir(sessionId)
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, SnapshotStore.STORE_FILE)
+    const tmp = `${file}.tmp`
+    await writeFile(tmp, `${storeVersion}`, 'utf8')
+    await rename(tmp, file)
+  }
+
+  /**
+   * Refuse to plan against (or write into) a session whose store format is
+   * NEWER than this build understands (ADR-10): the caller reports it and
+   * changes nothing — no partial restore, no clear, no v2 entry written into a
+   * v3 store. Checked before any entry is read, so the marker alone is enough
+   * to fail closed.
+   */
+  async assertKnownStoreVersion(sessionId: string): Promise<void> {
+    const version = await this.readStoreVersion(sessionId)
+    if (version !== null && version > CURRENT_STORE_VERSION) {
+      throw new UnknownStoreVersionError(version, join(this.sessionDir(sessionId), SnapshotStore.STORE_FILE))
+    }
+  }
+
+  /**
    * Session-format-version guard: clear a session's snapshot dir when the
    * format its snapshots were anchored under differs from the current session
    * format, so seq-anchored references can never survive a format migration
@@ -1678,7 +2793,7 @@ export class SnapshotStore {
 
 /** Short content hash used to key synthetic recheck entries. */
 function hashPath(path: string): string {
-  return createHash('sha256').update(path).digest('hex').slice(0, 8)
+  return shortHash(path)
 }
 
 /**
@@ -1703,8 +2818,8 @@ function hashPath(path: string): string {
  * from the recent record, so the link decision would never apply there.
  *
  * Symlinked / hard-linked paths are never re-checked (restores skip them).
- * A probe failure skips the file with a warning-level no-op; it never
- * aborts the boundary pass.
+ * A probe failure skips the file with a warning-level no-op; it never aborts
+ * the boundary pass, and it never records the path as absent.
  *
  * @param store - the session's snapshot store.
  * @param sessionId - session whose tracked files to re-check.
@@ -1720,24 +2835,44 @@ export async function reconcileTracked(
   tracked: ReadonlySet<string>,
   probe: DiskProbe = defaultProbe,
 ): Promise<number> {
+  try {
+    await store.assertKnownStoreVersion(sessionId)
+  } catch {
+    // Snapshots written by a newer build: record nothing rather than mixing
+    // formats into a store this build does not fully understand.
+    return 0
+  }
   let recorded = 0
   for (const path of tracked) {
     try {
       if (await probe.isLink(path)) continue
-      const current = await probe.readText(path)
-      const state: string | null = current ?? null
       const last = await store.lastKnownContent(sessionId, path)
-      if (last === undefined || last !== state) {
-        await store.recordEntry(sessionId, {
-          callId: `recheck-${anchorSeq}-${hashPath(path)}`,
-          anchorSeq,
-          path,
-          before: state,
-        }, { dedup: false })
-        recorded++
+      // A legacy record whose bytes were lost cannot be byte-compared: treat it
+      // as "never recorded" and take a faithful byte copy (ADR-12: any doubt
+      // fails toward storing MORE — and it heals the path for later rewinds).
+      if (last !== undefined && last !== null && last.kind !== 'lossyText') {
+        const same = await probe.matches(last, path)
+        // Undecidable (IO failure): leave the file alone rather than guess.
+        if (same === undefined || same) continue
       }
+      // Changed (or never recorded): capture the current bytes as they are —
+      // through a byte copy, so a binary file is recorded FAITHFULLY instead
+      // of being decoded into U+FFFD or mistaken for an absent file.
+      const callId = `recheck-${anchorSeq}-${hashPath(path)}`
+      const staged = await store.stageCapture(sessionId, callId)
+      const copied = await probe.copy(path, staged)
+      if (copied.kind === 'failed') {
+        await rm(staged, { force: true })
+        continue
+      }
+      await store.recordBackup(sessionId, { callId, anchorSeq, path },
+        copied.kind === 'absent' ? null : { file: staged, size: copied.size },
+        { dedup: false })
+      recorded++
     } catch {
-      // Probe failure: skip this file; the boundary pass never aborts.
+      // Probe failure (unreadable file, IO error): skip this file; the
+      // boundary pass never aborts, and `before: null` is only ever recorded
+      // for a copy that proved the file is gone.
     }
   }
   return recorded

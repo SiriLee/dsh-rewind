@@ -10,8 +10,8 @@
  *  - restore passes are JOURNALED: intent + per-action done-marks on disk;
  *  - reconcileRestores() reports "restored up to where, what changed" from
  *    the REAL disk (disk is truth, not the marks);
- *  - continueRestore() (补做) finishes an interrupted op deterministically;
- *  - rollbackRestore() (回滚) returns the workspace to the exact pre-restore
+ *  - continueRestore() finishes an interrupted op deterministically;
+ *  - rollbackRestore() returns the workspace to the exact pre-restore
  *    state, idempotently across repeated crashes;
  *  - journal corruption is reported fail-loud, journal IO failure is
  *    non-fatal, and journal files never disturb the existing store paths;
@@ -23,7 +23,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SnapshotStore, type CrashPoint, type RestoreJournal, type RestoreRunOptions } from '../src/snapshot.ts'
+import { SnapshotStore, type CrashPoint, type DiskProbe, type RestoreJournal, type RestoreRunOptions } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -61,11 +61,25 @@ function crashAt(point: CrashPoint, index?: number): RestoreRunOptions {
   }
 }
 
+/** True for a journal file name of either format (current or released v1). */
+function journalFileName(name: string): boolean {
+  return (name.startsWith('journal-') || name.startsWith('restore-journal-')) && name.endsWith('.json')
+}
+
 /** Read the session's journal files (tests run at most a few ops per session). */
 async function readJournals(store: SnapshotStore, sessionId: string): Promise<RestoreJournal[]> {
   const dir = store.sessionDir(sessionId)
-  const names = (await readdir(dir)).filter(n => n.startsWith('restore-journal-') && n.endsWith('.json'))
+  const names = (await readdir(dir)).filter(n => journalFileName(n))
   return Promise.all(names.map(async name => JSON.parse(await readFile(join(dir, name), 'utf8')) as RestoreJournal))
+}
+
+/** The raw bytes of one journal action's rescue copy. */
+async function readRescue(action: RestoreJournal['actions'][number]): Promise<string | null> {
+  const rescue = action.rescue as unknown as { blob?: string } | string | null
+  if (rescue === null) return null
+  const ref = typeof rescue === 'string' ? rescue : rescue.blob
+  if (typeof ref !== 'string') return null
+  return readFile(join(store.sessionDir(session), ref), 'utf8')
 }
 
 /**
@@ -121,14 +135,16 @@ describe('atomic checkpoint commits', () => {
     expect(later!.time).toBeGreaterThan(earlier!.time)
   })
 
-  it('a crash between the temp write and the rename commits nothing', async () => {
+  it('a crash between the temp write and the rename commits no entry', async () => {
     const file = await touch('a.txt', 'original')
     await expect(
       store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' }, crashAt('after-temp-write')),
     ).rejects.toThrow('simulated host crash')
 
     // No committed entry: the crash left only the inert temp file, and the
-    // reader never sees a half-written checkpoint.
+    // reader never sees a half-written checkpoint. The sidecar may already be
+    // in place — an ORPHAN is harmless (nothing references it), while the
+    // opposite order (metadata without bytes) would be a broken backup.
     const anchorDir = store.anchorDir(session, 5)
     const names = await readdir(anchorDir)
     expect(names.filter(n => n.endsWith('.json'))).toEqual([])
@@ -139,7 +155,9 @@ describe('atomic checkpoint commits', () => {
     // lands the entry atomically.
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
     expect(await store.entriesAfter(session, 5)).toHaveLength(1)
-    expect(await readdir(anchorDir)).toEqual(['c1.json'])
+    const landed = (await readdir(anchorDir)).sort()
+    expect(landed.filter(n => n.endsWith('.json'))).toHaveLength(1)
+    expect(landed.filter(n => n.endsWith('.before'))).toHaveLength(1)
   })
 
   it('a planted half-written entry is ignored, never read as a checkpoint', async () => {
@@ -172,7 +190,7 @@ describe('a crash mid-restore is journaled and reconciled after a host restart',
     expect([...report.pending].sort()).toEqual([b, c])
     expect(report.failed).toEqual([])
 
-    // 补做: continueRestore applies exactly what is still pending — the
+    // continueRestore applies exactly what is still pending — the
     // already-restored a is marked done without being rewritten.
     const outcome = await restarted.continueRestore(session, report.opId, unlink)
     expect([...outcome.restored].sort()).toEqual([b])
@@ -193,15 +211,17 @@ describe('a crash mid-restore is journaled and reconciled after a host restart',
     expect(await readFile(b, 'utf8')).toBe('B0')
     expect(await store.exists(c)).toBe(false)
 
-    // The journal pins the per-action progress marks ("逐 action 完成后标记").
+    // The journal pins the per-action progress marks (done after each action).
     const journal = (await readJournals(store, session))[0]!
     expect(journal.state).toBe('running')
     expect(journal.actions.map(action => action.path)).toEqual([a, b, c])
     expect(journal.actions.map(action => action.done)).toEqual([true, true, false])
-    expect(journal.actions.map(action => action.rescue)).toEqual(['A1', 'B1', 'C1'])
+    // The rescue copies hold the PRE-restore bytes, on disk next to the journal.
+    expect(await Promise.all(journal.actions.map(action => readRescue(action)))).toEqual(['A1', 'B1', 'C1'])
 
-    // 回滚: everything is returned to the pre-restore state — including the
-    // delete that landed (c comes back) — regardless of the done-marks.
+    // rollbackRestore: everything is returned to the pre-restore state —
+    // including the delete that landed (c comes back) — regardless of the
+    // done-marks.
     const restarted = new SnapshotStore(root)
     const rollback = await restarted.rollbackRestore(session, journal.id, unlink)
     expect([...rollback.restored].sort()).toEqual([a, b, c])
@@ -389,6 +409,115 @@ describe('reconciliation auto-heal and failure reporting', () => {
     }
   })
 
+  it('a failed rescue is reported and rollback leaves the path untouched', async () => {
+    // The rescue (pre-restore state) is staged as raw bytes; when the copy
+    // fails, the journal records a rescue error and a rollback skips the path
+    // instead of guessing at the pre-restore content.
+    const file = await touch('live.txt', 'text-before')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'text-before' })
+    await writeFile(file, 'user-edited', 'utf8')
+
+    const failingCopyProbe: DiskProbe = {
+      isLink: async () => false,
+      matches: async () => false, // plan a restore (the content differs)
+      copy: async () => ({ kind: 'failed', message: 'EACCES: cannot stage rescue' }),
+    }
+
+    await expect(
+      store.restoreAfter(session, 5, unlink, failingCopyProbe, crashAt('before-action', 0)),
+    ).rejects.toThrow('simulated host crash')
+    const [journal] = await readJournals(store, session)
+    expect(journal!.actions[0]!.rescue).toBeNull()
+    expect(journal!.actions[0]!.rescueError).toContain('cannot stage rescue')
+
+    const rollback = await store.rollbackRestore(session, journal!.id, unlink)
+    expect(rollback.failed.map(f => f.path)).toEqual([file])
+    expect(rollback.restored).toEqual([])
+    expect(await readFile(file, 'utf8')).toBe('user-edited')
+  })
+
+  it('continues a legacy (v1) journal and rewrites it IN PLACE', async () => {
+    const file = await touch('legacy.txt', 'v1-before')
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'c1.json'), JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: 'v1-before', time: 1,
+    }), 'utf8')
+    await writeFile(file, 'v1-after', 'utf8')
+    // An op the released v1 build interrupted: inline strings, legacy prefix.
+    const sessionDir = store.sessionDir(session)
+    await writeFile(join(sessionDir, 'restore-journal-op-legacy.json'), JSON.stringify({
+      version: 1,
+      id: 'op-legacy',
+      sessionId: session,
+      targetSeq: 5,
+      startedAt: 1,
+      state: 'running',
+      actions: [{ path: file, action: 'restore', before: 'v1-before', rescue: 'v1-after', done: false }],
+    }), 'utf8')
+
+    const reports = await store.reconcileRestores(session)
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.pending).toEqual([file])
+
+    const outcome = await store.continueRestore(session, 'op-legacy', unlink)
+    expect(outcome.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('v1-before')
+
+    // Same file, rewritten in the current format — never two divergent copies.
+    const names = (await readdir(sessionDir)).filter(n => journalFileName(n))
+    expect(names).toEqual(['restore-journal-op-legacy.json'])
+    expect((JSON.parse(await readFile(join(sessionDir, names[0]!), 'utf8')) as { version: number }).version).toBe(2)
+  })
+
+  it('rolls back a legacy (v1) journal to its inline rescue content', async () => {
+    const file = await touch('legacy-rollback.txt', 'pre-restore')
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'c1.json'), JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: 'target', time: 1,
+    }), 'utf8')
+    const sessionDir = store.sessionDir(session)
+    await writeFile(join(sessionDir, 'restore-journal-op-rb.json'), JSON.stringify({
+      version: 1,
+      id: 'op-rb',
+      sessionId: session,
+      targetSeq: 5,
+      startedAt: 1,
+      state: 'running',
+      actions: [{ path: file, action: 'restore', before: 'target', rescue: 'pre-restore', done: true }],
+    }), 'utf8')
+    await writeFile(file, 'target', 'utf8') // the restore had already landed
+
+    const rollback = await store.rollbackRestore(session, 'op-rb', unlink)
+    expect(rollback.restored).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('pre-restore')
+  })
+
+  it('keeps the sidecars a non-terminal journal needs (redo survives prune)', async () => {
+    // A journal references its target content by sidecar path. Prune must not
+    // evict that content while the op is unfinished, or the advertised
+    // "continue finishes the interrupted restore" stops working.
+    const live = await touch('pinned.txt', 'A0')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: live, before: 'A0' })
+    await writeFile(live, 'A1', 'utf8')
+    await expect(
+      store.restoreAfter(session, 5, unlink, undefined, crashAt('before-action', 0)),
+    ).rejects.toThrow('simulated host crash')
+
+    // Push the referenced group far outside the keep window.
+    for (const seq of [6, 7, 8]) {
+      const other = await touch(`other-${seq}.txt`, 'x')
+      await store.recordEntry(session, { callId: `o${seq}`, anchorSeq: seq, path: other, before: 'x' })
+    }
+    await store.prune(session, 1)
+
+    const reports = await store.reconcileRestores(session)
+    expect(reports).toHaveLength(1)
+    const outcome = await store.continueRestore(session, reports[0]!.opId, unlink)
+    expect(outcome.failed).toEqual([])
+    expect(outcome.restored).toEqual([live])
+    expect(await readFile(live, 'utf8')).toBe('A0')
+  })
+
   it('journal files never disturb entriesAfter/prune; terminal ones are recycled', async () => {
     const a = await touch('a.txt', 'A0')
     for (let seq = 1; seq <= 3; seq++) {
@@ -402,7 +531,7 @@ describe('reconciliation auto-heal and failure reporting', () => {
     expect(await store.reconcileRestores(session)).toEqual([])
     // The completed journal was recycled by the prune pass: journal files
     // never confuse planning, and the storage cap now bounds them too.
-    expect((await readdir(store.sessionDir(session))).some(n => n.startsWith('restore-journal-'))).toBe(false)
+    expect((await readdir(store.sessionDir(session))).some(n => journalFileName(n))).toBe(false)
 
     // A second restore still works.
     await writeFile(a, 'A2', 'utf8')
@@ -421,7 +550,7 @@ describe('reconciliation auto-heal and failure reporting', () => {
     }
     // Every pass recycled the earlier terminal journals: at most the newest
     // one survives, never one journal per rewind.
-    expect((await readdir(store.sessionDir(session))).filter(n => n.startsWith('restore-journal-'))).toHaveLength(1)
+    expect((await readdir(store.sessionDir(session))).filter(n => journalFileName(n))).toHaveLength(1)
     expect(await store.reconcileRestores(session)).toEqual([])
   })
 
@@ -435,7 +564,7 @@ describe('reconciliation auto-heal and failure reporting', () => {
     // running journal — only terminal journals are recycled).
     await store.restoreAfter(session, 5, unlink)
 
-    const journalNames = async () => (await readdir(store.sessionDir(session))).filter(n => n.startsWith('restore-journal-'))
+    const journalNames = async () => (await readdir(store.sessionDir(session))).filter(n => journalFileName(n))
     expect(await journalNames()).toHaveLength(2)
     await store.prune(session, 1)
     expect(await journalNames()).toHaveLength(1) // completed recycled, running kept
@@ -493,7 +622,7 @@ describe('reconciliation auto-heal and failure reporting', () => {
     await s.recordEntry(session, { callId: 'ca', anchorSeq: 5, path: a, before: 'A0' })
     await writeFile(a, 'A1', 'utf8')
     await s.restoreAfter(session, 5, unlink)
-    expect((await readdir(s.sessionDir(session))).some(n => n.startsWith('restore-journal-'))).toBe(true)
+    expect((await readdir(s.sessionDir(session))).some(n => journalFileName(n))).toBe(true)
 
     // The user deletes the plugin data directory: ALL plugin-owned state
     // (checkpoints + journals) lives under this single root and disappears

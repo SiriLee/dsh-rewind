@@ -45,7 +45,7 @@ version's shape only (no `Session.events` / `[data-time-hover-root]` /
 | I3 step/turn structure | Client turn-tail ordering, unique `step/start` (real turns), no ghost turns; the `user/message` rewind marker adds no step frame | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
 | I4 fold-service safety | stats / title / goal / projection fold a marker-bearing log without throwing, with predictable values | `compat-invariants` I4 |
 | I5 compact interop | A tool-call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is explicitly refused; a rewind-then-compact transaction stays legal | `compat-interop` I5, `verify-host` 12/14 |
-| I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8); cancellation timing never hangs | `verify-host` 4–8, 15 |
+| I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8) for the tracked tools `write` / `edit` — `str_replace_editor` is an optional DSH package that stopped being a default tool in DSH 0.1.3, so it is not tracked; cancellation timing never hangs | `verify-host` 4–8, 15 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
 | I8 runtime safety | `rewind`/`compact` combinations never leave a dangling step/turn frame | `verify-host` 15 |
 
