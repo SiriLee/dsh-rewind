@@ -659,11 +659,11 @@ function entryFileName(callId: string): string {
   // The digest disambiguates call ids that `safeFileId` would collapse onto the
   // same name (`a:b` vs `a_b`). References always name a file explicitly and
   // readers never infer a name, so pre-digest entries keep working.
-  return `${safeFileId(callId)}-${hashId(callId)}.json`
+  return `${safeFileId(callId)}-${shortHash(callId)}.json`
 }
 
-/** Stable 8-hex digest of an arbitrary id. */
-function hashId(value: string): string {
+/** Stable 8-hex digest of an arbitrary string (ids, paths, capture keys). */
+function shortHash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 8)
 }
 
@@ -1045,7 +1045,7 @@ export class SnapshotStore {
     // The digest disambiguates two keys that `safeFileId` would collapse onto
     // the same staged name (a collision would let the second capture overwrite
     // the first one's bytes before either is committed).
-    return join(dir, `${safeFileId(key)}-${hashId(key)}${SIDECAR_SUFFIX}`)
+    return join(dir, `${safeFileId(key)}-${shortHash(key)}${SIDECAR_SUFFIX}`)
   }
 
   /**
@@ -2553,7 +2553,7 @@ export class SnapshotStore {
 
 /** Short content hash used to key synthetic recheck entries. */
 function hashPath(path: string): string {
-  return createHash('sha256').update(path).digest('hex').slice(0, 8)
+  return shortHash(path)
 }
 
 /**
