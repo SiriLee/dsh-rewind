@@ -492,6 +492,32 @@ describe('reconciliation auto-heal and failure reporting', () => {
     expect(await readFile(file, 'utf8')).toBe('pre-restore')
   })
 
+  it('keeps the sidecars a non-terminal journal needs (redo survives prune)', async () => {
+    // A journal references its target content by sidecar path. Prune must not
+    // evict that content while the op is unfinished, or the advertised
+    // "continue finishes the interrupted restore" stops working.
+    const live = await touch('pinned.txt', 'A0')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: live, before: 'A0' })
+    await writeFile(live, 'A1', 'utf8')
+    await expect(
+      store.restoreAfter(session, 5, unlink, undefined, crashAt('before-action', 0)),
+    ).rejects.toThrow('simulated host crash')
+
+    // Push the referenced group far outside the keep window.
+    for (const seq of [6, 7, 8]) {
+      const other = await touch(`other-${seq}.txt`, 'x')
+      await store.recordEntry(session, { callId: `o${seq}`, anchorSeq: seq, path: other, before: 'x' })
+    }
+    await store.prune(session, 1)
+
+    const reports = await store.reconcileRestores(session)
+    expect(reports).toHaveLength(1)
+    const outcome = await store.continueRestore(session, reports[0]!.opId, unlink)
+    expect(outcome.failed).toEqual([])
+    expect(outcome.restored).toEqual([live])
+    expect(await readFile(live, 'utf8')).toBe('A0')
+  })
+
   it('journal files never disturb entriesAfter/prune; terminal ones are recycled', async () => {
     const a = await touch('a.txt', 'A0')
     for (let seq = 1; seq <= 3; seq++) {

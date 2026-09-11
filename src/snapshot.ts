@@ -2130,6 +2130,13 @@ export class SnapshotStore {
     const excess = seqs.length - keep
     if (excess <= 0) return
     const doomed = new Set(seqs.slice(0, excess))
+    // A NON-TERMINAL journal still needs the sidecars its actions reference:
+    // evicting them would make the advertised "continue finishes the
+    // interrupted op" impossible (the redo would fail per file). Those groups
+    // are pinned, so the effective window may exceed `keep` until the op is
+    // resolved — bounded by the number of unresolved journals.
+    for (const seq of await this.pinnedAnchors(sessionDir, names)) doomed.delete(seq)
+    if (doomed.size === 0) return
     // Materialize surviving links that reference a doomed group's real
     // snapshot. A link whose referent is ALREADY gone (dangling/corrupt) is
     // skipped — evicting cannot make it worse. But if a materialization WRITE
@@ -2224,6 +2231,40 @@ export class SnapshotStore {
       if (st === undefined || !st.isFile() || st.mtimeMs >= cutoff) continue
       await rm(file, { force: true })
     }
+  }
+
+  /**
+   * Anchor groups a NON-TERMINAL journal still depends on — the groups holding
+   * the sidecars its actions restore from. `prune` must not evict them while
+   * the op can still be finished. Rescue copies live under `rescue/`, never in
+   * an anchor group, so only `before` references matter; a group is pinned only
+   * for a well-formed, safe reference (a corrupt journal pins nothing).
+   */
+  private async pinnedAnchors(sessionDir: string, names: readonly string[]): Promise<Set<number>> {
+    const pinned = new Set<number>()
+    for (const name of names) {
+      if (!isJournalName(name)) continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(await readFile(join(sessionDir, name), 'utf8'))
+      } catch {
+        continue // unreadable: nothing to pin, and never a reason to fail prune
+      }
+      if (!isRestoreJournal(parsed)) continue
+      const journal = journalFromJson(parsed as unknown as Record<string, unknown>, sessionDir)
+      if (journal === undefined) continue
+      if (journal.state === 'completed' || journal.state === 'rolled-back') continue
+      for (const action of journal.actions) {
+        const source = action.before
+        if (source === null || source.kind !== 'blob') continue
+        const ref = relative(sessionDir, source.path)
+        // A byte reference (`<seq>/<base>.before`), not a link ref (`*.json`).
+        if (!isSafeBackupRef(ref)) continue
+        const anchor = refAnchorOf(ref)
+        if (Number.isSafeInteger(anchor)) pinned.add(anchor)
+      }
+    }
+    return pinned
   }
 
   /**
