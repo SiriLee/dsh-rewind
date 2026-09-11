@@ -84,7 +84,14 @@ class FakeFs extends FileSystem {
   async readText(target) { return readFile(target.displayPath, 'utf8') }
   async writeText(target, content) { await writeFile(target.displayPath, content, 'utf8'); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
   async stat(target) {
-    try { await readFile(target.displayPath); return { version: FsVersion('v'), type: 'file' } } catch { return undefined }
+    // Mirror the fs service contract (FsInfo.type): regular file, directory or
+    // other — the plugin's capture guard depends on it.
+    try {
+      const info = await stat(target.displayPath)
+      if (info.isFile()) return { version: FsVersion('v'), type: 'file' }
+      if (info.isDirectory()) return { version: FsVersion('v'), type: 'directory' }
+      return { version: FsVersion('v'), type: 'other' }
+    } catch { return undefined }
   }
 }
 
@@ -414,6 +421,29 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   } else {
     console.log('skip permission-bit check (chmod unsupported on this filesystem)')
   }
+}
+
+// 4e. session start must not clear snapshots written by a NEWER build: the
+//     store-version guard runs BEFORE the session-format reconcile (whose
+//     whole-directory clear would delete snapshots this build cannot read).
+{
+  const futureSession = buildSession('verify-future-store')
+  const futureAgent = makeAgent(futureSession.id, futureSession)
+  const dir = join(snapRoot, futureSession.id)
+  await mkdir(join(dir, '5'), { recursive: true })
+  await writeFile(join(dir, '5', 'entry.json'), JSON.stringify({ callId: 'c', anchorSeq: 5, path: join(wsDir, 'x.txt'), before: 'x', time: 1 }), 'utf8')
+  await writeFile(join(dir, 'store'), '3', 'utf8')
+  // A session-format marker that does NOT match the loaded session: on the
+  // wrong order this alone triggers the whole-directory clear.
+  await writeFile(join(dir, 'format'), '0', 'utf8')
+
+  ctx.emit('agent/session-start', { agent: futureAgent })
+  await new Promise(resolve => setTimeout(resolve, 300))
+
+  const members = await readdir(dir).catch(() => [])
+  check('session start does not clear a newer store', members.includes('5') && members.includes('store'), `members=${members.join(',')}`)
+  check('session start does not rewrite the format marker of a newer store', await readFile(join(dir, 'format'), 'utf8').catch(() => '') === '0', 'format marker changed')
+  check('session start leaves the newer store marker at its version', await readFile(join(dir, 'store'), 'utf8').catch(() => '') === '3', 'store marker changed')
 }
 
 // 5. a denied call never commits (no phantom entry)

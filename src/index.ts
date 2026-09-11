@@ -1044,20 +1044,24 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     void (async () => {
       try {
         // Stamp snapshots recorded after this point with the loaded session's
-        // format, so a future format change is detected; then clear any
-        // snapshots anchored under a different (now-migrated) format.
+        // format, so a future format change is detected.
         store.setFormatVersion(session.header.version)
-        const result = await store.reconcileFormatVersion(session.id, session.header.version)
-        if (result.cleared) {
-          ctx.logger.warn(`[dsh-rewind] cleared snapshots for ${session.id}: session format changed (v${session.header.version})`)
-        }
-        // Plugin store-format guard: snapshots written by a NEWER build are
-        // never touched (no clear, no write, no restore plan) — warn once at
-        // session start so the degradation is not silent.
+        // Plugin store-format guard FIRST: snapshots written by a NEWER build
+        // are never touched (no clear, no write, no restore plan — ADR-10).
+        // The order matters: the session-format reconcile below CLEARS the
+        // whole session dir on a mismatch, which would delete snapshots this
+        // build cannot even read.
         try {
           await store.assertKnownStoreVersion(session.id)
         } catch (error) {
           ctx.logger.warn(`[dsh-rewind] file restore disabled for ${session.id}: ${error instanceof Error ? error.message : String(error)}`)
+          return
+        }
+        // Clear snapshots anchored under a different (now-migrated) session
+        // format: their seq references would be mis-mapped by the migration.
+        const result = await store.reconcileFormatVersion(session.id, session.header.version)
+        if (result.cleared) {
+          ctx.logger.warn(`[dsh-rewind] cleared snapshots for ${session.id}: session format changed (v${session.header.version})`)
         }
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] session-format reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
