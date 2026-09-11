@@ -75,7 +75,7 @@ export interface RewindConfig {
 }
 
 /** Tool names whose mutations the checkpoint tracker follows. */
-const TRACKED_TOOLS = new Set(['write', 'edit'])
+const TRACKED_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
@@ -122,16 +122,31 @@ async function discardCapture(capture: PendingCapture | undefined): Promise<void
   }
 }
 
-/** True when an error means "the path does not exist". */
-function isEnoentError(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
-}
-
 /** Extract the file path a tracked tool call mutates, or undefined. */
 function mutationPathOf(exec: ToolExecution): string | undefined {
-  const args = exec.arguments as { file_path?: unknown }
+  const args = exec.arguments as Record<string, unknown>
   if (exec.name === 'write' || exec.name === 'edit') {
     return typeof args.file_path === 'string' ? args.file_path : undefined
+  }
+  if (exec.name === 'str_replace_editor') {
+    // Mirrors DSH's own mutation classification (`turn-deliverables.ts`): the
+    // argument is `path`, and `view` is read-only — capturing it would record
+    // a backup for a call that cannot change the file. `undo_edit` DOES write
+    // the previous content back, so it is tracked as well.
+    if (typeof args.path !== 'string' || args.path.trim().length === 0) return undefined
+    switch (args.command) {
+      case 'create':
+        return typeof args.file_text === 'string' ? args.path : undefined
+      case 'str_replace':
+        return typeof args.old_str === 'string' && args.old_str.length > 0 ? args.path : undefined
+      case 'insert':
+        return typeof args.insert_line === 'number' && Number.isInteger(args.insert_line) && args.insert_line >= 0
+          && typeof args.new_str === 'string' ? args.path : undefined
+      case 'undo_edit':
+        return args.path
+      default:
+        return undefined
+    }
   }
   return undefined
 }
