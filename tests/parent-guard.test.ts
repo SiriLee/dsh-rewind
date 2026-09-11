@@ -113,6 +113,31 @@ describe('location pin', () => {
     expect(after[0]?.parent).toBe(await realpath(dirname(live)))
   })
 
+  it('keeps the pin when prune materializes a creation link', async () => {
+    await mkdir(join(root, 'ws'), { recursive: true })
+    const ghost = join(root, 'ws', 'ghost.txt') // never exists on disk
+    await store.recordBackup(session, { callId: 'g1', anchorSeq: 1, path: ghost }, null)
+    await store.recordBackup(session, { callId: 'g2', anchorSeq: 2, path: ghost }, null)
+
+    const links = await store.entriesAfter(session, 0)
+    expect(links.map(isLinkEntry)).toEqual([true, false])
+
+    await store.prune(session, 1) // drops group 1, materializes the creation link
+    const after = await store.entriesAfter(session, 0)
+    expect(after).toHaveLength(1)
+    const materialized = after[0]!
+    if (isLinkEntry(materialized)) throw new Error('expected a materialized real snapshot')
+    expect(materialized.before).toBeNull()
+    expect(materialized.parent).toBe(await realpath(join(root, 'ws')))
+
+    // The materialized creation still refuses a repointed ancestor, so its
+    // delete cannot escape through a link either.
+    const { outside } = await repoint(dirname(ghost), 'ghost.txt')
+    const outcome = await store.restoreAfter(session, 1, unlink)
+    expect(outcome.skipped).toEqual([ghost])
+    expect(await readFile(join(outside, 'ghost.txt'), 'utf8')).toBe('decoy')
+  })
+
   it('carries the pin into every journal action', async () => {
     const live = await touch('journal/f.txt', 'before')
     await captureAndRecord('j1', 5, live)
@@ -212,6 +237,21 @@ describe('repointed ancestor directory', () => {
     const outcome = await store.restoreAfter(session, 5, unlink)
     expect(outcome.skipped).toEqual([live])
     expect(await readFile(join(outside, 'f.txt'), 'utf8')).toBe('decoy')
+  })
+
+  it('does not mistake a directory named "..foo" for an escape', async () => {
+    // The containment predicate must accept a legitimate `..`-prefixed name;
+    // only a real `..` segment means the recorded location escaped the pin.
+    const dir = join(root, 'ws', '..foo')
+    await mkdir(dir, { recursive: true })
+    const live = join(dir, 'f.txt')
+    await writeFile(live, 'before', 'utf8')
+    await captureAndRecord('d1', 5, live)
+    await rm(dir, { recursive: true, force: true })
+
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [live], deleted: [], skipped: [], failed: [] })
+    expect(await readFile(live, 'utf8')).toBe('before')
   })
 
   it('keeps an unpinned (legacy) entry working', async () => {

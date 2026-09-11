@@ -69,7 +69,7 @@
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** Sub-directory of the harness home holding this plugin's snapshots. */
@@ -892,8 +892,11 @@ async function parentStillMatches(path: string, recorded: string | undefined): P
   if (ancestor === undefined) return false
   try {
     const real = await realpath(ancestor)
+    // Only a real `..` SEGMENT escapes: a directory merely NAMED `..foo` is a
+    // legitimate location inside the surviving ancestor.
     const inside = relative(real, recorded)
-    return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside)
+    const escapes = inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)
+    return inside !== '' && !escapes
   } catch {
     return false
   }
