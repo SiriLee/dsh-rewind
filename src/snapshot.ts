@@ -731,9 +731,11 @@ async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry |
     const base = { callId, anchorSeq, path: parsed.file, time, ...origin }
     if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
     if (parsed.blob === null) {
-      // "Did not exist" is only meaningful with a zero size. A contradiction
-      // is corruption, and guessing an entry's kind from a corrupt field is
-      // exactly how a restore turns into a delete.
+      // "Did not exist" is only meaningful with a zero size, and never with a
+      // LOSSY flag (a record that lost bytes cannot also assert absence). A
+      // contradiction is corruption, and guessing an entry's kind from a
+      // corrupt field is exactly how a restore turns into a delete.
+      if (parsed.lossy === true) return undefined
       if (typeof parsed.size === 'number' && parsed.size !== 0) return undefined
       return { ...base, before: null, size: 0 }
     }
@@ -2605,7 +2607,10 @@ export async function reconcileTracked(
     try {
       if (await probe.isLink(path)) continue
       const last = await store.lastKnownContent(sessionId, path)
-      if (last !== undefined) {
+      // A legacy record whose bytes were lost cannot be byte-compared: treat it
+      // as "never recorded" and take a faithful byte copy (ADR-12: any doubt
+      // fails toward storing MORE — and it heals the path for later rewinds).
+      if (last !== undefined && last !== null && last.kind !== 'lossyText') {
         const same = await probe.matches(last, path)
         // Undecidable (IO failure): leave the file alone rather than guess.
         if (same === undefined || same) continue

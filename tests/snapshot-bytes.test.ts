@@ -14,7 +14,7 @@ import { randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { defaultProbe, isLinkEntry, SnapshotStore } from '../src/snapshot.ts'
+import { defaultProbe, isLinkEntry, reconcileTracked, SnapshotStore } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -313,6 +313,45 @@ describe('integrity rules', () => {
     // A fresh process reads the same refusal from the marker on disk.
     const reopened = new SnapshotStore(root)
     expect(await reopened.impactsAfter(session, 5)).toEqual([])
+  })
+
+  it('rejects a lossy entry that claims the file was ABSENT', async () => {
+    // `lossy: true` + `blob: null` is self-contradictory: a record with lost
+    // bytes cannot also assert "the file did not exist". Reading it as a
+    // creation would DELETE the live file.
+    const live = await touch('lossy-absent.txt', Buffer.from('live'))
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'bad.json'), JSON.stringify({
+      store: 2, callId: 'bad', file: live, blob: null, size: 0, lossy: true, time: 1,
+    }), 'utf8')
+
+    expect(await store.entriesAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+    expect(await readFile(live, 'utf8')).toBe('live')
+  })
+
+  it('heals a lossy legacy record at the boundary with a real byte backup', async () => {
+    // A lossy handle cannot be byte-compared, so the boundary must treat it as
+    // "never recorded" and take a faithful copy (ADR-12: fail toward storing
+    // MORE). That also heals the path: later rewinds restore exact bytes
+    // instead of skipping it.
+    const live = await touch('heal.bin', Buffer.from([0xd6, 0xd0]))
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'legacy.json'), JSON.stringify({
+      callId: 'legacy', anchorSeq: 5, path: live, before: '\uFFFD\uFFFD', time: 1,
+    }), 'utf8')
+    const tracked = await store.trackedPaths(session)
+
+    // The recorded lossy string still "matches" the file's lossy decode — the
+    // boundary must not fall for that.
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(1)
+
+    const bytes = Buffer.from([0xd6, 0xd0])
+    await writeFile(live, Buffer.from('changed'))
+    const outcome = await store.restoreAfter(session, 7, unlink)
+    expect(outcome.restored).toEqual([live])
+    expect(await readFile(live)).toEqual(bytes)
   })
 
   it('keeps composing v1 and v2 entries in one window', async () => {
