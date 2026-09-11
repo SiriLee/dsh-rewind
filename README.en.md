@@ -207,7 +207,7 @@ Contributing guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 Releases go out through GitHub Actions Trusted Publishing (OIDC, no stored `NPM_TOKEN`): push a `v<version>` tag and CI publishes with Sigstore provenance.
 
 ```sh
-npm version patch && git push origin main --tags
+npm version patch && git push origin <branch> --tags
 ```
 
 One-time npm-side setup and the full workflow details: [docs/release/release.md](docs/release/release.md).

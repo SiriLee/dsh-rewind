@@ -168,7 +168,7 @@ rm <dsh home>/snapshot-cleanup-last-sweep.json
 
 ## 安全
 
-本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。工作区文件仅在「回退对话和代码」时被改写，备份存储于 `~/.dsh/rewind-snapshots/`；还原以备份为唯一来源。不触碰你的 git 仓库，无网络请求，不访问任何凭据。对**长期不活跃**的会话，另有默认关闭的全局自动清理可整目录移除其快照，不影响活动会话与对话日志。完整安全模型：[SECURITY.md](SECURITY.md)。
+本插件只向会话日志追加回退标记事件，从不删除或改写已记录的历史。工作区文件仅在「回退对话和代码」时被改写，备份存储于 `<dsh home>/rewind-snapshots/`；还原以备份为唯一来源。不触碰你的 git 仓库，无网络请求，不访问任何凭据。对**长期不活跃**的会话，另有默认关闭的全局自动清理可整目录移除其快照，不影响活动会话与对话日志。完整安全模型：[SECURITY.md](SECURITY.md)。
 
 ## 开发
 
@@ -192,7 +192,7 @@ node scripts/verify-host.mjs   # 端到端验证构建产物
 通过 GitHub Actions Trusted Publishing（OIDC，无存储 `NPM_TOKEN`）发布：推送 `v<版本>` tag，CI 即带 Sigstore provenance 发布。
 
 ```sh
-npm version patch && git push origin main --tags
+npm version patch && git push origin <branch> --tags
 ```
 
 一次性 npm 侧配置与完整流程：见 [docs/release/release.zh.md](docs/release/release.zh.md)。

@@ -50,19 +50,17 @@ The auto-cleanup switch and the idle-day cutoff live in the **dsh-settings confi
 
 ## When automatic cleanup runs
 
-Automatic cleanup checks at most **once per run** (a restart lets it check again),
-on the first session activity (a message you send or a tool call that finishes),
-and only when it's enabled and at least 24 hours have passed since the last
-check. The 24-hour clock is saved to `<dsh home>/snapshot-cleanup-last-sweep.json`,
-so restarting doesn't reset it. It runs in the background and never blocks
-what you're doing.
-
-If you want a change to take effect right away, use `run`; automatic cleanup
-picks up a fresh setting on the next run.
+When it's enabled, automatic cleanup runs in the background at most **once a
+day** — and only after 24 hours have passed since the last cleanup. The clock is
+saved to `<dsh home>/snapshot-cleanup-last-sweep.json`, so restarting the host
+can't make it run early. To clean up right now instead of waiting, use
+`/snapshot-auto-cleanup run`.
 
 ## Safety
 
-- Only rewind **snapshots** (the file backups) are ever removed. Your
+- Only rewind **snapshots** are ever removed: a session's snapshot directory
+  holds the before-write file backups plus their bookkeeping (staged captures,
+  rescue copies, restore journals), and that is all the cleanup touches. Your
   conversation is never touched, and the plugin never rewrites or deletes your
   session history.
 - Automatic cleanup never removes your **active** session's snapshots — only
