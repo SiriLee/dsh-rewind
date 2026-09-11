@@ -43,7 +43,7 @@ import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
   CLEANUP_SETTINGS_NAMESPACE,
   CleanupConfigSchema,
@@ -584,18 +584,30 @@ async function executeRewind(
       // service would refuse as stale/absent. That is safe only because the
       // action set is the closed `planRestore`-derived one: paths the session
       // recorded, no symlink/hard link, differing from the disk.
-      const outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
-      // The restore wrote through plain node:fs, invisible to the harness
-      // observation policy: re-sync it so the session's next write of a
-      // restored/deleted file is not judged against the stale pre-restore
-      // observation (see syncRestoreObservations).
-      await syncRestoreObservations(ctx, fs, agent, outcome)
-      const parts: string[] = []
-      if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
-      if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
-      if (outcome.skipped.length > 0) parts.push(t('skip.count', { count: outcome.skipped.length }))
-      restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
-      restore += renderFailures(outcome.failed)
+      let outcome: RestoreOutcome | undefined
+      try {
+        outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
+      } catch (error) {
+        // Snapshots written by a newer build: fail the FILE RESTORE closed
+        // (nothing was changed) while the conversation rewind above already
+        // succeeded — the two are independent.
+        if (!(error instanceof UnknownStoreVersionError)) throw error
+        const version = await store.readStoreVersion(agent.session.id)
+        restore = `；${t('storeUnsupported', { version: version ?? error.version })}`
+      }
+      if (outcome !== undefined) {
+        // The restore wrote through plain node:fs, invisible to the harness
+        // observation policy: re-sync it so the session's next write of a
+        // restored/deleted file is not judged against the stale pre-restore
+        // observation (see syncRestoreObservations).
+        await syncRestoreObservations(ctx, fs, agent, outcome)
+        const parts: string[] = []
+        if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
+        if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
+        if (outcome.skipped.length > 0) parts.push(t('skip.count', { count: outcome.skipped.length }))
+        restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
+        restore += renderFailures(outcome.failed)
+      }
     }
 
     // Every rewind withdraws the target message and everything after it; its
@@ -660,7 +672,16 @@ async function handleRewind(
     } catch (error) {
       return rewindErrorResult(error)
     }
-    const impacts = await store.impactsAfter(session.id, plan.targetSeq)
+    const impacts = await store.impactsAfter(session.id, plan.targetSeq).catch((error: unknown) => {
+      // A store format newer than this build: report it instead of pretending
+      // there is nothing to restore (the preview must not lie in either
+      // direction). Nothing is changed either way.
+      if (error instanceof UnknownStoreVersionError) return undefined
+      throw error
+    })
+    if (impacts === undefined) {
+      return { kind: 'error', text: t('storeUnsupported', { version: await store.readStoreVersion(session.id) ?? 0 }) }
+    }
     return { kind: 'success', text: formatPlan(plan, impacts) }
   }
 
@@ -1022,6 +1043,14 @@ export function apply(ctx: Context, config?: RewindConfig): void {
         const result = await store.reconcileFormatVersion(session.id, session.header.version)
         if (result.cleared) {
           ctx.logger.warn(`[dsh-rewind] cleared snapshots for ${session.id}: session format changed (v${session.header.version})`)
+        }
+        // Plugin store-format guard: snapshots written by a NEWER build are
+        // never touched (no clear, no write, no restore plan) — warn once at
+        // session start so the degradation is not silent.
+        try {
+          await store.assertKnownStoreVersion(session.id)
+        } catch (error) {
+          ctx.logger.warn(`[dsh-rewind] file restore disabled for ${session.id}: ${error instanceof Error ? error.message : String(error)}`)
         }
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] session-format reconcile failed: ${error instanceof Error ? error.message : String(error)}`)

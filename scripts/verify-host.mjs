@@ -368,6 +368,35 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('binary backup is a raw sidecar file', sidecars.length >= 1, `sidecars=${sidecars.length}`)
 }
 
+// 4c. snapshots written by a NEWER build fail the FILE restore closed: the
+//     conversation rewind still succeeds, the workspace is untouched, and the
+//     user sees why (ADR-10).
+{
+  const futurePath = join(wsDir, 'future.bin')
+  await writeFile(futurePath, Buffer.from('original'), 'utf8')
+  session.append('user/message', user('future anchor question'), { surfaceOp: 'append' })
+  const futureAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'future1', futurePath, 'edited by the tracked call')
+  await writeFile(futurePath, 'changed again', 'utf8')
+
+  const sessionDir = join(snapRoot, session.id)
+  const markerFile = join(sessionDir, 'store')
+  const previousMarker = await readFile(markerFile, 'utf8').catch(() => undefined)
+  await writeFile(markerFile, '3', 'utf8')
+  try {
+    // Preview first: the rewind below withdraws the target from the surface,
+    // so it can no longer be previewed afterwards.
+    const preview = await call(agent, `preview @${futureAnchor} both`)
+    check('newer store preview reports the refusal instead of "no changes"', preview.kind === 'error' && /newer store format/.test(preview.text), preview.text)
+    const result = await call(agent, `@${futureAnchor} both`)
+    check('newer store fails the file restore closed, rewind still succeeds', result.kind === 'success' && /newer store format/.test(result.text), result.text)
+    check('newer store leaves the workspace untouched', await readFile(futurePath, 'utf8') === 'changed again', await readFile(futurePath, 'utf8'))
+  } finally {
+    if (previousMarker === undefined) await rm(markerFile, { force: true })
+    else await writeFile(markerFile, previousMarker, 'utf8')
+  }
+}
+
 // 5. a denied call never commits (no phantom entry)
 {
   // Own session so the anchor stays stable (the shared session's seqs drift

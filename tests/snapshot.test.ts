@@ -3,7 +3,7 @@
  * before-backups grouped by anchor message seq, with real files under a
  * temporary directory — exactly the production restore path.
  */
-import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, rm, writeFile, readFile, utimes, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -356,7 +356,9 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
   it('fails the path — never deletes — when the recorded sidecar is missing', async () => {
     const file = await touch('gone-sidecar.txt', 'live content')
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'recorded' })
-    await rm(join(store.anchorDir(session, 5), 'c1.before'), { force: true })
+    const sidecar = (await readdir(store.anchorDir(session, 5))).find(name => name.endsWith('.before'))
+    if (sidecar === undefined) throw new Error('expected a staged sidecar')
+    await rm(join(store.anchorDir(session, 5), sidecar), { force: true })
 
     const outcome = await store.restoreAfter(session, 5, unlink)
     expect(outcome.deleted).toEqual([])

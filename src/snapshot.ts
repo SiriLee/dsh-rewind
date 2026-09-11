@@ -114,6 +114,34 @@ export const SNAPSHOT_ROOT_ENV = 'DSH_REWIND_SNAPSHOT_DIR'
 export const MAX_ANCHOR_GROUPS = 100
 
 /**
+ * Current on-disk store format version (the session's `store` marker value and
+ * the `store` field of every entry this build writes). A value ABOVE this one
+ * means the snapshots were written by a NEWER build: readers must then fail
+ * closed (no file restore, nothing changed) instead of guessing what the extra
+ * fields mean. A missing marker (or `1`) means the released v1 string format,
+ * which is still read.
+ */
+export const CURRENT_STORE_VERSION = 2
+
+/**
+ * Thrown when snapshots carry a store format newer than this build understands
+ * (ADR-10: whole-operation fail-closed — never a partial restore, never a
+ * clear). The session rewind itself does not depend on snapshots and still
+ * works.
+ */
+export class UnknownStoreVersionError extends Error {
+  constructor(
+    /** The version found on disk. */
+    readonly version: number,
+    /** Where it was found (a marker or an entry file). */
+    readonly source: string,
+  ) {
+    super(`snapshot store version ${version} is newer than this plugin understands (${source})`)
+    this.name = 'UnknownStoreVersionError'
+  }
+}
+
+/**
  * Recorded before-content — always bytes, never a decoded string:
  *
  * - `blob`: a raw byte copy inside the store (the format every new write uses).
@@ -157,6 +185,13 @@ export interface CheckpointEntry {
   readonly size: number
   /** Epoch ms the entry was committed (stable ordering within a group). */
   readonly time: number
+  /**
+   * Absolute file this entry was READ from (in-memory only, never serialized):
+   * a dedup reference must name the file that actually exists, which for an
+   * entry written by an older build is not necessarily the name the current
+   * naming function would produce.
+   */
+  readonly file?: string
 }
 
 /**
@@ -174,6 +209,8 @@ export interface LinkEntry {
   /** `<anchorSeq>/<callId>.json` of the immediately-prior entry for the path. */
   readonly ref: string
   readonly time: number
+  /** Absolute file this link was read from (in-memory only, never serialized). */
+  readonly file?: string
 }
 
 /** Any on-disk entry: a full before-backup or an in-place dedup link. */
@@ -592,7 +629,15 @@ function journalOpIdOf(name: string): string {
 
 /** The entry file name one call id maps to (the single naming function). */
 function entryFileName(callId: string): string {
-  return `${safeFileId(callId)}.json`
+  // The digest disambiguates call ids that `safeFileId` would collapse onto the
+  // same name (`a:b` vs `a_b`). References always name a file explicitly and
+  // readers never infer a name, so pre-digest entries keep working.
+  return `${safeFileId(callId)}-${hashId(callId)}.json`
+}
+
+/** Stable 8-hex digest of an arbitrary id. */
+function hashId(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 8)
 }
 
 /** The sidecar file name of one entry file (`<base>.json` → `<base>.before`). */
@@ -631,33 +676,42 @@ function linkToJson(link: LinkEntry): Record<string, unknown> {
  * `tests/downgrade-safety.test.ts`.
  */
 async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry | undefined> {
+  let parsed: Record<string, unknown>
   try {
-    const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>
-    const callId = String(parsed.callId ?? '')
-    const time = typeof parsed.time === 'number' ? parsed.time : 0
-    if (parsed.store === 2) {
-      if (typeof parsed.file !== 'string') return undefined
-      const base = { callId, anchorSeq, path: parsed.file, time }
-      if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
-      if (parsed.blob === null) return { ...base, before: null, size: 0 }
-      if (typeof parsed.blob !== 'string') return undefined
-      // Invariant: the sidecar sits next to its entry, named after it.
-      if (parsed.blob !== sidecarName(basename(file))) return undefined
-      const size = typeof parsed.size === 'number' && parsed.size >= 0 ? parsed.size : 0
-      return { ...base, before: { kind: 'blob', path: join(dirname(file), parsed.blob) }, size }
-    }
-    // Released v1: `path` + `anchorSeq`, content inline as a decoded string.
-    if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
-    const base = { callId, anchorSeq: parsed.anchorSeq, path: parsed.path, time }
-    if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
-    // Never coerce a malformed `before` to null: null means "was created", and
-    // guessing it from a corrupt field is how a restore turns into a delete.
-    if (parsed.before !== null && typeof parsed.before !== 'string') return undefined
-    if (parsed.before === null) return { ...base, before: null, size: 0 }
-    return { ...base, before: textSourceOf(parsed.before), size: Buffer.byteLength(parsed.before, 'utf8') }
+    const value: unknown = JSON.parse(await readFile(file, 'utf8'))
+    if (typeof value !== 'object' || value === null) return undefined
+    parsed = value as Record<string, unknown>
   } catch {
     return undefined
   }
+  // A newer format is NOT "no entry": refusing to guess keeps the caller from
+  // planning anything against a shape it does not understand (fail-closed).
+  if (typeof parsed.store === 'number' && parsed.store > CURRENT_STORE_VERSION) {
+    throw new UnknownStoreVersionError(parsed.store, file)
+  }
+  const callId = String(parsed.callId ?? '')
+  const time = typeof parsed.time === 'number' ? parsed.time : 0
+  const origin = { file }
+  if (parsed.store === 2) {
+    if (typeof parsed.file !== 'string') return undefined
+    const base = { callId, anchorSeq, path: parsed.file, time, ...origin }
+    if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
+    if (parsed.blob === null) return { ...base, before: null, size: 0 }
+    if (typeof parsed.blob !== 'string') return undefined
+    // Invariant: the sidecar sits next to its entry, named after it.
+    if (parsed.blob !== sidecarName(basename(file))) return undefined
+    const size = typeof parsed.size === 'number' && parsed.size >= 0 ? parsed.size : 0
+    return { ...base, before: { kind: 'blob', path: join(dirname(file), parsed.blob) }, size }
+  }
+  // Released v1: `path` + `anchorSeq`, content inline as a decoded string.
+  if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
+  const base = { callId, anchorSeq: parsed.anchorSeq, path: parsed.path, time, ...origin }
+  if (typeof parsed.ref === 'string') return { ...base, ref: parsed.ref }
+  // Never coerce a malformed `before` to null: null means "was created", and
+  // guessing it from a corrupt field is how a restore turns into a delete.
+  if (parsed.before !== null && typeof parsed.before !== 'string') return undefined
+  if (parsed.before === null) return { ...base, before: null, size: 0 }
+  return { ...base, before: textSourceOf(parsed.before), size: Buffer.byteLength(parsed.before, 'utf8') }
 }
 
 /** Recursive byte total of a directory tree (never follows symlinks). */
@@ -825,6 +879,9 @@ export class SnapshotStore {
   /** Session-format-version marker file inside the session dir. Non-`.json`, so it never counts as a checkpoint entry. */
   private static readonly FORMAT_FILE = 'format'
 
+  /** Plugin STORE-format marker file inside the session dir (non-`.json`, same reasoning). */
+  private static readonly STORE_FILE = 'store'
+
   private lastPruneAt = 0
 
   /**
@@ -860,6 +917,9 @@ export class SnapshotStore {
 
   /** Sessions whose dedup state has been seeded from disk this process. */
   private readonly seededSessions = new Set<string>()
+
+  /** Sessions whose store-format marker this process has already stamped. */
+  private readonly storeStamped = new Set<string>()
 
   /**
    * Session-format version snapshots are anchored under, stamped into each
@@ -899,6 +959,16 @@ export class SnapshotStore {
   }
 
   /**
+   * The session-relative ref of an entry READ from disk: the file that really
+   * holds it. A v1 entry keeps its released name, so recomputing the name from
+   * the call id would produce a dangling reference.
+   */
+  private refOfRead(sessionId: string, entry: StoredEntry): string {
+    if (entry.file !== undefined) return relative(this.sessionDir(sessionId), entry.file)
+    return this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
+  }
+
+  /**
    * Stage a capture slot for one tool call: create the session's `.pending/`
    * area and return the absolute path the caller copies the before-bytes into
    * (never through memory). The slot lives inside the session dir so the
@@ -927,7 +997,7 @@ export class SnapshotStore {
         const key = `${sessionId}\0${entry.path}`
         if (this.lastEntry.has(key)) continue
         const source = await this.resolveBefore(sessionId, entry)
-        this.lastEntry.set(key, { source, ref: this.entryRefOf(sessionId, entry.callId, entry.anchorSeq) })
+        this.lastEntry.set(key, { source, ref: this.refOfRead(sessionId, entry) })
       }
     } catch {
       // Seeding is best-effort: an unreadable/corrupt session simply starts
@@ -1044,6 +1114,10 @@ export class SnapshotStore {
     const time = Math.max(Date.now(), this.lastEntryTime + 1)
     this.lastEntryTime = time
     await this.ensureDedupSeeded(sessionId)
+    // Never write into a store a newer build owns: the marker would be
+    // overwritten and the formats mixed. The failure is loud (the host logs
+    // the failed commit) and costs snapshots, never workspace data.
+    await this.assertKnownStoreVersion(sessionId)
     const dir = this.anchorDir(sessionId, entry.anchorSeq)
     await mkdir(dir, { recursive: true })
     const file = join(dir, entryFileName(entry.callId))
@@ -1089,9 +1163,17 @@ export class SnapshotStore {
     }
     // Stamp the session-format marker so this session's snapshots record the
     // session-format version they were written under — the value the
-    // `agent/session-start` reconcile compares against on the next load.
+    // `agent/session-start` reconcile compares against on the next load — and
+    // the plugin's own store-format marker, so a future format bump can fail
+    // closed before reading any entry.
     if (this.formatVersion !== null) {
       await this.markFormatVersion(sessionId, this.formatVersion)
+    }
+    // The store-format marker only ever moves to the CURRENT version in this
+    // build, so stamp it once per process per session.
+    if (!this.storeStamped.has(sessionId)) {
+      await this.markStoreVersion(sessionId, CURRENT_STORE_VERSION)
+      this.storeStamped.add(sessionId)
     }
     // Prune at most once per interval: a turn with many writes would otherwise
     // pay a readdir + sort on every commit. The 100-group cap still holds —
@@ -1238,6 +1320,9 @@ export class SnapshotStore {
     targetSeq: number,
     probe: DiskProbe,
   ): Promise<{ actions: PlannedAction[]; skipped: string[]; failed: { path: string; message: string }[] }> {
+    // Whole-operation fail-closed for a store this build does not understand:
+    // a partial restore of a half-known format is worse than no restore.
+    await this.assertKnownStoreVersion(sessionId)
     const actions: PlannedAction[] = []
     const skipped: string[] = []
     const failed: { path: string; message: string }[] = []
@@ -1880,7 +1965,14 @@ export class SnapshotStore {
       for (const file of files) {
         if (!file.endsWith('.json')) continue
         const entryFile = join(this.anchorDir(sessionId, seq), file)
-        const entry = await readEntry(entryFile, seq)
+        let entry: StoredEntry | undefined
+        try {
+          entry = await readEntry(entryFile, seq)
+        } catch {
+          // A newer-format entry (or an unreadable one): never touch it and
+          // never let it abort the prune of unrelated groups.
+          continue
+        }
         if (entry === undefined || !isLinkEntry(entry)) continue
         if (!isSafeLinkRef(entry.ref)) continue // unsafe/corrupt ref: never follow it
         const refAnchor = refAnchorOf(entry.ref)
@@ -1888,7 +1980,8 @@ export class SnapshotStore {
         let source: ByteSource | null
         try {
           source = await this.resolveBefore(sessionId, entry)
-        } catch {
+        } catch (error) {
+          if (error instanceof UnknownStoreVersionError) throw error
           continue // already-dangling link: not caused by this eviction
         }
         let real: CheckpointEntry
@@ -2172,6 +2265,8 @@ export class SnapshotStore {
       // removed out-of-band) would otherwise link a later recordEntry to a
       // deleted prior entry, leaving a dangling ref.
       this.seededSessions.delete(sessionId)
+      // The dir (and its `store` marker) is gone: the next commit re-stamps it.
+      this.storeStamped.delete(sessionId)
       for (const key of this.lastEntry.keys()) {
         if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
       }
@@ -2220,6 +2315,51 @@ export class SnapshotStore {
    */
   setFormatVersion(sessionVersion: number): void {
     this.formatVersion = sessionVersion
+  }
+
+  /**
+   * Read the plugin's STORE-format marker for a session, or null when there is
+   * none (a released-v1 dir, or a session that never recorded a snapshot). The
+   * marker is a quick session-level signal; every entry and journal is also
+   * self-describing (`store` / `version`), so a missing marker never changes
+   * how an entry is read.
+   */
+  async readStoreVersion(sessionId: string): Promise<number | null> {
+    try {
+      const raw = await readFile(join(this.sessionDir(sessionId), SnapshotStore.STORE_FILE), 'utf8')
+      const parsed = Number(raw.trim())
+      return Number.isFinite(parsed) ? parsed : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Stamp the store-format marker (atomically, like `format`). Written
+   * alongside every byte-format entry, so a session that only ever holds the
+   * released string format keeps no marker and is read as v1.
+   */
+  async markStoreVersion(sessionId: string, storeVersion: number): Promise<void> {
+    const dir = this.sessionDir(sessionId)
+    await mkdir(dir, { recursive: true })
+    const file = join(dir, SnapshotStore.STORE_FILE)
+    const tmp = `${file}.tmp`
+    await writeFile(tmp, `${storeVersion}`, 'utf8')
+    await rename(tmp, file)
+  }
+
+  /**
+   * Refuse to plan against (or write into) a session whose store format is
+   * NEWER than this build understands (ADR-10): the caller reports it and
+   * changes nothing — no partial restore, no clear, no v2 entry written into a
+   * v3 store. Checked before any entry is read, so the marker alone is enough
+   * to fail closed.
+   */
+  async assertKnownStoreVersion(sessionId: string): Promise<void> {
+    const version = await this.readStoreVersion(sessionId)
+    if (version !== null && version > CURRENT_STORE_VERSION) {
+      throw new UnknownStoreVersionError(version, join(this.sessionDir(sessionId), SnapshotStore.STORE_FILE))
+    }
   }
 
   /**
@@ -2299,6 +2439,13 @@ export async function reconcileTracked(
   tracked: ReadonlySet<string>,
   probe: DiskProbe = defaultProbe,
 ): Promise<number> {
+  try {
+    await store.assertKnownStoreVersion(sessionId)
+  } catch {
+    // Snapshots written by a newer build: record nothing rather than mixing
+    // formats into a store this build does not fully understand.
+    return 0
+  }
   let recorded = 0
   for (const path of tracked) {
     try {

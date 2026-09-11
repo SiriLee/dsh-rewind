@@ -112,9 +112,14 @@ describe('byte-exact capture and restore', () => {
   it('keeps the bytes out of the entry JSON (metadata only)', async () => {
     const live = await touch('secret.bin', Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
     await captureAndRecord('c1', 5, live)
-    const raw = await readFile(join(store.anchorDir(session, 5), 'c1.json'), 'utf8')
+    const names = await readdir(store.anchorDir(session, 5))
+    const entryName = names.find(name => name.endsWith('.json'))
+    if (entryName === undefined) throw new Error('expected a committed entry')
+    const raw = await readFile(join(store.anchorDir(session, 5), entryName), 'utf8')
     expect(raw).not.toContain('中')
-    expect(JSON.parse(raw)).toMatchObject({ store: 2, callId: 'c1', file: live, blob: 'c1.before', size: 4 })
+    expect(JSON.parse(raw)).toMatchObject({
+      store: 2, callId: 'c1', file: live, blob: entryName.replace(/\.json$/, '.before'), size: 4,
+    })
   })
 })
 
@@ -157,7 +162,10 @@ describe('integrity rules', () => {
   it('reports a missing sidecar as a per-file failure, never a delete', async () => {
     const live = await touch('gone.bin', Buffer.from([1, 2, 3]))
     await captureAndRecord('c1', 5, live)
-    await rm(join(store.anchorDir(session, 5), 'c1.before'), { force: true })
+    const names = await readdir(store.anchorDir(session, 5))
+    const sidecar = names.find(name => name.endsWith('.before'))
+    if (sidecar === undefined) throw new Error('expected a staged sidecar')
+    await rm(join(store.anchorDir(session, 5), sidecar), { force: true })
     await writeFile(live, Buffer.from([4, 5, 6]))
 
     const outcome = await store.restoreAfter(session, 5, unlink)
@@ -170,13 +178,58 @@ describe('integrity rules', () => {
   it('reports a sidecar whose size disagrees with its metadata', async () => {
     const live = await touch('short.bin', Buffer.from([1, 2, 3, 4]))
     await captureAndRecord('c1', 5, live)
-    await writeFile(join(store.anchorDir(session, 5), 'c1.before'), Buffer.from([1, 2]))
+    const names = await readdir(store.anchorDir(session, 5))
+    const sidecar = names.find(name => name.endsWith('.before'))
+    if (sidecar === undefined) throw new Error('expected a staged sidecar')
+    await writeFile(join(store.anchorDir(session, 5), sidecar), Buffer.from([1, 2]))
 
     const outcome = await store.restoreAfter(session, 5, unlink)
     expect(outcome.failed.map(failure => failure.message)).toEqual([
       expect.stringContaining('size mismatch'),
     ])
     expect(await readFile(live)).toEqual(Buffer.from([1, 2, 3, 4]))
+  })
+
+  it('keeps entries for call ids that sanitize to the same file name', async () => {
+    const one = await touch('one.bin', Buffer.from('one'))
+    const two = await touch('two.bin', Buffer.from('two'))
+    // `safeFileId` maps both of these onto `a_b`; the digest in the file name
+    // keeps the two entries (and their sidecars) apart.
+    await captureAndRecord('a:b', 5, one)
+    await captureAndRecord('a_b', 5, two)
+    const names = await readdir(store.anchorDir(session, 5))
+    expect(names.filter(name => name.endsWith('.json'))).toHaveLength(2)
+    expect(names.filter(name => name.endsWith('.before'))).toHaveLength(2)
+
+    await writeFile(one, Buffer.from('x'))
+    await writeFile(two, Buffer.from('y'))
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect([...outcome.restored].sort()).toEqual([one, two].sort())
+    expect(await readFile(one, 'utf8')).toBe('one')
+    expect(await readFile(two, 'utf8')).toBe('two')
+  })
+
+  it('reads pre-digest entry file names next to new ones', async () => {
+    const a = await touch('a-oldname.bin', Buffer.from('A'))
+    const b = await touch('b-newname.bin', Buffer.from('B'))
+    // An entry written before the digest was added: same schema, older name.
+    await mkdir(store.anchorDir(session, 5), { recursive: true })
+    await writeFile(join(store.anchorDir(session, 5), 'legacyname.json'), JSON.stringify({
+      store: 2, callId: 'old', file: a, blob: 'legacyname.before', size: 1, time: 1,
+    }), 'utf8')
+    await writeFile(join(store.anchorDir(session, 5), 'legacyname.before'), Buffer.from('A'))
+    await captureAndRecord('new', 5, b)
+
+    const entries = await store.entriesAfter(session, 5)
+    expect(entries.filter(isLinkEntry)).toHaveLength(0)
+    expect(entries).toHaveLength(2)
+
+    await writeFile(a, Buffer.from('x'))
+    await writeFile(b, Buffer.from('y'))
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect([...outcome.restored].sort()).toEqual([a, b].sort())
+    expect(await readFile(a, 'utf8')).toBe('A')
+    expect(await readFile(b, 'utf8')).toBe('B')
   })
 
   it('keeps composing v1 and v2 entries in one window', async () => {

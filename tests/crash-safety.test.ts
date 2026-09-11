@@ -155,7 +155,9 @@ describe('atomic checkpoint commits', () => {
     // lands the entry atomically.
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
     expect(await store.entriesAfter(session, 5)).toHaveLength(1)
-    expect((await readdir(anchorDir)).sort()).toEqual(['c1.before', 'c1.json'])
+    const landed = (await readdir(anchorDir)).sort()
+    expect(landed.filter(n => n.endsWith('.json'))).toHaveLength(1)
+    expect(landed.filter(n => n.endsWith('.before'))).toHaveLength(1)
   })
 
   it('a planted half-written entry is ignored, never read as a checkpoint', async () => {
