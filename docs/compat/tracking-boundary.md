@@ -18,7 +18,7 @@ interval is only as precise as the next recorded state (see
 
 ## How file changes are classified
 
-**Editing tools** (create/overwrite, edit lines, insert): each call tells the
+**Editing tools** (create/overwrite, line edits): each call tells the
 plugin *which file* it will change, so the plugin snapshots the file's current
 content **before** the edit and can restore it on rewind. This path is
 deterministic — using them always yields a restorable rewind.

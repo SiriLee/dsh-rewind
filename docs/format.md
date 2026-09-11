@@ -17,6 +17,7 @@ Deleting the root only removes file backups; the store rebuilds from scratch.
 <root>/
 └── <sessionId>/                        # safeSessionId(sessionId)
     ├── store                           # store-format marker ("2")
+    ├── format                          # DSH session-format marker (session.header.version)
     ├── <anchorSeq>/                    # decimal seq of the anchoring user/message
     │   ├── <base>.json                 # one committed before-backup (metadata)
     │   └── <base>.before               # its raw byte sidecar (the before content)
@@ -37,11 +38,15 @@ Deleting the root only removes file backups; the store rebuilds from scratch.
   resolving.
 - `<anchorSeq>` is a decimal integer; directories with non-integer names are
   ignored by readers.
+- Checkpoint entries are read from those numeric directories only
+  (`<anchorSeq>/<base>.json`). Neither marker is `.json`, and a stray `.json` in
+  the session root is ignored.
 - Journal files are recognized by the `journal-` prefix (current format) or the
-  released `restore-journal-` prefix (read-only compatibility); every other
-  `.json` file directly under the session dir is treated as a checkpoint entry.
+  released `restore-journal-` prefix (read-only compatibility).
 - `store` is the session's store-format marker (a decimal version, written
-  atomically); a missing marker means the released v1 string format.
+  atomically); a missing marker means the released v1 string format. `format` is
+  the DSH **session**-format marker the snapshots were anchored under (see
+  `docs/snapshot-auto-cleanup.md`) — the two are independent.
 
 ## Checkpoint entry
 
@@ -236,16 +241,17 @@ current `CURRENT_STORE_VERSION`, 2) and a self-describing field on every record
 (`store` on entries, `version` on journals). A missing `store` marker (or `1`)
 means the released v1 string format, which is still read but never migrated. A
 `store` **above** the current version fails the whole operation closed — no file
-restore, no clear, and no new entry written into a store a newer build owns —
-while the conversation rewind itself keeps working (it does not depend on
-snapshots); a journal whose `version` is neither 1 nor 2 is simply corrupt, and
-is reported `recovery-required` (see Validation).
+restore and no new entry written into a store a newer build owns (an explicit
+clear or the age-based sweep is not version-gated) — while the conversation
+rewind itself keeps working (it does not depend on snapshots). A journal whose
+`version` is present but neither 1 nor 2 is corrupt and is reported
+`recovery-required` (see Validation).
 
-Because compatibility is not safe in both directions, the byte format shares no
-key names with v1 and does not carry `anchorSeq` (it equals the parent
-directory). A released v1 build therefore rejects each such entry instead of
-reading it as "the file was created", so a downgrade cannot delete workspace
-files; that field-name contract is pinned by
+Because compatibility is not safe in both directions, the byte format reuses
+none of v1's path/state keys (`path`, `anchorSeq`, `before`) and does not carry
+`anchorSeq` (it equals the parent directory). A released v1 build therefore
+rejects each such entry instead of reading it as "the file was created", so a
+downgrade cannot delete workspace files; that field-name contract is pinned by
 `tests/downgrade-safety.test.ts`. Compatibility means reading old data, not
 repairing it: bytes the v1 build had already lost cannot be recovered.
 

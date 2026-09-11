@@ -58,8 +58,11 @@ than hidden.
 A failed gate fails closed: an invalid target, a missing store, an absent
 backup, or a cancelled invocation aborts the rewind with an error. A store
 written by a **newer** build is one of those gates: it is refused as a whole —
-no partial restore, no clear, no new entry written into it — while the
-conversation rewind itself still works.
+no partial restore and no new entry written into it, and the automatic
+format-change clear below is skipped — while the conversation rewind itself
+still works. An explicit clear (`run --current --apply`) or the age-based sweep,
+being a user-directed deletion of whole session directories, is deliberately not
+version-gated.
 
 **Automatic store deletion**: two things delete session snapshots. The opt-in
 `snapshot-auto-cleanup` sweep (default off) removes the whole directories of
@@ -70,9 +73,9 @@ positions that no longer line up. Both stay confined to the store root, use
 `lstat` (so they never follow a symlink out of the root), the sweep never targets
 the active session, and neither touches the conversation log. When auto-cleanup
 is disabled (the default), only the format-change clear runs, and only for an
-affected session. A session whose store is **newer** than this build understands
-is never cleared: the store-format guard fails the whole operation closed before
-any format-change clear (see `docs/format.md`).
+affected session. The store-format guard runs before that clear, so a session
+whose store is **newer** than this build understands is not cleared by it (see
+`docs/format.md`).
 
 ## Conversation integrity
 
