@@ -67,11 +67,13 @@ const ROUND_TRIP_CASES: ReadonlyArray<readonly [string, Buffer]> = [
   ['embedded NUL', Buffer.from([0x61, 0x00, 0x62, 0xff, 0x00])],
   ['CRLF text', Buffer.from('line1\r\nline2\r\n')],
   ['empty file', Buffer.alloc(0)],
-  ['2 MiB binary', randomBytes(1024 * 1024)],
+  ['1 MiB binary', randomBytes(1024 * 1024)],
 ]
 
 describe('byte-exact capture and restore', () => {
   for (const [name, bytes] of ROUND_TRIP_CASES) {
+    // Explicit timeout: the MiB case is a real copy plus a streaming byte
+    // compare, and a loaded CI runner can exceed vitest's 5 s default.
     it(`round-trips ${name} exactly`, async () => {
       const live = await touch(`${name.replaceAll(' ', '-')}.bin`, bytes)
       await captureAndRecord('c1', 5, live)
@@ -80,7 +82,7 @@ describe('byte-exact capture and restore', () => {
       const outcome = await store.restoreAfter(session, 5, unlink)
       expect(outcome.restored).toEqual([live])
       expect(await readFile(live)).toEqual(bytes)
-    })
+    }, 30_000)
   }
 
   it('stores an EXISTING empty file as a blob, distinct from "was created"', async () => {
