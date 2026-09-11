@@ -531,43 +531,9 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   await rm(remotePath, { force: true })
 }
 
-// 4h. `str_replace_editor` is a write-class tool: its mutations are captured
-//     and restored (the `view` command is not).
-{
-  const editorSession = buildSession('verify-editor')
-  const editorAgent = makeAgent(editorSession.id, editorSession)
-  editorSession.append('user/message', user('editor anchor question'), { surfaceOp: 'append' })
-  const editorAnchor = editorSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const editorPath = join(wsDir, 'editor.txt')
-  await writeFile(editorPath, 'editor-before', 'utf8')
-
-  const editor = { callId: 'editor1', name: 'str_replace_editor', arguments: { command: 'str_replace', path: editorPath, old_str: 'before', new_str: 'after' }, agent: editorAgent, signal: aborted() }
-  await ctx.waterfall('tools/execute', editor, async () => {
-    await writeFile(editorPath, 'editor-after', 'utf8')
-    return { isError: false, content: [] }
-  })
-  await ctx.waterfall('tools/post-execute', editor, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  await writeFile(editorPath, 'editor-later', 'utf8')
-
-  const editorPreview = await call(editorAgent, `preview @${editorAnchor} both`)
-  check('str_replace_editor mutations are captured', editorPreview.kind === 'success' && editorPreview.text.includes(editorPath), editorPreview.text)
-  const editorBoth = await call(editorAgent, `@${editorAnchor} both`)
-  check('str_replace_editor edit is restored', editorBoth.kind === 'success' && (await readFile(editorPath, 'utf8')) === 'editor-before', `content=${await readFile(editorPath, 'utf8')}`)
-
-  // A read-only `view` must not stage anything (no backup, no `.pending`).
-  const viewSession = buildSession('verify-editor-view')
-  const viewAgent = makeAgent(viewSession.id, viewSession)
-  viewSession.append('user/message', user('view anchor question'), { surfaceOp: 'append' })
-  const view = { callId: 'view1', name: 'str_replace_editor', arguments: { command: 'view', path: editorPath }, agent: viewAgent, signal: aborted() }
-  await ctx.waterfall('tools/execute', view, async () => ({ isError: false, content: [] }))
-  await ctx.waterfall('tools/post-execute', view, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  const viewMembers = await readdir(join(snapRoot, viewSession.id)).catch(() => [])
-  check('str_replace_editor view is not captured', viewMembers.length === 0, `members=${viewMembers.join(',')}`)
-}
-
-// 4i. `edit` — the third documented write-class tool — is tracked as well, so
-//     the tracked-tool contract is pinned for every name the docs promise
-//     (`write`, `edit`, `str_replace_editor`).
+// 4h. `edit` is tracked as well, so the contract is pinned for every tool the
+//     plugin actually follows (`write`, `edit`). `str_replace_editor` is NOT
+//     tracked by design: it stopped being a default DSH tool in 0.1.3.
 {
   const editSession = buildSession('verify-edit')
   const editAgent = makeAgent(editSession.id, editSession)

@@ -74,8 +74,18 @@ export interface RewindConfig {
   readonly dedup?: boolean
 }
 
-/** Tool names whose mutations the checkpoint tracker follows. */
-const TRACKED_TOOLS = new Set(['write', 'edit', 'str_replace_editor'])
+/**
+ * Tool names whose mutations the checkpoint tracker follows.
+ *
+ * `str_replace_editor` is deliberately ABSENT even though it still exists as an
+ * optional DSH package: it stopped being a DEFAULT tool in DSH 0.1.3, and the
+ * plugin dropped it with the rest of the dead branches then (see the 0.10.x
+ * "adapt to DSH 0.1.3-alpha.2" commit). The references left in DSH's client
+ * packages render HISTORICAL transcripts, and the mentions in this repo's docs
+ * are stale promises from before that removal — do not re-add it here without
+ * also deciding to support opt-in deployments of that tool.
+ */
+const TRACKED_TOOLS = new Set(['write', 'edit'])
 
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
@@ -124,29 +134,9 @@ async function discardCapture(capture: PendingCapture | undefined): Promise<void
 
 /** Extract the file path a tracked tool call mutates, or undefined. */
 function mutationPathOf(exec: ToolExecution): string | undefined {
-  const args = exec.arguments as Record<string, unknown>
+  const args = exec.arguments as { file_path?: unknown }
   if (exec.name === 'write' || exec.name === 'edit') {
     return typeof args.file_path === 'string' ? args.file_path : undefined
-  }
-  if (exec.name === 'str_replace_editor') {
-    // Mirrors DSH's own mutation classification (`turn-deliverables.ts`): the
-    // argument is `path`, and `view` is read-only — capturing it would record
-    // a backup for a call that cannot change the file. `undo_edit` DOES write
-    // the previous content back, so it is tracked as well.
-    if (typeof args.path !== 'string' || args.path.trim().length === 0) return undefined
-    switch (args.command) {
-      case 'create':
-        return typeof args.file_text === 'string' ? args.path : undefined
-      case 'str_replace':
-        return typeof args.old_str === 'string' && args.old_str.length > 0 ? args.path : undefined
-      case 'insert':
-        return typeof args.insert_line === 'number' && Number.isInteger(args.insert_line) && args.insert_line >= 0
-          && typeof args.new_str === 'string' ? args.path : undefined
-      case 'undo_edit':
-        return args.path
-      default:
-        return undefined
-    }
   }
   return undefined
 }
