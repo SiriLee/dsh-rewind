@@ -69,7 +69,7 @@
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
 import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { basename, dirname, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
 /** Sub-directory of the harness home holding this plugin's snapshots. */
@@ -846,6 +846,60 @@ async function isLinkPath(path: string): Promise<boolean> {
 }
 
 /**
+ * The nearest ancestor of `dir` (inclusive) that exists on disk, or undefined
+ * when even the root is gone. Used to decide whether a MISSING parent chain can
+ * be recreated safely (see {@link parentStillMatches}).
+ */
+async function nearestExistingAncestor(dir: string): Promise<string | undefined> {
+  let current = dir
+  for (;;) {
+    const st = await lstat(current).catch(() => undefined)
+    if (st !== undefined) return current
+    const parent = dirname(current)
+    if (parent === current) return undefined
+    current = parent
+  }
+}
+
+/**
+ * True when `path`'s parent directory still resolves where it did at checkpoint
+ * time (`recorded`, the entry's location pin). Only the path's FINAL component
+ * is link-checked (see {@link isLinkPath}); without this a repointed ancestor
+ * directory would redirect a restore — or, worse, an unlink — outside the
+ * recorded location.
+ *
+ * - no pin (a legacy entry, or a commit that could not resolve its parent) →
+ *   true: the released behavior is preserved;
+ * - the parent resolves to the pinned location → true. A STABLE symlinked
+ *   ancestor resolves identically on both sides (the pin is a `realpath`), so
+ *   a symlinked workspace root is never a false skip;
+ * - the parent resolves elsewhere → false;
+ * - the parent chain is gone → true only while the nearest surviving ancestor
+ *   still resolves INSIDE the pinned location, which keeps "recreate a deleted
+ *   parent directory" working without following a repointed ancestor;
+ * - anything undecidable (a link loop, an unreadable component) → false:
+ *   refuse rather than write into a location that cannot be verified.
+ */
+async function parentStillMatches(path: string, recorded: string | undefined): Promise<boolean> {
+  if (recorded === undefined) return true
+  const dir = dirname(path)
+  try {
+    return await realpath(dir) === recorded
+  } catch (error) {
+    if (!isEnoent(error)) return false
+  }
+  const ancestor = await nearestExistingAncestor(dir)
+  if (ancestor === undefined) return false
+  try {
+    const real = await realpath(ancestor)
+    const inside = relative(real, recorded)
+    return inside !== '' && !inside.startsWith('..') && !isAbsolute(inside)
+  } catch {
+    return false
+  }
+}
+
+/**
  * True when a dedup-link `ref` is a SAFE relative reference to a checkpoint
  * entry — `<digits>/<callId>.json`, a single level below the session dir, with
  * no traversal or absolute segment. The plugin always writes refs this way
@@ -1491,6 +1545,14 @@ export class SnapshotStore {
           skipped.push(entry.path)
           continue
         }
+        // Only the path's FINAL component is link-checked above: refuse a path
+        // whose directory no longer resolves to its checkpoint-time location,
+        // so the preview never promises a restore the apply pass would refuse
+        // (and no doomed action ever reaches the journal).
+        if (!(await parentStillMatches(entry.path, entry.parent))) {
+          skipped.push(entry.path)
+          continue
+        }
         if (source !== null && source.kind === 'lossyText') {
           // A legacy record that lost bytes: comparable, never writable.
           const same = await probe.matches(source, entry.path)
@@ -1579,15 +1641,26 @@ export class SnapshotStore {
       const action = actions[i]!
       opts?.crash?.('before-action', i) // test-only: crash before the fs op
       const journalAction = journal.actions[i]!
-      let applied: 'restored' | 'deleted' | 'enoent'
+      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
       try {
         applied = await this.applyActionToDisk(
           action.action,
           action.path,
           action.action === 'restore' ? action.before : null,
           deleteFile,
-          action.action === 'restore' ? action.mode : undefined,
+          {
+            ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+            ...(action.parent !== undefined ? { parent: action.parent } : {}),
+          },
         )
+        if (applied === 'skipped') {
+          // The directory moved between planning and this write: refuse, and
+          // record why so the journal cannot claim the op completed.
+          journalAction.failed = `parent directory moved or repointed: ${dirname(action.path)}`
+          await this.saveJournal(journal)
+          failed.push({ path: action.path, message: journalAction.failed })
+          continue
+        }
         if (applied === 'enoent') {
           // Already absent: the delete is already done — the target state is
           // reached. Mark the action and count nothing (Claude Code tolerates
@@ -1825,8 +1898,11 @@ export class SnapshotStore {
     path: string,
     content: ByteSource | null,
     deleteFile: DeleteFile,
-    mode?: number,
-  ): Promise<'restored' | 'deleted' | 'enoent'> {
+    opts?: { readonly mode?: number; readonly parent?: string },
+  ): Promise<'restored' | 'deleted' | 'enoent' | 'skipped'> {
+    // Containment first: never write, create or unlink through an ancestor
+    // directory that no longer resolves to its checkpoint-time location.
+    if (!(await parentStillMatches(path, opts?.parent))) return 'skipped'
     if (kind === 'delete') {
       try {
         await deleteFile(path)
@@ -1860,7 +1936,7 @@ export class SnapshotStore {
     }
     // Best-effort: a filesystem that refuses chmod must never fail a restore
     // whose bytes landed (Windows permission bits, exotic mounts, …).
-    if (mode !== undefined) await chmod(path, mode).catch(() => undefined)
+    if (opts?.mode !== undefined) await chmod(path, opts.mode).catch(() => undefined)
     // No recorded mode (a legacy entry, or a link materialized without one):
     // the live bits are not ours to change, so only undo the widening.
     else if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
@@ -2008,15 +2084,26 @@ export class SnapshotStore {
         await this.saveJournal(journal)
         continue
       }
-      let applied: 'restored' | 'deleted' | 'enoent'
+      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
       try {
         applied = await this.applyActionToDisk(
           action.action,
           action.path,
           action.action === 'restore' ? action.before : null,
           deleteFile,
-          action.action === 'restore' ? action.mode : undefined,
+          {
+            ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+            ...(action.parent !== undefined ? { parent: action.parent } : {}),
+          },
         )
+        if (applied === 'skipped') {
+          // The directory no longer resolves where the op was pinned: refuse
+          // the redo and keep the journal non-terminal, with the reason.
+          action.failed = `parent directory moved or repointed: ${dirname(action.path)}`
+          await this.saveJournal(journal)
+          failed.push({ path: action.path, message: action.failed })
+          continue
+        }
         if (applied === 'enoent') {
           action.done = true
           await this.saveJournal(journal)
@@ -2102,15 +2189,28 @@ export class SnapshotStore {
         await this.saveJournal(journal)
         continue
       }
-      let applied: 'restored' | 'deleted' | 'enoent'
+      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
       try {
         applied = await this.applyActionToDisk(
           action.rescue === null ? 'delete' : 'restore',
           action.path,
           action.rescue,
           deleteFile,
-          action.rescueMode,
+          {
+            ...(action.rescueMode !== undefined ? { mode: action.rescueMode } : {}),
+            ...(action.parent !== undefined ? { parent: action.parent } : {}),
+          },
         )
+        if (applied === 'skipped') {
+          // A rollback that cannot verify the location must not claim to have
+          // undone the op: leave it retryable as recovery-required.
+          journal.rollbackError = `parent directory moved or repointed: ${action.path}`
+          journal.state = 'recovery-required'
+          await this.saveJournal(journal)
+          failed.push({ path: action.path, message: journal.rollbackError })
+          rollbackFailed = true
+          continue
+        }
         if (applied === 'enoent') {
           action.done = false
           await this.saveJournal(journal)

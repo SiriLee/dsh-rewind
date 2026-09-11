@@ -46,7 +46,7 @@ import { planProjectionDefinition as planProjection } from '@deepseek-ai/dsh-pla
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import { chmod, mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rename, rm, symlink, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
 import { createHash, randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -554,6 +554,70 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('edit mutations are captured', editPreview.kind === 'success' && editPreview.text.includes(editPath), editPreview.text)
   const editBoth = await call(editAgent, `@${editAnchor} both`)
   check('edit is restored', editBoth.kind === 'success' && (await readFile(editPath, 'utf8')) === 'edit-before', `content=${await readFile(editPath, 'utf8')}`)
+}
+
+// 4i. a tracked file whose ancestor directory was replaced by a symlink is
+//     refused: only the path's FINAL component is link-checked, so without the
+//     checkpoint-time parent pin a restore would write — and a creation delete
+//     would UNLINK — through the link, outside the recorded location.
+{
+  const pinSession = buildSession('verify-pin')
+  const pinAgent = makeAgent(pinSession.id, pinSession)
+  pinSession.append('user/message', user('pin anchor question'), { surfaceOp: 'append' })
+  const pinAnchor = pinSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const dir = join(wsDir, 'pinned')
+  const live = join(dir, 'f.txt')
+  await mkdir(dir, { recursive: true })
+  await writeFile(live, 'pin-before', 'utf8')
+  await runWrite(pinAgent, 'pin1', live, 'pin-edited')
+  // A second record under the same directory whose content DID NOT exist: the
+  // restore wants to unlink that path.
+  const created = join(dir, 'created.txt')
+  await runWrite(pinAgent, 'pin2', created, 'pin-created')
+
+  // Repoint the whole directory: move the real one aside, symlink a decoy in.
+  const moved = join(wsDir, 'pinned-real')
+  const outside = join(tmpRoot, 'pin-outside')
+  await rename(dir, moved)
+  await mkdir(outside, { recursive: true })
+  await writeFile(join(outside, 'f.txt'), 'pin-decoy', 'utf8')
+  await writeFile(join(outside, 'created.txt'), 'pin-decoy-created', 'utf8')
+  await symlink(outside, dir, 'dir')
+
+  const preview = await call(pinAgent, `preview @${pinAnchor} both`)
+  const both = await call(pinAgent, `@${pinAnchor} both`)
+  check('a repointed ancestor refuses the restore (no write outside the checkpoint)',
+    (await readFile(join(outside, 'f.txt'), 'utf8')) === 'pin-decoy' &&
+      (await readFile(join(moved, 'f.txt'), 'utf8')) === 'pin-edited',
+    `outside=${await readFile(join(outside, 'f.txt'), 'utf8')} moved=${await readFile(join(moved, 'f.txt'), 'utf8')}`)
+  check('a repointed ancestor refuses the creation delete (no unlink outside the checkpoint)',
+    (await readFile(join(outside, 'created.txt'), 'utf8')) === 'pin-decoy-created',
+    `outside=${await readFile(join(outside, 'created.txt'), 'utf8')}`)
+  check('a repointed ancestor is reported, not silently restored',
+    preview.kind === 'success' && /impact=0/.test(preview.text) && both.kind === 'success' && /skip|fail/.test(both.text),
+    `${preview.text} | ${both.text}`)
+}
+
+// 4j. the pin must never cause a false skip for a STABLE symlinked ancestor (a
+//     symlinked workspace or temp root): the pin and the check are both
+//     realpaths, so they resolve identically.
+{
+  const linkSession = buildSession('verify-pin-stable')
+  const linkAgent = makeAgent(linkSession.id, linkSession)
+  linkSession.append('user/message', user('stable link anchor question'), { surfaceOp: 'append' })
+  const linkAnchor = linkSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  const realDir = join(wsDir, 'linked-real')
+  await mkdir(realDir, { recursive: true })
+  const linkDir = join(wsDir, 'linked')
+  await symlink(realDir, linkDir, 'dir')
+  const viaLink = join(linkDir, 'f.txt')
+  await writeFile(viaLink, 'link-before', 'utf8')
+  await runWrite(linkAgent, 'link1', viaLink, 'link-edited')
+
+  const both = await call(linkAgent, `@${linkAnchor} both`)
+  check('a stable symlinked ancestor still restores',
+    both.kind === 'success' && (await readFile(join(realDir, 'f.txt'), 'utf8')) === 'link-before',
+    both.text)
 }
 
 // 5. a denied call never commits (no phantom entry)
