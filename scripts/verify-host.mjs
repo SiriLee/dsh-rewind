@@ -47,6 +47,7 @@ import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { chmod, mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
+import { createHash, randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
@@ -373,6 +374,23 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   }
   await walk(join(snapRoot, session.id))
   check('binary backup is a raw sidecar file', sidecars.length >= 1, `sidecars=${sidecars.length}`)
+
+  // The reporter's own repro (issue #23): 4096 random bytes, touched by a
+  // tracked tool call, then a rewind — the digest must be unchanged.
+  const blobPath = join(wsDir, 'blob.bin')
+  const blob = randomBytes(4096)
+  const digest = b => createHash('sha256').update(b).digest('hex')
+  const blobDigest = digest(blob)
+  await writeFile(blobPath, blob)
+  session.append('user/message', user('blob anchor question'), { surfaceOp: 'append' })
+  const blobAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'blob1', blobPath, 'agent touched this file')
+  await writeFile(blobPath, randomBytes(4096)) // the file drifts after the edit
+  const blobBoth = await call(agent, `@${blobAnchor} both`)
+  const restoredBlob = await readFile(blobPath)
+  check('issue #23 repro: sha256 is unchanged after a rewind',
+    blobBoth.kind === 'success' && restoredBlob.length === 4096 && digest(restoredBlob) === blobDigest,
+    `sha=${digest(restoredBlob).slice(0, 16)} expected=${blobDigest.slice(0, 16)}`)
 }
 
 // 4c. snapshots written by a NEWER build fail the FILE restore closed: the
