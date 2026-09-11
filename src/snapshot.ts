@@ -1032,6 +1032,36 @@ export class SnapshotStore {
     return this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
   }
 
+  /** Drop every in-memory trace of one session (its directory is gone). */
+  private forgetSession(sessionId: string): void {
+    this.seededSessions.delete(sessionId)
+    this.storeStamped.delete(sessionId)
+    for (const key of [...this.lastEntry.keys()]) {
+      if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
+    }
+  }
+
+  /**
+   * Forget in-memory state for sessions whose directory no longer exists —
+   * after a sweep, or after the user removed a session dir out of band. A
+   * stale handle is SAFE (dedup and the boundary both fail toward storing
+   * more), but keeping it means the store holds state for a session it deleted
+   * and skips re-stamping that session's `format`/`store` markers.
+   */
+  private async forgetMissingSessions(): Promise<void> {
+    const known = new Set<string>([...this.seededSessions, ...this.storeStamped])
+    for (const key of this.lastEntry.keys()) {
+      const separator = key.indexOf('\0')
+      if (separator !== -1) known.add(key.slice(0, separator))
+    }
+    for (const sessionId of known) {
+      // "Cannot tell" keeps the (safe) state rather than failing the sweep
+      // whose deletions already happened.
+      const present = await this.exists(this.sessionDir(sessionId)).catch(() => true)
+      if (!present) this.forgetSession(sessionId)
+    }
+  }
+
   /**
    * Stage a capture slot for one tool call: create the session's `.pending/`
    * area and return the absolute path the caller copies the before-bytes into
@@ -2243,7 +2273,9 @@ export class SnapshotStore {
    *  - a non-positive `maxAgeDays` throws instead of degenerating into a
    *    mass-destructive `cutoff` in the far future;
    *  - the walk uses `lstat` (no symlink following) and skips dot-prefixed
-   *    temp left overs, so measurement stays inside the store root.
+   *    temp left overs — except the real `.pending/` area, whose staged bytes
+   *    are content and whose freshness is activity — so measurement stays
+   *    inside the store root.
    *
    * `dryRun` computes and reports exactly what would be removed without
    * deleting anything — the `/snapshot-auto-cleanup run` preview.
@@ -2298,6 +2330,9 @@ export class SnapshotStore {
         remainingBytes += size
       }
     }
+    // A dry run must not touch memory (its contract): only a real sweep drops
+    // the in-memory state of the sessions it removed.
+    if (!dryRun) await this.forgetMissingSessions()
     return report()
   }
 
@@ -2420,12 +2455,7 @@ export class SnapshotStore {
       // was already empty. A stale in-memory entry (e.g. a session whose dir was
       // removed out-of-band) would otherwise link a later recordEntry to a
       // deleted prior entry, leaving a dangling ref.
-      this.seededSessions.delete(sessionId)
-      // The dir (and its `store` marker) is gone: the next commit re-stamps it.
-      this.storeStamped.delete(sessionId)
-      for (const key of this.lastEntry.keys()) {
-        if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
-      }
+      this.forgetSession(sessionId)
     }
     return { sessionId, ...stats, dryRun }
   }

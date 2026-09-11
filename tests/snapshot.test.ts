@@ -788,6 +788,25 @@ describe('pruneStale', () => {
     expect(rep.freedBytes).toBe(7)
   })
 
+  it('forgets in-memory state for the sessions it deleted', async () => {
+    const old = now() - 40 * day
+    const file = join(root, 'ws', 'gone.txt')
+    await mkdir(join(root, 'ws'), { recursive: true })
+    await writeFile(file, 'x', 'utf8')
+    await seedSession(session, '5', 'c1', JSON.stringify({
+      callId: 'c1', anchorSeq: 5, path: file, before: 'x', time: 1,
+    }), old)
+
+    // Seeding from disk puts a handle in memory (the dedup state).
+    await expect(store.lastKnownContent(session, file)).resolves.not.toBeUndefined()
+    const rep = await store.pruneStale({ maxAgeDays: 30 })
+    expect(rep.deleted).toBe(1)
+    // The dir is gone, so the handle must be gone too — otherwise the store
+    // keeps state for a session it just deleted (and skips re-stamping its
+    // markers on the next commit).
+    await expect(store.lastKnownContent(session, file)).resolves.toBeUndefined()
+  })
+
   it('measures the newest MEMBER mtime, not the session-dir mtime', async () => {
     await seedSession('nested', '1', 'a', '{}', now() - 40 * day)
     // A fresh file inside an otherwise old anchor group: newest member wins.
