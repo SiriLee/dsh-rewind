@@ -237,7 +237,14 @@ async function captureBefore(
   try {
     await copyFile(target.displayPath, staged)
     const st = await stat(staged)
-    backup = { file: staged, size: st.size }
+    // Permission bits are recorded best-effort next to the bytes: they belong
+    // to the file's state, but they never decide whether a restore happens.
+    const source = await stat(target.displayPath).catch(() => undefined)
+    backup = {
+      file: staged,
+      size: st.size,
+      ...(source !== undefined ? { mode: source.mode & 0o7777 } : {}),
+    }
   } catch (error) {
     // Never leave a partial/failed stage behind: `pending` only ever points at
     // a complete copy, and `prune` collects anything that escapes.

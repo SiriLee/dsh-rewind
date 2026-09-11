@@ -46,7 +46,7 @@ import { planProjectionDefinition as planProjection } from '@deepseek-ai/dsh-pla
 import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
 import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import { mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
+import { chmod, mkdtemp, mkdir, rm, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { apply as applyRewind } from '../lib/index.js'
@@ -394,6 +394,25 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   } finally {
     if (previousMarker === undefined) await rm(markerFile, { force: true })
     else await writeFile(markerFile, previousMarker, 'utf8')
+  }
+}
+
+// 4d. the recorded permission bits travel with the restored bytes
+{
+  const modePath = join(wsDir, 'mode.txt')
+  await writeFile(modePath, 'mode-original', 'utf8')
+  await chmod(modePath, 0o640)
+  if (((await stat(modePath)).mode & 0o7777) === 0o640) {
+    session.append('user/message', user('mode anchor question'), { surfaceOp: 'append' })
+    const modeAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+    await runWrite(agent, 'mode1', modePath, 'mode-edited')
+    await chmod(modePath, 0o600)
+    const result = await call(agent, `@${modeAnchor} both`)
+    const restoredMode = (await stat(modePath)).mode & 0o7777
+    check('mode rewind both succeeds', result.kind === 'success', result.text)
+    check('content restored with the recorded mode', (await readFile(modePath, 'utf8')) === 'mode-original' && restoredMode === 0o640, `mode=${restoredMode.toString(8)}`)
+  } else {
+    console.log('skip permission-bit check (chmod unsupported on this filesystem)')
   }
 }
 

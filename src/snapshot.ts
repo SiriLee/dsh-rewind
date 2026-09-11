@@ -68,7 +68,7 @@
 
 import { createHash } from 'node:crypto'
 import type { Stats } from 'node:fs'
-import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 
@@ -170,6 +170,12 @@ export interface PendingBackup {
   readonly file: string
   /** Byte size of the staged content. */
   readonly size: number
+  /**
+   * Permission bits of the source file (`stat().mode & 0o7777`), captured
+   * best-effort. Restored alongside the content — never on its own, and never
+   * as part of the change decision (ADR-9).
+   */
+  readonly mode?: number
 }
 
 /** One committed before-backup, keyed by tool call. */
@@ -183,6 +189,12 @@ export interface CheckpointEntry {
   readonly before: ByteSource | null
   /** Byte size of `before` (0 when the file was created). */
   readonly size: number
+  /**
+   * Permission bits recorded at capture time, when known. Applied only when
+   * the CONTENT is restored (a mode-only difference is never a reason to plan
+   * a restore); a missing value means "leave the live mode alone".
+   */
+  readonly mode?: number
   /** Epoch ms the entry was committed (stable ordering within a group). */
   readonly time: number
   /**
@@ -283,6 +295,10 @@ export interface RestoreJournalAction {
   readonly rescue: ByteSource | null
   /** Set when the rescue capture failed: rollback then skips this path. */
   rescueError?: string
+  /** Permission bits the restored content should end up with, when recorded. */
+  readonly mode?: number
+  /** Permission bits the file had BEFORE the restore, for a faithful rollback. */
+  readonly rescueMode?: number
   /** True once the action's fs op completed and was marked. */
   done: boolean
   /** Per-action failure message; the restore pass never aborts. */
@@ -376,7 +392,7 @@ export type CopyOutcome =
 
 /** One restore action the planner derived from record + disk reconciliation. */
 export type PlannedAction =
-  | { readonly path: string; readonly action: 'restore'; readonly before: ByteSource }
+  | { readonly path: string; readonly action: 'restore'; readonly before: ByteSource; readonly mode?: number }
   | { readonly path: string; readonly action: 'delete' }
 
 /** Streaming byte equality of two files (never loads either one whole). */
@@ -577,6 +593,8 @@ function journalToJson(journal: RestoreJournal, sessionDir: string): Record<stri
       before: sourceToRef(action.before, sessionDir, action.path),
       rescue: sourceToRef(action.rescue, sessionDir, action.path),
       ...(action.rescueError !== undefined ? { rescueError: action.rescueError } : {}),
+      ...(action.mode !== undefined ? { mode: action.mode } : {}),
+      ...(action.rescueMode !== undefined ? { rescueMode: action.rescueMode } : {}),
       done: action.done,
       ...(action.failed !== undefined ? { failed: action.failed } : {}),
     })),
@@ -597,6 +615,8 @@ function journalFromJson(raw: Record<string, unknown>, sessionDir: string): Rest
       before: value.action === 'delete' ? null : before,
       rescue,
       ...(typeof value.rescueError === 'string' ? { rescueError: value.rescueError } : {}),
+      ...(typeof value.mode === 'number' ? { mode: value.mode } : {}),
+      ...(typeof value.rescueMode === 'number' ? { rescueMode: value.rescueMode } : {}),
       done: value.done as boolean,
       ...(typeof value.failed === 'string' ? { failed: value.failed } : {}),
     })
@@ -653,7 +673,13 @@ function refAnchorOf(ref: string): number {
 
 /** Serialize one in-memory entry for disk (the current byte format). */
 function entryToJson(entry: CheckpointEntry): Record<string, unknown> {
-  const base = { store: 2, callId: entry.callId, file: entry.path, time: entry.time }
+  const base = {
+    store: 2,
+    callId: entry.callId,
+    file: entry.path,
+    time: entry.time,
+    ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+  }
   if (entry.before === null) return { ...base, blob: null, size: 0 }
   if (entry.before.kind !== 'blob') throw new Error(`entry for ${entry.path} is not blob-backed`)
   return { ...base, blob: basename(entry.before.path), size: entry.size }
@@ -701,7 +727,13 @@ async function readEntry(file: string, anchorSeq: number): Promise<StoredEntry |
     // Invariant: the sidecar sits next to its entry, named after it.
     if (parsed.blob !== sidecarName(basename(file))) return undefined
     const size = typeof parsed.size === 'number' && parsed.size >= 0 ? parsed.size : 0
-    return { ...base, before: { kind: 'blob', path: join(dirname(file), parsed.blob) }, size }
+    const mode = typeof parsed.mode === 'number' ? parsed.mode : undefined
+    return {
+      ...base,
+      before: { kind: 'blob', path: join(dirname(file), parsed.blob) },
+      size,
+      ...(mode !== undefined ? { mode } : {}),
+    }
   }
   // Released v1: `path` + `anchorSeq`, content inline as a decoded string.
   if (typeof parsed.path !== 'string' || typeof parsed.anchorSeq !== 'number') return undefined
@@ -1106,7 +1138,11 @@ export class SnapshotStore {
   private async commit(
     sessionId: string,
     entry: { readonly callId: string; readonly anchorSeq: number; readonly path: string },
-    content: { readonly source: ByteSource | null; readonly staged?: { readonly file: string } },
+    content: {
+      readonly source: ByteSource | null
+      readonly staged?: { readonly file: string }
+      readonly mode?: number
+    },
     opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
   ): Promise<void> {
     // Monotonic time (see lastEntryTime): strictly increasing per store
@@ -1156,6 +1192,7 @@ export class SnapshotStore {
         path: entry.path,
         before: placed?.source ?? null,
         size: placed?.size ?? 0,
+        ...(content.mode !== undefined ? { mode: content.mode } : {}),
         time,
       }
       await writeJsonAtomic(file, entryToJson(committed), () => opts?.crash?.('after-temp-write'))
@@ -1220,6 +1257,7 @@ export class SnapshotStore {
     await this.commit(sessionId, entry, {
       source: backup === null ? null : { kind: 'blob', path: backup.file },
       ...(backup !== null ? { staged: { file: backup.file } } : {}),
+      ...(backup?.mode !== undefined ? { mode: backup.mode } : {}),
     }, opts)
   }
 
@@ -1351,7 +1389,17 @@ export class SnapshotStore {
         const same = await probe.matches(source, entry.path)
         if (same === true) continue // identical content (or still absent): a no-op
         if (source === null) actions.push({ path: entry.path, action: 'delete' })
-        else actions.push({ path: entry.path, action: 'restore', before: source })
+        else {
+          // `mode` never MAKES an action (a mode-only difference is a no-op),
+          // but restoring content also restores the recorded permissions.
+          const mode = isLinkEntry(entry) ? undefined : entry.mode
+          actions.push({
+            path: entry.path,
+            action: 'restore',
+            before: source,
+            ...(mode !== undefined ? { mode } : {}),
+          })
+        }
       } catch {
         // Probe failure: conservative — treat as differing. A restore still
         // attempts the write, a delete still attempts the unlink (failures
@@ -1419,7 +1467,13 @@ export class SnapshotStore {
       const journalAction = journal.actions[i]!
       let applied: 'restored' | 'deleted' | 'enoent'
       try {
-        applied = await this.applyActionToDisk(action.action, action.path, action.action === 'restore' ? action.before : null, deleteFile)
+        applied = await this.applyActionToDisk(
+          action.action,
+          action.path,
+          action.action === 'restore' ? action.before : null,
+          deleteFile,
+          action.action === 'restore' ? action.mode : undefined,
+        )
         if (applied === 'enoent') {
           // Already absent: the delete is already done — the target state is
           // reached. Mark the action and count nothing (Claude Code tolerates
@@ -1542,11 +1596,16 @@ export class SnapshotStore {
         // this path and report it instead of guessing.
         rescueError = error instanceof Error ? error.message : String(error)
       }
+      // Pre-restore permissions (best-effort): a rollback must be able to put
+      // back what the restore found, including a read-only file's bits.
+      const rescueMode = (await stat(action.path).catch(() => undefined))?.mode
       const journalAction: RestoreJournalAction = {
         path: action.path,
         action: action.action,
         before: action.action === 'restore' ? action.before : null,
         rescue,
+        ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
+        ...(rescueMode !== undefined ? { rescueMode: rescueMode & 0o7777 } : {}),
         done: false,
       }
       if (rescueError !== undefined) journalAction.rescueError = rescueError
@@ -1641,12 +1700,17 @@ export class SnapshotStore {
    * thus its xattrs/ACL, and crash safety is provided by the journal plus disk
    * reconciliation instead (a half-written file simply does not match the
    * goal, so a redo rewrites it).
+   *
+   * Permissions are best-effort (ADR-9/R3): the mode is only ever applied as
+   * part of a CONTENT restore (never as a reason to plan one), and a chmod
+   * failure never fails the restore.
    */
   private async applyActionToDisk(
     kind: 'restore' | 'delete',
     path: string,
     content: ByteSource | null,
     deleteFile: DeleteFile,
+    mode?: number,
   ): Promise<'restored' | 'deleted' | 'enoent'> {
     if (kind === 'delete') {
       try {
@@ -1659,9 +1723,25 @@ export class SnapshotStore {
     }
     if (content === null) throw new Error(`restore of ${path} has no recorded content`)
     await mkdir(dirname(path), { recursive: true })
-    if (content.kind === 'blob') await copyFile(content.path, path)
-    else if (content.kind === 'text') await writeFile(path, content.bytes)
-    else await writeFile(path, Buffer.from(content.text, 'utf8'))
+    // A read-only target cannot be written: add owner-write for the attempt
+    // and put the live mode back if the write fails (R3).
+    const current = (await stat(path).catch(() => undefined))?.mode
+    let widened = false
+    if (current !== undefined && (current & 0o200) === 0) {
+      await chmod(path, current | 0o200).catch(() => undefined)
+      widened = true
+    }
+    try {
+      if (content.kind === 'blob') await copyFile(content.path, path)
+      else if (content.kind === 'text') await writeFile(path, content.bytes)
+      else await writeFile(path, Buffer.from(content.text, 'utf8'))
+    } catch (error) {
+      if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
+      throw error
+    }
+    // Best-effort: a filesystem that refuses chmod must never fail a restore
+    // whose bytes landed (Windows permission bits, exotic mounts, …).
+    if (mode !== undefined) await chmod(path, mode).catch(() => undefined)
     return 'restored'
   }
 
@@ -1801,7 +1881,13 @@ export class SnapshotStore {
       }
       let applied: 'restored' | 'deleted' | 'enoent'
       try {
-        applied = await this.applyActionToDisk(action.action, action.path, action.action === 'restore' ? action.before : null, deleteFile)
+        applied = await this.applyActionToDisk(
+          action.action,
+          action.path,
+          action.action === 'restore' ? action.before : null,
+          deleteFile,
+          action.action === 'restore' ? action.mode : undefined,
+        )
         if (applied === 'enoent') {
           action.done = true
           await this.saveJournal(journal)
@@ -1889,7 +1975,13 @@ export class SnapshotStore {
       }
       let applied: 'restored' | 'deleted' | 'enoent'
       try {
-        applied = await this.applyActionToDisk(action.rescue === null ? 'delete' : 'restore', action.path, action.rescue, deleteFile)
+        applied = await this.applyActionToDisk(
+          action.rescue === null ? 'delete' : 'restore',
+          action.path,
+          action.rescue,
+          deleteFile,
+          action.rescueMode,
+        )
         if (applied === 'enoent') {
           action.done = false
           await this.saveJournal(journal)
