@@ -455,8 +455,25 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   // wrong order this alone triggers the whole-directory clear.
   await writeFile(join(dir, 'format'), '0', 'utf8')
 
-  ctx.emit('agent/session-start', { agent: futureAgent })
-  await new Promise(resolve => setTimeout(resolve, 300))
+  // The handler is fire-and-forget, so poll for a POSITIVE signal that it ran
+  // (the guard's warning) instead of sleeping: otherwise a slow machine could
+  // leave the negative assertions below passing vacuously.
+  const warnings = []
+  const originalWarn = ctx.logger.warn
+  ctx.logger.warn = (...args) => {
+    warnings.push(String(args[0] ?? ''))
+    return originalWarn.apply(ctx.logger, args)
+  }
+  try {
+    ctx.emit('agent/session-start', { agent: futureAgent })
+    const deadline = Date.now() + 2000
+    while (Date.now() < deadline && !warnings.some(text => text.includes('file restore disabled'))) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+  } finally {
+    ctx.logger.warn = originalWarn
+  }
+  check('session start reports the unsupported store', warnings.some(text => text.includes('file restore disabled')), `warnings=${warnings.join(' | ')}`)
 
   const members = await readdir(dir).catch(() => [])
   check('session start does not clear a newer store', members.includes('5') && members.includes('store'), `members=${members.join(',')}`)
