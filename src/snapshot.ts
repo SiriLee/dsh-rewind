@@ -234,8 +234,14 @@ export interface RestoreReconcileReport {
  */
 export interface DiskProbe {
   /**
-   * Full text of the file, or undefined when the file does not exist.
-   * Any thrown error is treated as a probe failure: restore planning then
+   * Full text of the file, or `undefined` **only** when the file does not
+   * exist. A file that exists but holds bytes that are not valid UTF-8 throws
+   * an error whose `code` is `FS_NOT_TEXT` ({@link NOT_TEXT_CODE}): such a
+   * file cannot be faithfully compared against, or restored from, a recorded
+   * string, so callers must neither treat it as absent nor materialize a lossy
+   * (U+FFFD) record for it.
+   *
+   * Any other thrown error is a generic probe failure: restore planning then
    * conservatively treats the file as DIFFERING from its record (a restore
    * still attempts the write / a delete still attempts the unlink), so an
    * unreadable file is never silently skipped.
@@ -250,16 +256,51 @@ export type PlannedAction =
   | { readonly path: string; readonly action: 'restore'; readonly before: string }
   | { readonly path: string; readonly action: 'delete' }
 
+/**
+ * Error `code` of a probe read that found a real file whose bytes are not
+ * valid UTF-8. Distinct from a generic probe failure (which stays
+ * conservative) and from `undefined` (which means "absent").
+ */
+export const NOT_TEXT_CODE = 'FS_NOT_TEXT'
+
+/** Build the {@link NOT_TEXT_CODE} error for one path. */
+function notTextError(path: string): Error {
+  return Object.assign(new Error(`not valid UTF-8 text: ${path}`), { code: NOT_TEXT_CODE })
+}
+
+/** True when a probe error means "the file exists but is not text". */
+export function isNotTextError(error: unknown): boolean {
+  return (error as { code?: string } | undefined)?.code === NOT_TEXT_CODE
+}
+
+/**
+ * Read one file as text with a FATAL UTF-8 decode: invalid byte sequences are
+ * an error ({@link NOT_TEXT_CODE}), never a U+FFFD replacement. Only ENOENT
+ * maps to `undefined` ("absent") — conflating the two would let a boundary
+ * re-check record a binary file as an absent (i.e. "was created") entry, which
+ * a later restore would DELETE.
+ *
+ * NUL is deliberately NOT rejected: it is valid UTF-8 and round-trips through
+ * a JS string byte-exactly, so it needs no special case here.
+ */
+export async function readTextStrict(path: string): Promise<string | undefined> {
+  let raw: Buffer
+  try {
+    raw = await readFile(path)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    throw error
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(raw)
+  } catch {
+    throw notTextError(path)
+  }
+}
+
 /** Production probe: real reads via node:fs, links detected by lstat + nlink. */
 export const defaultProbe: DiskProbe = {
-  async readText(path: string): Promise<string | undefined> {
-    try {
-      return await readFile(path, 'utf8')
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
-      throw error
-    }
-  },
+  readText: readTextStrict,
   isLink: isLinkPath,
 }
 
@@ -756,7 +797,20 @@ export class SnapshotStore {
           failed.push({ path: entry.path, message: error instanceof Error ? error.message : String(error) })
           continue
         }
-        const current = await probe.readText(entry.path)
+        let current: string | undefined
+        try {
+          current = await probe.readText(entry.path)
+        } catch (error) {
+          if (!isNotTextError(error)) throw error
+          // The file exists but its bytes are not UTF-8. A recorded STRING
+          // cannot be compared against it faithfully, and writing a lossy
+          // (U+FFFD) record over it would destroy live data — so content never
+          // plans an action here. A `delete` needs no content, so it is still
+          // planned (rewinding past a file's creation must still remove it).
+          if (before === null) actions.push({ path: entry.path, action: 'delete' })
+          else skipped.push(entry.path)
+          continue
+        }
         if (before === null) {
           // The file was created at/after the target: delete it when it is
           // still present. An absent file already matches the target state.
@@ -773,8 +827,14 @@ export class SnapshotStore {
         let before: string | null
         try {
           before = await this.resolveBefore(sessionId, entry)
-        } catch {
-          before = null
+        } catch (resolveError) {
+          // Unknown content is NOT "the file was created": planning a delete
+          // here would destroy a file we cannot restore. Fail this path only.
+          failed.push({
+            path: entry.path,
+            message: resolveError instanceof Error ? resolveError.message : String(resolveError),
+          })
+          continue
         }
         if (before === null) {
           actions.push({ path: entry.path, action: 'delete' })
@@ -1703,8 +1763,9 @@ function hashPath(path: string): string {
  * from the recent record, so the link decision would never apply there.
  *
  * Symlinked / hard-linked paths are never re-checked (restores skip them).
- * A probe failure skips the file with a warning-level no-op; it never
- * aborts the boundary pass.
+ * A probe failure — including a file that is not valid UTF-8 — skips the file
+ * with a warning-level no-op; it never aborts the boundary pass, and it never
+ * records the path as absent.
  *
  * @param store - the session's snapshot store.
  * @param sessionId - session whose tracked files to re-check.
@@ -1737,7 +1798,10 @@ export async function reconcileTracked(
         recorded++
       }
     } catch {
-      // Probe failure: skip this file; the boundary pass never aborts.
+      // Probe failure — including a non-UTF-8 file (`FS_NOT_TEXT`): skip this
+      // file; the boundary pass never aborts. Never fall back to `null` here:
+      // `undefined` means "absent", and recording a binary file as absent
+      // would turn a later rewind into a DELETE of live data.
     }
   }
   return recorded

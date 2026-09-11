@@ -23,7 +23,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SnapshotStore, type CrashPoint, type RestoreJournal, type RestoreRunOptions } from '../src/snapshot.ts'
+import { SnapshotStore, NOT_TEXT_CODE, type CrashPoint, type DiskProbe, type RestoreJournal, type RestoreRunOptions } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -387,6 +387,39 @@ describe('reconciliation auto-heal and failure reporting', () => {
     } finally {
       await chmod(sessionDir, 0o755)
     }
+  })
+
+  it('a failed rescue is reported and rollback leaves the path untouched', async () => {
+    // The rescue (pre-restore state) must be captured FAITHFULLY: when it
+    // cannot be read as decoded text, the journal records a rescue error and a
+    // rollback skips the path instead of writing lossy bytes back over it.
+    const file = await touch('live.txt', 'text-before')
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'text-before' })
+    await writeFile(file, 'user-edited', 'utf8')
+
+    let calls = 0
+    const flakyProbe: DiskProbe = {
+      isLink: async () => false,
+      readText: async () => {
+        calls++
+        // Planning sees a real difference; the rescue capture then fails the
+        // way a non-UTF-8 file does.
+        if (calls === 1) return 'user-edited'
+        throw Object.assign(new Error('not valid UTF-8 text: live.txt'), { code: NOT_TEXT_CODE })
+      },
+    }
+
+    await expect(
+      store.restoreAfter(session, 5, unlink, flakyProbe, crashAt('before-action', 0)),
+    ).rejects.toThrow('simulated host crash')
+    const [journal] = await readJournals(store, session)
+    expect(journal!.actions[0]!.rescue).toBeNull()
+    expect(journal!.actions[0]!.rescueError).toContain('not valid UTF-8')
+
+    const rollback = await store.rollbackRestore(session, journal!.id, unlink)
+    expect(rollback.failed.map(f => f.path)).toEqual([file])
+    expect(rollback.restored).toEqual([])
+    expect(await readFile(file, 'utf8')).toBe('user-edited')
   })
 
   it('journal files never disturb entriesAfter/prune; terminal ones are recycled', async () => {

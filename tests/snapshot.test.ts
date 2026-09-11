@@ -7,7 +7,7 @@ import { mkdtemp, mkdir, rm, writeFile, readFile, utimes, symlink } from 'node:f
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { reconcileTracked, SnapshotStore, isLinkEntry, type DiskProbe } from '../src/snapshot.ts'
+import { reconcileTracked, SnapshotStore, isLinkEntry, defaultProbe, NOT_TEXT_CODE, type DiskProbe } from '../src/snapshot.ts'
 
 let root: string
 let store: SnapshotStore
@@ -273,6 +273,74 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
     const outcome = await store.restoreAfter(session, 5, unlink, failingProbe)
     expect(outcome.restored).toEqual([file])
   })
+
+  it('never writes a lossy record over a file that is not valid UTF-8', async () => {
+    // The recorded before-state is a string (necessarily lossy for such a
+    // file). Restoring it would DESTROY the live bytes, so the path is
+    // skipped instead — no action, disk untouched.
+    const file = await touch('gbk.txt', '')
+    await writeFile(file, Buffer.from([0xd6, 0xd0, 0xce, 0xc4])) // GBK "中文"
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'text' })
+
+    expect(await store.impactsAfter(session, 5)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome).toEqual({ restored: [], deleted: [], skipped: [file], failed: [] })
+    expect(await readFile(file)).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
+  })
+
+  it('still deletes a created file whose current bytes are not valid UTF-8', async () => {
+    // A delete needs no content, so an undecodable file must not suppress it:
+    // rewinding past the file's creation still removes it.
+    const created = await touch('created.bin', '')
+    await writeFile(created, Buffer.from([0x89, 0x50, 0x4e, 0x47])) // PNG magic
+    await store.recordEntry(session, { callId: 'c1', anchorSeq: 6, path: created, before: null })
+
+    expect(await store.impactsAfter(session, 5)).toEqual([{ path: created, action: 'delete' }])
+    const outcome = await store.restoreAfter(session, 5, unlink)
+    expect(outcome.deleted).toEqual([created])
+    expect(await store.exists(created)).toBe(false)
+  })
+
+  it('fails the path — never deletes — when content cannot be resolved', async () => {
+    // A dangling dedup link + a throwing link probe reaches the outer catch.
+    // Falling back to `before = null` there would plan a DELETE of a file we
+    // cannot restore; the safe outcome is a per-file failure.
+    const file = await touch('dangling.txt', 'live content')
+    const anchorDir = join(store.sessionDir(session), '5')
+    await mkdir(anchorDir, { recursive: true })
+    await writeFile(join(anchorDir, 'dangling.json'), JSON.stringify({
+      callId: 'dangling', anchorSeq: 5, path: file, ref: '6/missing.json', time: 1,
+    }), 'utf8')
+    const throwingProbe: DiskProbe = {
+      isLink: async () => { throw Object.assign(new Error('EACCES: denied'), { code: 'EACCES' }) },
+      readText: async () => 'live content',
+    }
+
+    expect(await store.impactsAfter(session, 5, throwingProbe)).toEqual([])
+    const outcome = await store.restoreAfter(session, 5, unlink, throwingProbe)
+    expect(outcome.deleted).toEqual([])
+    expect(outcome.restored).toEqual([])
+    expect(outcome.failed.map(f => f.path)).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('live content')
+  })
+})
+
+describe('defaultProbe (strict UTF-8)', () => {
+  it('returns undefined only for a missing file', async () => {
+    expect(await defaultProbe.readText(join(root, 'nope.txt'))).toBeUndefined()
+  })
+
+  it('rejects a non-UTF-8 file with FS_NOT_TEXT (never "absent")', async () => {
+    const file = await touch('binary.bin', '')
+    await writeFile(file, Buffer.from([0xd6, 0xd0]))
+    await expect(defaultProbe.readText(file)).rejects.toMatchObject({ code: NOT_TEXT_CODE })
+  })
+
+  it('accepts NUL (valid UTF-8, byte-exact through a string)', async () => {
+    const file = await touch('nul.txt', '')
+    await writeFile(file, Buffer.from([0x61, 0x00, 0x62]))
+    expect(await defaultProbe.readText(file)).toBe('a\u0000b')
+  })
 })
 
 describe('reconcileTracked (user-message boundary re-check)', () => {
@@ -338,6 +406,21 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: link, before: 'x' })
     const tracked = await store.trackedPaths(session)
     expect(await reconcileTracked(store, session, 7, tracked)).toBe(0)
+  })
+
+  it('skips a non-UTF-8 file instead of recording it as absent', async () => {
+    // Recording it as absent (`before: null`) would turn a later rewind into a
+    // DELETE of live bytes; the boundary must skip such a file entirely.
+    const file = await touch('binary.bin', 'original')
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })
+    await writeFile(file, Buffer.from([0xd6, 0xd0, 0xce, 0xc4])) // GBK "中文"
+    const tracked = await store.trackedPaths(session)
+
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(0)
+    // Rewinding to the boundary must not delete the file.
+    const outcome = await store.restoreAfter(session, 7, unlink)
+    expect(outcome.deleted).toEqual([])
+    expect(await readFile(file)).toEqual(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))
   })
 })
 
