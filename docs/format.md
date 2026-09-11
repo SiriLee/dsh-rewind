@@ -173,16 +173,19 @@ versions on disk.
   leave an unreferenced sidecar but never an entry whose bytes are missing.
   A sidecar that is missing or shorter than `size` is a per-file failure, never
   a silent "the file was created".
-- **Pinned location**: every entry, link and journal action records where the
-  tracked file's directory resolved at commit time (the `parent` pin), and a
-  restore re-checks it before touching the path — the initial pass, a
-  post-restart `continueRestore` and a `rollbackRestore` alike (the journal
-  carries the pin). A directory that resolves elsewhere is refused and reported,
-  so a restore can never write or unlink outside the recorded location. A parent
-  chain that is GONE is still recreated — the plugin restores files whose
-  directory was deleted — but only while its nearest surviving ancestor resolves
-  inside the pin. A stable symlinked ancestor is never refused: both sides of
-  the comparison are `realpath`s.
+- **Pinned location**: every record this build writes — entry, link and journal
+  action — carries where the tracked file's directory resolved at commit time
+  (the `parent` pin, best-effort), and a restore re-checks it before touching the
+  path — the initial pass, a post-restart `continueRestore` and a
+  `rollbackRestore` alike (the journal carries the pin). A directory that
+  resolves elsewhere is refused and reported, so a restore can never write or
+  unlink outside the recorded location; a record with no pin (released-v1 data,
+  or a commit whose parent could not be resolved) falls back to the
+  final-component link check alone. A parent chain that is GONE is still
+  recreated — the plugin restores files whose directory was deleted — but only
+  while its nearest surviving ancestor resolves inside the pin. A stable
+  symlinked ancestor is never refused: both sides of the comparison are
+  `realpath`s.
 - **Journal before mutation**: the rescue state of every planned path is
   captured as a raw byte copy and the intent journal — references only —
   persisted atomically BEFORE the first fs mutation; each action is marked

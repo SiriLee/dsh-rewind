@@ -100,12 +100,15 @@ transcript.
   symlink or a hard link (`lstat().nlink > 1`) is skipped and reported, never
   restored — a symlink would redirect the write outside the checkpoint, and a
   hard link would clobber every other name of the same inode (e.g.
-  pnpm-installed files). (2) Every entry, link and journal action records the
-  `realpath` of the file's directory at commit time (the location pin), and a
-  restore re-checks it before touching the path — including a post-restart
-  continue or rollback, which reads the pin from the journal: a directory that
-  no longer resolves there (a repointed or moved ancestor) is refused and
-  reported instead of writing outside the recorded location. A parent chain that
+  pnpm-installed files). (2) Every record this build writes — entry, link and
+  journal action — carries the `realpath` of the file's directory at commit time
+  (the location pin; best-effort, and absent on released-v1 data or a commit
+  whose parent could not be resolved), and a restore re-checks it before
+  touching the path, including a post-restart continue or rollback, which reads
+  the pin from the journal: a directory that no longer resolves there (a
+  repointed or moved ancestor) is refused and reported instead of writing
+  outside the recorded location, while data with no pin falls back to check (1)
+  alone. A parent chain that
   is gone is still recreated (files whose directory was deleted are restorable),
   but only while its nearest surviving ancestor resolves inside the pin. A
   stable symlinked ancestor resolves identically on both sides, so a symlinked
