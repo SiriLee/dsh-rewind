@@ -94,7 +94,10 @@ describe('file mode on restore', () => {
 
     await captureWithMode('c1', 5, live, 0o444)
     await writeFile(live, 'A1', 'utf8')
-    await chmod(live, 0o444)
+    // Read-only WITHOUT owner-write (triggers the R3 widening) and a mode that
+    // DIFFERS from the recorded one — so the final assertion actually proves the
+    // recorded mode was reapplied rather than merely left in place.
+    await chmod(live, 0o400)
 
     const outcome = await store.restoreAfter(session, 5, unlink)
     expect(outcome.restored).toEqual([live])
