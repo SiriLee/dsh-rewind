@@ -153,8 +153,24 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     const { session, chatOf, watch } = fakeSession()
     session.command = vi.fn(async () => ({ ok: true, value: { matched: false } })) as SessionFace['command']
     const setComposerText = vi.fn(() => true)
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
     await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
+    // The admission miss is never silent: it is the "click does nothing"
+    // symptom of SiriLee/dsh-rewind#26.
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('warns with the host reason when the host rejects the command (ok:false)', async () => {
+    const { session, chatOf, watch } = fakeSession()
+    const failure = { code: 'session/agent-busy', message: 'session "sub-1" is owned by subagent routing', details: {} }
+    session.command = vi.fn(async () => ({ ok: false, error: failure })) as unknown as SessionFace['command']
+    const setComposerText = vi.fn(() => true)
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
+    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    expect(setComposerText).not.toHaveBeenCalled()
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0]?.[2]).toEqual(failure)
   })
 
   it('refills after the chat-update watch fires (0.1.2 signal path: the first check misses)', async () => {

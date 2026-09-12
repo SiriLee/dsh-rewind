@@ -17,6 +17,7 @@
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { hasFileImpact, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
+import { rewindLog } from './log.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'
 
@@ -181,8 +182,15 @@ function isPreviewFor(node: CommandNode, seq: number): boolean {
 }
 
 /**
- * Run `/rewind preview @seq both` and await its outcome. Returns null when the
- * command was not matched or timed out.
+ * Run `/rewind preview @seq both` and await its outcome.
+ *
+ * `null` means ONLY "admitted but never settled" (the outcome wait timed out).
+ * An ADMISSION failure is a settled error outcome carrying the reason: the call
+ * was rejected before any handler ran (e.g. `session/agent-busy` for a
+ * subagent-owned identity) or no handler matched the line. Reporting those as
+ * `null` left the modes step stuck on "checking file changes…" with a
+ * permanently disabled code-restore entry and the cause invisible
+ * (SiriLee/dsh-rewind#26).
  */
 async function previewImpact(
   session: SessionFace,
@@ -194,8 +202,21 @@ async function previewImpact(
   // message must wait for THIS command's node, not settle on the previous
   // preview's outcome (which may predate a restore).
   const known = knownCommandSeqs(session, chatOf, node => isPreviewFor(node, seq))
-  const result = await session.command(`/rewind preview @${seq} both`)
-  if (!result.ok || result.value?.matched !== true) return null
+  let result: Awaited<ReturnType<SessionFace['command']>>
+  try {
+    result = await session.command(`/rewind preview @${seq} both`)
+  } catch (error) {
+    rewindLog.warn('preview', `preview command threw for @${seq}`, error)
+    return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+  }
+  if (!result.ok) {
+    rewindLog.warn('preview', `preview command rejected for @${seq}`, result.error)
+    return { kind: 'error', text: `${result.error.code}: ${result.error.message}` }
+  }
+  if (result.value?.matched !== true) {
+    rewindLog.warn('preview', `preview command was not matched for @${seq}`)
+    return { kind: 'error', text: 'the rewind command is not registered on this host' }
+  }
   return waitForCommand(session, chatOf, node => isPreviewFor(node, seq) && !known.has(node.seq), 8000, watch)
 }
 
@@ -547,24 +568,27 @@ export function openPopover(opts: PopoverOptions): void {
   // Resolve the "both" mode's availability up front (Claude Code hides the
   // code-restore options when the checkpoint has no tracked file changes).
   // `hasFileImpact` reads only the host's machine-readable `impact=<n>`
-  // trailer (locale-independent). An unknown outcome (preview failed/timeout)
-  // keeps "both" enabled — degrade to always-shown rather than hiding a
-  // working option.
+  // trailer (locale-independent). EVERY settled probe resolves the modes step:
+  // a success decides has/no changes, and any failure — a rejected admission,
+  // an unmatched line, or a wait that never settled — becomes the error state,
+  // which shows the reason and hides the code-restore entry. The probe must
+  // never leave the step on "checking file changes…" forever
+  // (SiriLee/dsh-rewind#26).
   void (async () => {
     const outcome = await previewImpact(session, chatOf, seq, cb => opts.watchChat(session.sessionId, cb))
     impactOutcome = outcome
     if (outcome !== null && outcome.kind === 'success') {
       bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
-    } else if (outcome !== null && outcome.kind === 'error') {
-      // Surface the host's rejection (e.g. "no longer in the model context
-      // (shadowed by compaction)") instead of leaving the modes step stuck on
-      // "checking file changes…" with a permanently disabled both entry.
-      bothState = { state: 'error', message: outcome.text ?? 'unknown error' }
+    } else {
+      // Surface the reason (host rejection — e.g. "no longer in the model
+      // context (shadowed by compaction)" — or a never-settled wait) instead
+      // of leaving the modes step stuck with a permanently disabled entry.
+      bothState = { state: 'error', message: outcome?.text ?? 'preview command timed out' }
     }
     renderModes()
     shell.position()
   })().catch(() => {
-    bothState = { state: 'hasChanges' }
+    bothState = { state: 'error', message: 'unexpected error' }
     renderModes()
     shell.position()
   })

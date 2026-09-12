@@ -246,7 +246,16 @@ export async function runRewindAndFill(
     rewindLog.warn('refill', `rewind command threw, skipping refill @${seq}`, error)
     return
   }
-  if (!result.ok || result.value?.matched !== true) {
+  if (!result.ok) {
+    // The Host rejected the call before any handler ran — e.g. a
+    // subagent-owned identity (`session/agent-busy`, "use subagent delivery"),
+    // or a command this Host does not have. Nothing was rewound: say so in the
+    // console instead of failing silently (SiriLee/dsh-rewind#26).
+    rewindLog.warn('refill', `rewind command rejected for @${seq}`, result.error)
+    return
+  }
+  if (result.value?.matched !== true) {
+    rewindLog.warn('refill', `rewind command was not matched for @${seq}`)
     return
   }
   // The executed rewind lands as a CommandNode with a marker-carrying
