@@ -41,7 +41,7 @@ import {
   type RewindCandidate,
 } from './candidates.ts'
 import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
-import { createRewindBridge, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
+import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_VERSION } from './build-info.ts'
@@ -329,6 +329,13 @@ export function apply(ctx: ClientContext): void {
     /** True when the surface has at least one reachable rewind target. */
     const hasCandidates = (sessionId: string | undefined): boolean => {
       const face = sessionId === undefined ? undefined : sessionOf(sessionId)
+      // A direct-subagent (child) session is rewind-inert (see
+      // `isRewindInertSession`): the Host refuses every generic Session RPC for
+      // a subagent-owned identity, so this picker could only list targets that
+      // can never execute. The Harness's own slash-command directory already
+      // returns nothing there; this keeps the decoration from becoming a second
+      // dead surface should that policy change.
+      if (face === undefined || isRewindInertSession(face.getSnapshot())) return false
       const chat = chatOf(face)
       return chat !== undefined && rewindCandidatesOfChat(chat as unknown as CandidateChat).length > 0
     }

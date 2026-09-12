@@ -17,7 +17,7 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode } from '../src/client/hidden.ts'
-import { actionsContainerOf, collectTargets } from '../src/client/portals.tsx'
+import { actionsContainerOf, collectDurableTargets, collectTargets, isRewindInertSession } from '../src/client/portals.tsx'
 import type { HiddenChat } from '../src/client/hidden.ts'
 
 /** A durable user node in the HiddenChat shape the collector reads. */
@@ -162,6 +162,33 @@ describe('collectTargets (chat node × user action row → portal target)', () =
   it('collects nothing when a chat node has no matching DOM row', () => {
     const targets = collectTargets(chatWith([['m5', userNode(8)]]), new Set())
     expect(targets).toHaveLength(0)
+  })
+})
+
+describe('collectDurableTargets (subagent sessions are rewind-inert)', () => {
+  it('classifies the session kind from the snapshot subagent cell', () => {
+    expect(isRewindInertSession({ subagent: null })).toBe(false)
+    expect(isRewindInertSession({ subagent: { address: { mode: 'continuable' } } })).toBe(true)
+  })
+
+  it('collects the plain-session targets', () => {
+    addRow('user', 's1')
+    const targets = collectDurableTargets({ subagent: null }, chatWith([['s1', userNode(11)]]), new Set())
+    expect(targets).toHaveLength(1)
+  })
+
+  it('collects nothing for a subagent session, same DOM and chat as the positive case', () => {
+    addRow('user', 's2')
+    const chat = chatWith([['s2', userNode(12)]])
+    // Discriminating: identical chat snapshot and identical rendered row; only
+    // the session kind differs, and the subagent one must yield no button.
+    expect(collectDurableTargets({ subagent: { address: { mode: 'continuable' } } }, chat, new Set())).toHaveLength(0)
+    expect(collectDurableTargets({ subagent: null }, chat, new Set())).toHaveLength(1)
+  })
+
+  it('collects nothing while the chat view is unavailable', () => {
+    addRow('user', 's3')
+    expect(collectDurableTargets({ subagent: null }, undefined, new Set())).toHaveLength(0)
   })
 })
 

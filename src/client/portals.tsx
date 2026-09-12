@@ -402,6 +402,52 @@ export function collectTargets(chat: HiddenChat, hiddenSeqs: ReadonlySet<number>
   return targets
 }
 
+/**
+ * The session-kind slice the durable-target gate reads — the session
+ * snapshot's `subagent` cell, the Harness's own runtime signal for a
+ * direct-subagent (child) session. Typed structurally so the plugin never
+ * imports the session-controller snapshot contract.
+ */
+export interface SessionKindLike {
+  /** Non-null exactly while this Session is addressed as a subagent child. */
+  readonly subagent: unknown
+}
+
+/**
+ * Whether a session is rewind-inert: a direct-subagent (child) session.
+ *
+ * The Harness refuses every generic Session RPC for a subagent-owned identity
+ * (`session/agent-busy`, "use subagent delivery for this child session"), so
+ * `/rewind` can never execute there — the command's own admission is the
+ * refusal, before any handler runs. A wired-up ↶ button in such a session is
+ * therefore dead UI that closes its popover and does nothing
+ * (SiriLee/dsh-rewind#26). This mirrors the Harness's own slash-command
+ * directory (which returns no commands for an addressed child), the pending
+ * path's `collectPendingTargets` gate, and the Host's `isSubagentSession`
+ * skips: a child session gets no rewind surface and records no snapshot.
+ */
+export function isRewindInertSession(snapshot: SessionKindLike): boolean {
+  return snapshot.subagent !== null && snapshot.subagent !== undefined
+}
+
+/**
+ * Collect the durable (sent-message) rewind targets of one session: none at all
+ * for a rewind-inert subagent session, otherwise `collectTargets`' DOM→target
+ * pairing. Kept separate from `collectTargets` so the session-kind gate is a
+ * pure, directly testable decision.
+ * @param snapshot - the session snapshot carrying the `subagent` cell.
+ * @param chat - the session's chat snapshot, or undefined while unavailable.
+ * @param hiddenSeqs - anchor seqs withdrawn by previous rewinds.
+ */
+export function collectDurableTargets(
+  snapshot: SessionKindLike,
+  chat: HiddenChat | undefined,
+  hiddenSeqs: ReadonlySet<number>,
+): readonly PortalTarget[] {
+  if (chat === undefined || isRewindInertSession(snapshot)) return []
+  return collectTargets(chat, hiddenSeqs)
+}
+
 /** The session snapshot slice the pending collector reads (structural subset). */
 interface QueueLike {
   readonly queue: readonly {
@@ -551,7 +597,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
       // settles (runRewindAndFill), not per mutation batch — printing them
       // here would flood the console during streaming, and the rewind event
       // already carries the hide set. Nothing is logged in this per-batch scan.
-      const durable = chat === undefined ? [] : collectTargets(chat, hiddenSeqs)
+      const durable = collectDurableTargets(snapshot, chat, hiddenSeqs)
       const next = [...durable, ...collectPendingTargets(snapshot)]
       // Diff: no change → no re-render (the observer fires on every mutation;
       // only an actual target-set change should touch React).
