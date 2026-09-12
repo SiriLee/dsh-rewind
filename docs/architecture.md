@@ -107,7 +107,10 @@ the `0.9.x` line) and is **removed in the `0.10.x` line**.
 tools/execute        captureBefore: for write / edit, stage a raw byte copy of
                      the file's BEFORE state into the store's .pending/
                      (node:fs copyFile, never through a string);
-                     subagent edits are NOT tracked (Claude Code alignment).
+                     subagent sessions are NOT tracked and get no rewind
+                     surface at all (Claude Code alignment — the Harness
+                     refuses generic Session RPCs for a subagent-owned
+                     identity, so /rewind cannot execute there).
 tools/post-execute   commitEntry: anchor = latest user/message seq; skip
                      failed calls; publish the staged bytes as the entry's
                      sidecar and write the metadata beside them — including
@@ -124,7 +127,9 @@ prune                keeps the newest 100 anchor groups per session, storing
                      and recycles terminal restore journals.
 pruneStale            cross-session auto-cleanup (default off): whole
                      long-inactive session dirs past the cutoff are removed;
-                     the active session is never targeted.
+                     the active session is never targeted (a subagent's tool
+                     result never triggers the sweep — it owns no dir and would
+                     claim that exemption).
 ```
 
 ## Compatibility strategy

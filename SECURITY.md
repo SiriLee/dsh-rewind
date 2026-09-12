@@ -190,7 +190,8 @@ transcript.
   committed a backup.
 - **Subagent session edits are not tracked** (Claude Code alignment): a
   subagent runs its own session, so the files it changes are not backed up and
-  cannot be restored by a rewind of the parent session.
+  cannot be restored by a rewind of the parent session; the plugin keeps no
+  snapshot for a subagent session and offers no rewind inside one.
 
 ## Reporting
 
