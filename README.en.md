@@ -47,8 +47,8 @@ dsh plugin --profile web add dsh-rewind-plugin@<version>
 ## Usage
 
 1. Find the user message you want to rewind to in the conversation, or type `/rewind` (or its alias `/undo`) to open the candidate picker.
-2. **Select it.** A small popover offers the two modes ("conversation and code" is only shown when there are restorable changes after the target).
-3. The rewind takes effect immediately: the conversation returns to how it looked at the target message, and the withdrawn message's text is filled back into the composer — edit and re-send.
+2. **Select it.** A small popover offers the two modes — "conversation only" or "conversation and code".
+3. The rewind takes effect immediately: the conversation returns to how it looked at the target message, and the target message's text is filled back into the composer — edit and re-send.
 
 **Keyboard**: both the candidate picker and the mode popover support ↑↓ to move, Enter to confirm, Esc to cancel/back.
 
@@ -56,20 +56,19 @@ dsh plugin --profile web add dsh-rewind-plugin@<version>
 <summary><b>Edge notes</b></summary>
 
 - Rewinds can be repeated — with no limit on stage or count.
-- A rewind itself **cannot be undone**, but the withdrawn content stays in the session log and can be recovered by manually editing it.
+- A rewind itself **cannot be undone**, but the withdrawn content stays in the session log.
 - **Interruptions rewind too** — a `steering` interruption message the model hasn't read yet is also a valid rewind target.
-- **A rewind interrupts the running turn** — to execute the rewind safely.
+- **A rewind interrupts the running turn** — to ensure the rewind runs safely.
 
 </details>
 
 ## Snapshot management
 
 Snapshots (the before-write backups) are stored under `<dsh home>/rewind-snapshots/`
-(`~/.dsh/rewind-snapshots/` when `$DSH_HOME` is unset). For the **same session**,
-the plugin deduplicates snapshots by content (an unchanged file is stored as a link)
-and keeps the newest 100 anchor groups. **Deleting that directory manually** only
-clears the file backups (chat rewinds are unaffected) and the plugin rebuilds them
-automatically.
+(the default is `~/.dsh/rewind-snapshots/`). For the **same session**, the plugin
+deduplicates snapshots by content and keeps the newest 100 anchor groups.
+**Deleting that directory manually** only clears the file backups (chat rewinds are
+unaffected) and the plugin rebuilds them automatically.
 
 A **global auto-cleanup** (off by default) removes the snapshot directories of
 long-inactive sessions, leaving the active session and chat log untouched. Configure
@@ -101,57 +100,44 @@ Compared with the common approaches, here is the trade-off this plugin makes on 
 | Dimension | Common approach | This plugin |
 | --- | --- | --- |
 | Conversation rewind | Fork / branch a new conversation | **In-place rewind** — no new session, no window switch |
-| File restore | No restore feature / git-managed or whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore (aligned with Claude Code) |
+| File restore | No restore feature / git-managed or whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore |
 | Dependencies | Often needs a Git repo or a full snapshot engine | **None** — no git required, works on any directory |
-| Storage footprint | Whole-tree snapshots take space | **Lightweight** — only files touched by write tools are stored, persisted on disk |
+| Storage footprint | Whole-tree snapshots take space | **Lightweight** — nothing is stored unless it changed, and only files touched by write tools are tracked |
 
 ## How it works
 
-The whole design rests on two principles, simple but deliberate: **the conversation half "masks, never deletes", and the file half "backs up before the write, reconciles against the real disk before restoring."** It shares lineage with Claude Code's checkpointing — Claude Code's file history is also per-file records plus a re-scan of tracked files at every message, not a whole-tree snapshot. This plugin brings the same semantics to dsh, and makes them lighter and more robust.
+The whole design rests on two principles, simple but deliberate: **the conversation half "masks, never deletes"**, using DSH's native "hide + replace" mechanism; **the file half "partial tracking, lightweight before-write backup"**, following Claude Code's checkpoint semantics.
 
 ### 1. Conversation rewind: a single "mask", not a delete
 
-`append-only` is a hard rule: the session log only grows and is never rewritten — the foundation of auditability and privacy. A rewind never touches history; it makes a single move: append **one content-empty marker message** to the end of the log and use it to "mask + replace" everything after the target message, so the model and the UI see only the part before it.
+`append-only` is a hard rule: the session log only grows and is never rewritten — the foundation of auditability and privacy. A rewind never touches history; it makes a single move: append **one "empty message" marker** to the end of the log and use it to "mask + replace" everything after the target message, so the model and the UI see only the part before it.
 
-- The marker is **canonical** — the plugin **replicates** `/compact`'s "hide + replace": `/compact` compresses a span of history into a summary, while `/rewind` swaps in an empty marker message. Because it's canonical, the harness's own log replay, `/compact` compaction, and resume preflight all recognize it and never mistake it for a real message.
-- The replacement is **imperceptible** — the model ignores the empty marker, with no effect (verified empirically). Together with the plugin's UI handling, what you and the model see is exactly how the conversation looked at the target — truly "in place".
-- Because this is **masking, not deleting**, every withdrawn event stays in the log — auditable, traceable, viewable, and in principle manually recoverable.
+- **One and the same log** — the append happens only in the current session's log: no new session, no new branch, so no residue or copy is left behind;
+- **The marker is canonical** — the same "hide + replace" as the official `/compact`: `/compact` compresses a span of history into a summary, while `/rewind` swaps in an "empty message" marker. Because it is canonical, DSH's log replay, compaction, and resume preflight all recognize it and never mistake it for a real message;
+- **The replacement is imperceptible** — the model ignores the marker, with no effect (verified empirically). Together with the plugin's UI handling, what you and the model see is exactly how the conversation looked at the target;
+- **Content is preserved** — because this is "masking, not deleting", the withdrawn content stays in the log — auditable, traceable, and in principle manually recoverable.
 
-> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with the harness (replicating `/compact`, the empty-message mask) are where this plugin is genuinely professional — each is pinned by a dedicated probe test.
+> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with DSH (replicating `/compact`, the empty-message mask) are where this plugin is genuinely professional.
 
-### 2. File restore: lightweight checkpointing, "back up before the change"
+### 2. File restore: lightweight checkpointing, "before-write backup"
 
 The file half follows Claude Code's checkpoint semantics — **partial tracking + before-write backup, plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
 
 - **Before-write backup**: tracks only the write-class tools (`write`, `edit`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight.
 - **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — external changes such as a command run or a manual edit are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
-- **Unchanged-not-recorded, identical-content-as-link**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy. Repeated writes cost almost nothing, and a link is materialized before its group is evicted — never left dangling.
-- **Reconcile against the real disk before restoring**: restore takes each path's **earliest** record, then reads the live file and compares — **only files that actually differ are touched**: modified files are written back to the earliest backup, files created after the target are deleted, already-matching files are skipped. Repeated rewinds are therefore **idempotent with zero side effects** and never produce "ghost impact".
-- **Safety boundary**: symlinks / hard links are skipped so one restore can't clobber another name of the same file; paths are sanitized so nothing ever escapes the backup root; a per-file failure never aborts the pass.
+- **Unchanged-not-recorded**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy.
+- **Accurate restore**: backups are the sole standard, checked against the real disk — **only files that actually differ are touched**: modified files restored, newly created files deleted, deleted files recovered. Backups are stored byte for byte, so the restored result matches the backups exactly, with no "ghost impact".
+- **Safety and integrity**: paths are sanitized so nothing ever escapes the backup root; symlinks / hard links are skipped so one restore can't clobber another name of the same file; a per-file failure never aborts the pass; backups and the restore journal are written atomically and kept across restarts, so a half-applied restore after a crash can be continued or rolled back.
 
-> **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and content-as-link drop the repetition; which files to touch is decided against the real disk at restore time.
-
-### Design highlights
-
-| Design | Why it matters |
-| --- | --- |
-| A single append is a whole rewind | Minimal action, maximal semantics; the log is never mutated |
-| Mask, never delete | History is always auditable and in principle recoverable |
-| Before-backup, grouped by turn, persisted on disk | Space-efficient, survives restarts, Claude Code-aligned |
-| Identical content stored as a link (dedup) | Hundreds of repeated writes cost almost nothing; links are materialized before their group is evicted, never left dangling |
-| Session-level auto-cleanup | Removes only long-inactive sessions' snapshots; the active session and the chat log are never touched |
-| Reconcile against the real disk before restoring | Idempotent, zero side effects, no collateral damage |
-| Empty-message mask + replicating `/compact` | Deeply compatible with the host, pinned by probe tests |
-| Crash safety (atomic writes + restore journal) | Continue or roll back cleanly after a crash |
-| Pure-function planning + probed store | Fully unit-testable without a host; test-driven |
+> **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and content-as-link drop the repetition; only the files that differ are touched at restore time.
 
 ## What it deliberately does NOT do
 
 This plugin deliberately stays lightweight and focused on one thing — "conversation rewind". The following are **out of its scope**:
 
-- **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. For whole-worktree snapshot rollback, use a dedicated snapshot tool (or your git).
-- **Subagent edits** — not tracked (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session.
-- **Fork / branch rewind** — the harness already provides this ("branch in new chat"); no need to reinvent it.
+- **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. For a worktree-level full snapshot rollback, use a more specialized snapshot tool (git).
+- **Subagent edits** — not tracked, and no rewind inside a subagent session (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session, and none are kept for one.
+- **Fork / branch rewind** — DSH already provides this ("branch in new chat"); no need to reinvent the wheel.
 
 ## Compatibility
 
@@ -183,7 +169,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 
 ## Security
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. Delete `~/.dsh/rewind-snapshots/` to wipe file backups only (chat rewinds are unaffected); the plugin rebuilds automatically. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and code"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
 
 ## Development
 
