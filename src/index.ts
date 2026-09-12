@@ -87,6 +87,22 @@ export interface RewindConfig {
  */
 const TRACKED_TOOLS = new Set(['write', 'edit'])
 
+/**
+ * Whether a session is a subagent child: a direct-delegation session this
+ * plugin neither tracks nor rewinds. THE single predicate for every skip site —
+ * the checkpoint capture, the message-boundary re-check, the session-start
+ * reconcile, and the lazy cleanup trigger. The Harness refuses every generic
+ * Session RPC for such an identity (`session/agent-busy`, "use subagent
+ * delivery for this child session"), so a snapshot recorded under a child
+ * session id could never be restored by ANY rewind — parent or child — and
+ * `/rewind` cannot even execute there. One predicate keeps those facts from
+ * drifting apart again (SiriLee/dsh-rewind#26).
+ */
+function isSubagentSession(session: Session): boolean {
+  const header = session.header
+  return header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0
+}
+
 /** Host-side locale the command output renders in; updated from settings at apply time. */
 let activeLocale: HostLocaleId = 'en'
 
@@ -235,8 +251,7 @@ async function captureBefore(
   // log is short, so the per-session 100-group prune never fires for it).
   // Skipping the capture here mirrors Claude Code's behavior exactly.
   const session = exec.agent?.session
-  const header = session?.header
-  if (header !== undefined && (header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0)) return
+  if (session !== undefined && isSubagentSession(session)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
   const cwd = execSessionCwd(exec, path)
@@ -1070,7 +1085,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // (they are never rewind targets and record no snapshots).
   ctx.on('agent/session-start', ({ agent }: { agent: Agent }) => {
     const session = agent.session
-    if (session.header.origin === 'subagent' || (session.header.delegationDepth ?? 0) > 0) return
+    if (isSubagentSession(session)) return
     void (async () => {
       try {
         // Stamp snapshots recorded after this point with the loaded session's
@@ -1114,8 +1129,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // the message.
   ctx.on('session/event', (session: Session, event: SessionEvent) => {
     if (event.type !== 'user/message') return
-    const header = session.header
-    if (header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0) return
+    if (isSubagentSession(session)) return
     void (async () => {
       try {
         const sessionId = session.id
@@ -1153,8 +1167,16 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       try {
         // Lazy 24h auto-cleanup: a tool result is the fallback trigger (covers
         // LLM work that never landed a user/message); the session id is the
-        // directory that must never be pruned.
-        void maybeRunAutoCleanup(ctx, store, exec.agent?.session?.id, dshHome)
+        // directory that must never be pruned. A subagent session is SKIPPED:
+        // it owns no snapshot, so its id would claim the sweep's
+        // active-session exemption while shielding nothing, and the session the
+        // user is actually in (the parent) would lose that exemption. Nothing
+        // is lost — the parent's own tool result (the subagent call itself)
+        // triggers the same one-shot sweep with the correct id.
+        const session = exec.agent?.session
+        if (session !== undefined && !isSubagentSession(session)) {
+          void maybeRunAutoCleanup(ctx, store, session.id, dshHome)
+        }
         await commitEntry(store, pending, anchorCache, trackedBySession, exec, result)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
