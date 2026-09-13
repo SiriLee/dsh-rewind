@@ -728,10 +728,6 @@ export function composerText(): string {
   return surface.textContent ?? ''
 }
 
-/** Pending-retract occurrences with a removal in flight (double-click guard:
- * a second click could only race the first and hit `queue-item-not-found`). */
-const retracting = new Set<string>()
-
 /**
  * Withdraw one pre-sent (pending steering) message and every steering message
  * after it (the rollback point's "future"), WITHOUT interrupting the run.
@@ -761,38 +757,34 @@ export async function retractPending(
   text: string | null,
   setComposerText: (sessionId: string, text: string) => boolean,
 ): Promise<void> {
-  if (retracting.has(itemId)) return
-  retracting.add(itemId)
-  try {
-    // The item id comes from the queue mirror's `id` field, which the harness
-    // brands as MessageId; cast at this single boundary to avoid a new type
-    // dependency on the branding package.
-    const queue = session.getSnapshot().queue
-    const steering = queue.filter((item) => item.placement === 'steering')
-    let removedTarget = false
-    for (const id of retractSpan(steering, itemId)) {
-      let accepted = false
-      try {
-        const result = await session.updateQueue(id as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
-        accepted = result.ok
-        // A lost race is expected, not an anomaly: the message is durable now.
-        if (!result.ok) rewindLog.info('retract', `pending retract lost the race for ${id}`, result.error)
-      } catch (error) {
-        // A transport/teardown throw must not become an unhandled rejection on
-        // the `void retractPending(...)` call site.
-        rewindLog.warn('retract', `pending retract remove threw for ${id}`, error)
-      }
-      // retractSpan is oldest-first, so a failure means the whole remaining
-      // batch was claimed together (or the transport is gone): stop here.
-      if (!accepted) break
-      if (id === itemId) removedTarget = true
+  // The item id comes from the queue mirror's `id` field, which the harness
+  // brands as MessageId; cast at this single boundary to avoid a new type
+  // dependency on the branding package.
+  const queue = session.getSnapshot().queue
+  const steering = queue.filter((item) => item.placement === 'steering')
+  let removedTarget = false
+  for (const id of retractSpan(steering, itemId)) {
+    let accepted = false
+    try {
+      // Carrier failures resolve as `{ok:false}` (the RemoteResult contract);
+      // only an assembly fault on an unmounted scope still rejects. That reject
+      // must not become an unhandled rejection on the `void retractPending(...)`
+      // call site.
+      const result = await session.updateQueue(id as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
+      accepted = result.ok
+      // A lost race is expected, not an anomaly: the message is durable now.
+      if (!result.ok) rewindLog.info('retract', `pending retract lost the race for ${id}`, result.error)
+    } catch (error) {
+      rewindLog.warn('retract', `pending retract remove threw for ${id}`, error)
     }
-    // Refill only on a confirmed removal (see the failure note above).
-    if (removedTarget && text !== null && text !== '' && composerText().trim() === '') {
-      setComposerText(session.sessionId, text)
-    }
-  } finally {
-    retracting.delete(itemId)
+    // retractSpan is oldest-first, so the first failure means the remaining
+    // batch was claimed together: a follow-up removal would only be futile.
+    if (!accepted) break
+    if (id === itemId) removedTarget = true
+  }
+  // Refill only on a confirmed removal (see the failure note above).
+  if (removedTarget && text !== null && text !== '' && composerText().trim() === '') {
+    setComposerText(session.sessionId, text)
   }
 }
 

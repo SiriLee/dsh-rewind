@@ -69,9 +69,11 @@ describe('retractPending (unread steering withdraw)', () => {
     expect(updateQueue).toHaveBeenCalledTimes(1)
   })
 
-  it('swallows a transport throw instead of rejecting', async () => {
+  it('swallows an assembly-fault throw instead of rejecting', async () => {
     const { session, updateQueue } = fakeSession(steering(['a']))
-    updateQueue.mockRejectedValueOnce(new Error('teardown'))
+    // Carrier failures resolve as `{ok:false}`; only a call on an unmounted
+    // scope rejects, and it must not escape the `void retractPending(...)` site.
+    updateQueue.mockRejectedValueOnce(new Error('scope unmounted'))
     const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
     const setComposerText = vi.fn(() => true)
     await expect(retractPending(session, 'a', 'text a', setComposerText)).resolves.toBeUndefined()
@@ -88,19 +90,5 @@ describe('retractPending (unread steering withdraw)', () => {
     const setComposerText = vi.fn(() => true)
     await retractPending(session, 'a', 'text a', setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
-  })
-
-  it('guards a double click on the same occurrence', async () => {
-    const { session, updateQueue } = fakeSession(steering(['a']))
-    let release: (() => void) | undefined
-    updateQueue.mockImplementationOnce(() => new Promise<QueueResult>((resolve) => {
-      release = () => resolve({ ok: true, value: { accepted: true } })
-    }))
-    const setComposerText = vi.fn(() => true)
-    const first = retractPending(session, 'a', 'text a', setComposerText)
-    const second = retractPending(session, 'a', 'text a', setComposerText)
-    release?.()
-    await Promise.all([first, second])
-    expect(updateQueue).toHaveBeenCalledTimes(1)
   })
 })
