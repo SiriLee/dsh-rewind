@@ -57,8 +57,8 @@ dsh plugin --profile web add dsh-rewind-plugin@<version>
 
 - Rewinds can be repeated — with no limit on stage or count.
 - A rewind itself **cannot be undone**, but the withdrawn content stays in the session log.
-- **Interruptions rewind too** — a `steering` interruption message the model hasn't read yet is also a valid rewind target.
-- **A rewind interrupts the running turn** — to ensure the rewind runs safely.
+- **Interruptions rewind too** — a `steering` message the model hasn't read yet is also a valid rewind target, and withdrawing it does not interrupt the current run.
+- **Rewinding a read message interrupts the running turn** — to ensure the rewind runs safely.
 
 </details>
 

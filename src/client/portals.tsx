@@ -491,7 +491,8 @@ function bubbleTextOf(row: HTMLElement): string {
  * retract button is the pre-sent window's counterpart of the durable rewind
  * button: it exists whenever the Host holds the message in its next-step
  * inbox (running or paused), and it retracts through the session's own
- * `updateQueue` channel — no DSH behavior changes.
+ * `updateQueue` channel — no DSH behavior changes, and no stop: an unclaimed
+ * next-step message has never reached a request (see `retractPending`).
  */
 function collectPendingTargets(snapshot: QueueLike): readonly PortalTarget[] {
   // Subagent sessions reject queue mutations host-side; mirror the harness's
@@ -727,45 +728,71 @@ export function composerText(): string {
   return surface.textContent ?? ''
 }
 
+/** Pending-retract occurrences with a removal in flight (double-click guard:
+ * a second click could only race the first and hit `queue-item-not-found`). */
+const retracting = new Set<string>()
+
 /**
- * Rewind to one pre-sent (pending steering) message, with the same semantics
- * as a durable rewind — "pause first, then roll back to before the target":
+ * Withdraw one pre-sent (pending steering) message and every steering message
+ * after it (the rollback point's "future"), WITHOUT interrupting the run.
  *
- * 1. Pause the running turn (Claude Code's rewind-always-stops-first rule; a
- *    no-op when the agent is already idle). Queued (next-turn) messages are
- *    untouched — the harness QueueDock already offers per-item edit/remove.
- * 2. Retract the target steering message and every steering message after it
- *    (the rollback point's "future"), oldest first, via the session's own
- *    `updateQueue` channel.
- * 3. Put the target's text back in the composer (only when it is empty —
- *    Claude Code's auto-restore guard, so a draft the user is typing is never
- *    clobbered).
+ * The message is still in the agent's next-step inbox, so the loop has not
+ * claimed it into any request: removing it cannot change what the model is
+ * generating. Stopping the run first (the durable-rewind rule) would throw
+ * away in-flight work — a long tool call, a partial answer — for an edit the
+ * model can never observe (SiriLee/dsh-rewind#27). Only the durable rewind
+ * needs a stop, because it cuts the model-visible surface.
  *
- * A removal failure is silently ignored: the realistic failure is
- * `queue-item-not-found` — the message was claimed by the running turn a
- * moment ago, in which case the durable row's regular rewind button takes
- * over with no gap.
+ * 1. Remove the target and its future (steering only; queued stays) through
+ *    the session's own `updateQueue` channel, oldest first.
+ * 2. Put the target's text back in the composer ONLY when the target was
+ *    actually removed and the composer is empty (Claude Code's auto-restore
+ *    guard, so a draft the user is typing is never clobbered).
+ *
+ * The realistic failure is `queue-item-not-found`: a step boundary claimed
+ * the whole next-step batch a moment ago, so the message is now durable and
+ * the durable row's regular rewind button takes over with no gap. Nothing is
+ * removed then, and the composer is NOT refilled — refilling would invite a
+ * duplicate send of a message the model has already received.
  */
-async function retractPending(
+export async function retractPending(
   session: SessionFace,
   itemId: string,
   text: string | null,
   setComposerText: (sessionId: string, text: string) => boolean,
 ): Promise<void> {
-  // 1. Pause first (Claude Code parity). Idempotent when already idle.
-  await session.cancel()
-  // 2. Retract the target and its future (steering only; queued stays).
-  // The item id comes from the queue mirror's `id` field, which the harness
-  // brands as MessageId; cast at this single boundary to avoid a new type
-  // dependency on the branding package.
-  const queue = session.getSnapshot().queue
-  const steering = queue.filter((item) => item.placement === 'steering')
-  for (const id of retractSpan(steering, itemId)) {
-    await session.updateQueue(id as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
-  }
-  // 3. Refill the composer (empty-composer guard).
-  if (text !== null && text !== '' && composerText().trim() === '') {
-    setComposerText(session.sessionId, text)
+  if (retracting.has(itemId)) return
+  retracting.add(itemId)
+  try {
+    // The item id comes from the queue mirror's `id` field, which the harness
+    // brands as MessageId; cast at this single boundary to avoid a new type
+    // dependency on the branding package.
+    const queue = session.getSnapshot().queue
+    const steering = queue.filter((item) => item.placement === 'steering')
+    let removedTarget = false
+    for (const id of retractSpan(steering, itemId)) {
+      let accepted = false
+      try {
+        const result = await session.updateQueue(id as Parameters<SessionFace['updateQueue']>[0], { kind: 'remove' })
+        accepted = result.ok
+        // A lost race is expected, not an anomaly: the message is durable now.
+        if (!result.ok) rewindLog.info('retract', `pending retract lost the race for ${id}`, result.error)
+      } catch (error) {
+        // A transport/teardown throw must not become an unhandled rejection on
+        // the `void retractPending(...)` call site.
+        rewindLog.warn('retract', `pending retract remove threw for ${id}`, error)
+      }
+      // retractSpan is oldest-first, so a failure means the whole remaining
+      // batch was claimed together (or the transport is gone): stop here.
+      if (!accepted) break
+      if (id === itemId) removedTarget = true
+    }
+    // Refill only on a confirmed removal (see the failure note above).
+    if (removedTarget && text !== null && text !== '' && composerText().trim() === '') {
+      setComposerText(session.sessionId, text)
+    }
+  } finally {
+    retracting.delete(itemId)
   }
 }
 
