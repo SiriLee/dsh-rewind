@@ -99,10 +99,10 @@ The plugin treats these as harness-side defects it does not compensate for. Each
   post-locale description re-registration as a workaround, because the guarantee belongs to the
   harness (make the locale preference available before plugin registration, or support per-locale
   command descriptions). The plugin's `t()` design is retained; localized host output is treated
-  as an upstream capability to be restored when the harness provides it. (Command descriptions
-  are English for **every** host command — system plugins also pass raw English `description`
-  strings, e.g. `/goal` — so this behavior is consistent with the ecosystem, not a plugin
-  deviation.)
+  as an upstream capability to be restored when the harness provides it. (This is still not a
+  plugin deviation: the client localizes only the six first-party descriptions in
+  `HOST_DESCRIPTION_KEYS` — compact, export, feedback, goal, permission, plan — while every
+  third-party description, this plugin's included, passes through verbatim.)
 - **Client-side command-description i18n is first-party-only**: DSH also localizes host command
   descriptions through the client `locale` binding (`ui-commands`), but the description keys come
   from a **closed allowlist** (`HOST_DESCRIPTION_KEYS`: compact, export, feedback, goal,
