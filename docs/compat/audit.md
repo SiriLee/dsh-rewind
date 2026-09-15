@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.5-rc.1` (the range the peers and `dsh.engines.dsh` declare).
+> Targeted version: npm `@deepseek-ai/*@0.1.6-alpha.1` (the range the peers and `dsh.engines.dsh` declare).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
@@ -25,8 +25,8 @@
 ### Single channel
 
 The plugin targets one DSH channel. Each seam below reads the targeted
-version's shape only (no `Session.events` / `[data-time-hover-root]` /
-`<textarea>` / face-`chat` legacy branch).
+version's shape only (no `Session.events` / `<textarea>` / face-`chat`
+legacy branch).
 
 | Seam | Implementation at the targeted version |
 | --- | --- |
@@ -62,6 +62,11 @@ version's shape only (no `Session.events` / `[data-time-hover-root]` /
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
 - **settings-card registration**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject would keep the whole client plugin unmounted on a host without that service (card and rewind button would disappear). It reads `getSnapshot().value` + `set`, never the `mutate` write API.
 
+- **`agent/created` lifecycle guard**: the session-format reconcile runs on the alpha line's `agent/created` (fire-and-forget); pin: `verify-host` 4e dispatches it.
+- **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
+- **`image/offload` projection**: the alpha line's first `SessionMessageProjection` changes derived content without touching surface node membership; candidate listing and target resolution tolerate it. Pin: `tests/image-offload-projection.test.ts`.
+- **session-cwd**: the fs tools no longer canonicalize a parent-traversing cwd, so `src/session-cwd.ts` returns `header.cwd` verbatim. Pin: `tests/session-cwd.test.ts`.
+
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 
 - **session-stats / session-telemetry fold the full log**: post-rewind stats do **not** rewind — `turns`/`steps`/`llmMs` still include withdrawn content; the `user/message` marker is folded as a present user turn (it adds no step). This is the intended "fold the full log" semantics, pinned by probe.
@@ -73,6 +78,8 @@ version's shape only (no `Session.events` / `[data-time-hover-root]` /
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).
 - **Attachment files left after a message is shadowed**: attachment storage is not cleaned with the surface (`dsh-attachment-local` not installed, not automatically verified).
 - **Rewind leaves plan mode untouched**: `/plan text` is two independent actions (enter plan mode + steer the message). Rewinding the message undoes only the message — the log-only `plan/mode` state stays active, and the user leaves plan mode with `/plan off`, which still commits after a rewind (the marker creates no open turn). Pin: `verify-host` plan checks (`plan rewind leaves plan mode active`, `/plan off after rewind turns plan mode off`), `tests/hidden.test.ts` `messageTextAt`.
+
+- **Synchronous Session history reads are deprecated** on this line (`snapshotEvents` / `eventAt` / `ownEvents`): existing calls may remain, new calls are prohibited. The plugin keeps its existing reads (turn anchor + candidate listing); the migration path is a `ctx.sessionProjections` projection unit or the async paged history read this line has not shipped yet — not a plugin-side index. Not migrated in this release.
 
 ## Upstream (harness) issues and the plugin's no-compensation stance
 
