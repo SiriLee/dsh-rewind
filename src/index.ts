@@ -254,7 +254,7 @@ async function captureBefore(
   if (session !== undefined && isSubagentSession(session)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
-  const cwd = execSessionCwd(exec, path)
+  const cwd = execSessionCwd(exec)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
   const info = await fs.stat(target, exec.signal).catch((error: unknown) => {

@@ -4,38 +4,31 @@
  * resolve against the calling agent's session workspace
  * (`exec.agent.session.header.cwd`), not the server's launch dir.
  *
- * Pure functions: the only runtime dependency is `canonicalPath`, applied
- * when either the cwd or the requested path contains a parent traversal so a
- * symlinked cwd's filesystem identity stays observable — identical to the
- * tool boundary behavior.
+ * Pure functions: the session cwd is returned verbatim. The fs tools no longer
+ * canonicalize a parent-traversing cwd (alpha line), so neither does the
+ * plugin — snapshot tracking must resolve to the same base the tool wrote to.
  *
  * @module dsh-rewind/session-cwd
  */
 
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { canonicalPath } from '@deepseek-ai/dsh-sandbox'
-
-/** Parent-traversal probe shared with the fs tools' session-cwd resolution. */
-const PARENT_PATH_SEGMENT = /(?:^|[\\/])\.\.(?:[\\/]|$)/
 
 /**
- * The session workspace cwd to resolve `requestedPath` against, or undefined
+ * The session workspace cwd to resolve a requested path against, or undefined
  * when no session cwd applies (the filesystem backend then uses its own
  * default base).
  * @param cwd - the session's `header.cwd`, if any.
- * @param requestedPath - the path the provider will resolve.
- * @returns the cwd, canonicalized when traversal could expose a symlink.
+ * @returns the cwd unchanged.
  */
-export function sessionCwd(cwd: string | undefined, requestedPath: string): string | undefined {
-  if (cwd === undefined || (!PARENT_PATH_SEGMENT.test(cwd) && !PARENT_PATH_SEGMENT.test(requestedPath))) return cwd
-  return canonicalPath(cwd)
+export function sessionCwd(cwd: string | undefined): string | undefined {
+  return cwd
 }
 
 /**
  * Session cwd for one tool execution (same rule as the fs tools).
  * @param exec - the tool-execution context; only its optional `agent` is read.
- * @param requestedPath - the path the provider will resolve.
+ * @returns the calling agent's session cwd, or undefined for a non-agent caller.
  */
-export function execSessionCwd(exec: ToolExecution, requestedPath: string): string | undefined {
-  return sessionCwd(exec.agent?.session.header.cwd, requestedPath)
+export function execSessionCwd(exec: ToolExecution): string | undefined {
+  return sessionCwd(exec.agent?.session.header.cwd)
 }
