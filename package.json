@@ -154,6 +154,7 @@
     "@deepseek-ai/dsh-commands": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-compaction": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-compaction-basic": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-compaction-image-offload": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-fs": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-goal": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-home-paths": "^0.1.6-alpha.1",
