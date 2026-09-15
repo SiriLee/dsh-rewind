@@ -1081,7 +1081,7 @@ export class SnapshotStore {
   /**
    * Session-format version snapshots are anchored under, stamped into each
    * session's `format` marker when an entry is recorded. `null` until the host
-   * sets it (from `agent/session-start`), so a session that never records is
+   * sets it (from `agent/created`), so a session that never records is
    * never materialized and a marker is only written where snapshots exist.
    */
   private formatVersion: number | null = null
@@ -1368,7 +1368,7 @@ export class SnapshotStore {
     }
     // Stamp the session-format marker so this session's snapshots record the
     // session-format version they were written under — the value the
-    // `agent/session-start` reconcile compares against on the next load — and
+    // `agent/created` reconcile compares against on the next load — and
     // the plugin's own store-format marker, so a future format bump can fail
     // closed before reading any entry.
     if (this.formatVersion !== null) {
@@ -2705,7 +2705,7 @@ export class SnapshotStore {
 
   /**
    * Set the session-format version the store stamps onto every snapshot it
-   * records. The host sets this once per process from `agent/session-start`
+   * records. The host sets this once per process from `agent/created`
    * (`agent.session.header.version`), so a marker is only materialized for a
    * session that actually records a snapshot.
    */
@@ -2762,7 +2762,7 @@ export class SnapshotStore {
    * Session-format-version guard: clear a session's snapshot dir when the
    * format its snapshots were anchored under differs from the current session
    * format, so seq-anchored references can never survive a format migration
-   * mis-mapped. Runs at `agent/session-start` — after DSH has migrated/loaded
+   * mis-mapped. Runs at `agent/created` — after DSH has migrated/loaded
    * the session, so `sessionVersion` is the post-migration value.
    *
    * Conservative rule (per the "delete stale snapshots" policy): a session

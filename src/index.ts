@@ -90,7 +90,7 @@ const TRACKED_TOOLS = new Set(['write', 'edit'])
 /**
  * Whether a session is a subagent child: a direct-delegation session this
  * plugin neither tracks nor rewinds. THE single predicate for every skip site —
- * the checkpoint capture, the message-boundary re-check, the session-start
+ * the checkpoint capture, the message-boundary re-check, the agent-created
  * reconcile, and the lazy cleanup trigger. The Harness refuses every generic
  * Session RPC for such an identity (`session/agent-busy`, "use subagent
  * delivery for this child session"), so a snapshot recorded under a child
@@ -1083,7 +1083,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // Conservative per the "delete stale snapshots" policy: a legacy dir with no
   // recorded format marker is discarded too. Subagent sessions are skipped
   // (they are never rewind targets and record no snapshots).
-  ctx.on('agent/session-start', ({ agent }: { agent: Agent }) => {
+  ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     const session = agent.session
     if (isSubagentSession(session)) return
     void (async () => {

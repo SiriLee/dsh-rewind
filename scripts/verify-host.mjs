@@ -448,7 +448,7 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   }
 }
 
-// 4e. session start must not clear snapshots written by a NEWER build: the
+// 4e. agent creation must not clear snapshots written by a NEWER build: the
 //     store-version guard runs BEFORE the session-format reconcile (whose
 //     whole-directory clear would delete snapshots this build cannot read).
 {
@@ -472,7 +472,7 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
     return originalWarn.apply(ctx.logger, args)
   }
   try {
-    ctx.emit('agent/session-start', { agent: futureAgent })
+    await ctx.serial('agent/created', { agent: futureAgent })
     const deadline = Date.now() + 2000
     while (Date.now() < deadline && !warnings.some(text => text.includes('file restore disabled'))) {
       await new Promise(resolve => setTimeout(resolve, 25))
@@ -480,12 +480,12 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   } finally {
     ctx.logger.warn = originalWarn
   }
-  check('session start reports the unsupported store', warnings.some(text => text.includes('file restore disabled')), `warnings=${warnings.join(' | ')}`)
+  check('agent creation reports the unsupported store', warnings.some(text => text.includes('file restore disabled')), `warnings=${warnings.join(' | ')}`)
 
   const members = await readdir(dir).catch(() => [])
-  check('session start does not clear a newer store', members.includes('5') && members.includes('store'), `members=${members.join(',')}`)
-  check('session start does not rewrite the format marker of a newer store', await readFile(join(dir, 'format'), 'utf8').catch(() => '') === '0', 'format marker changed')
-  check('session start leaves the newer store marker at its version', await readFile(join(dir, 'store'), 'utf8').catch(() => '') === '3', 'store marker changed')
+  check('agent creation does not clear a newer store', members.includes('5') && members.includes('store'), `members=${members.join(',')}`)
+  check('agent creation does not rewrite the format marker of a newer store', await readFile(join(dir, 'format'), 'utf8').catch(() => '') === '0', 'format marker changed')
+  check('agent creation leaves the newer store marker at its version', await readFile(join(dir, 'store'), 'utf8').catch(() => '') === '3', 'store marker changed')
 }
 
 // 4f. a non-regular target is never captured: no staged copy, no entry, no
