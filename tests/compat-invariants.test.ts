@@ -28,6 +28,7 @@ import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { apply as applySessionStats } from '@deepseek-ai/dsh-session-stats'
 import { applyRewind, assistantMessage, assertTurnTailOrdering, buildTurnedSession, newMeter, textMessage } from './helpers.ts'
+import { planRewind } from '../src/rewind.ts'
 import { runScenario, SCENARIOS } from './scenarios.ts'
 
 /** I1: token-meter replay and resume-preflight (`Session.create`) accept the log. */
@@ -111,6 +112,36 @@ describe('I1 log replayability (probe: token-meter + resume preflight)', () => {
     cast(session).append('plan/mode', { active: false }) // a later /plan off
     assertReplayable(session)
     assertStepTurnStructure(session)
+  })
+
+  it('a log carrying workspace/changes announcements stays replayable and surface-stable', () => {
+    // DSH 0.1.6-alpha.2 announces a turn's workspace changes as a log-only,
+    // NON-surface event (`deliverables/workspace-changes` appends
+    // `workspace/changes` `{ turn }`). It must not join the surface, must not
+    // move a rewind plan, and must not break either replay consumer — the
+    // turn-deliverables card hangs off exactly these announcements.
+    const baseline = buildTurnedSession()
+    const session = buildTurnedSession()
+    const target = session.surface.nodes.find(seq =>
+      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
+    const surfaceBefore = [...baseline.surface.nodes]
+    const planBefore = planRewind(baseline.snapshotEvents(), baseline.surface.nodes, { kind: 'seq', seq: target })
+
+    const cast = (s: Session) => s as unknown as { append(type: string, data: unknown): unknown }
+    cast(session).append('workspace/changes', { turn: 1 })
+    cast(session).append('workspace/changes', { turn: 2 })
+
+    expect([...session.surface.nodes]).toEqual(surfaceBefore)
+    expect(planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: target }))
+      .toEqual(planBefore)
+
+    applyRewind(session, target)
+    assertReplayable(session)
+    assertStepTurnStructure(session)
+    // The resume preflight rebuilds the same surface, so a reloaded window hides
+    // exactly the rows a live one does.
+    expect([...Session.create(session.id, session.snapshotEvents()).surface.nodes])
+      .toEqual([...session.surface.nodes])
   })
 })
 
