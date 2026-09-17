@@ -1037,6 +1037,18 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
+  // Live unload must not leave staged before-bytes behind: a capture is staged
+  // at `tools/execute` and consumed at `tools/post-execute` (or dropped at
+  // `tools/result`), neither of which runs for a fiber that was disposed in
+  // between. The store's `prune` would eventually collect the `.pending/`
+  // leftovers, but only after they went stale. `discardCapture` is idempotent
+  // (a consumed capture is already gone), and the disposer is async so the
+  // fiber reports inert only after the bytes are really removed.
+  ctx.effect(() => () => {
+    const captures = [...pending.values()]
+    pending.clear()
+    return Promise.all(captures.map(capture => discardCapture(capture))).then(() => undefined)
+  }, 'dsh-rewind dispose pending captures')
   // Incremental turn-anchor cache, keyed by the Session object (see
   // anchorSeqOf).
   const anchorCache = new WeakMap<Session, AnchorCacheEntry>()
