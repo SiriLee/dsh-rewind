@@ -19,7 +19,9 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { en as enLocale, zh as zLocale } from '../src/locales.ts'
 import { apply } from '../src/index.ts'
+import { textMessage } from './helpers.ts'
 
 /** A function a mount yielded; its return value is awaited on dispose. */
 type Disposer = () => unknown
@@ -34,6 +36,10 @@ interface Mounted {
   readonly handlers: ReadonlyMap<string, (...args: never[]) => unknown>
   /** `tools/*` handlers registered by the nested `fs` scope, by event name. */
   readonly toolHandlers: ReadonlyMap<string, (...args: never[]) => unknown>
+  /** The policy reads the mounted settings scope answered (one per `load()`). */
+  readonly policyReads: () => number
+  /** Teardown of the injected settings scope ALONE (a live-reload service restart). */
+  disposeSettingsScope(): Promise<void>
   /** Run every disposer (depth-first) and await the async ones. */
   dispose(): Promise<void>
 }
@@ -70,10 +76,14 @@ function collect(fn: unknown, into: Disposer[]): void {
  */
 function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): Mounted {
   const disposers: Disposer[] = []
+  const settingsDisposers: Disposer[] = []
   const commands = new Map<string, { name: string; description?: string; handler: (invocation: unknown) => Promise<unknown> }>()
   const handlers = new Map<string, (...args: never[]) => unknown>()
   const toolHandlers = new Map<string, (...args: never[]) => unknown>()
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  // The host reads the resolved policy through `scope.get()`; one counter per
+  // mount is what makes "the one-shot sweep gate re-armed on remount" observable.
+  const policyRead = vi.fn(() => ({ enabled: false, maxAgeDays: 30 }))
 
   const ctx = {
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
@@ -89,9 +99,12 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
       if (services.includes('settings') && options.settings !== undefined) {
         const preference = options.settings.locale
         callback({
+          // The injected scope is a real child context: it has `effect` (the
+          // plugin registers its store disposer on it) and its own services.
+          effect: (fn: unknown) => { collect(fn, settingsDisposers); return () => {} },
           settings: {
             get: () => (preference === undefined ? undefined : { preference }),
-            register: () => ({ get: () => undefined, update: async () => {} }),
+            register: () => ({ get: () => policyRead(), update: async () => {} }),
           },
         })
       }
@@ -110,6 +123,10 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
     commands,
     handlers,
     toolHandlers,
+    policyReads: () => policyRead.mock.calls.length,
+    disposeSettingsScope: async () => {
+      for (const dispose of settingsDisposers.splice(0).reverse()) await dispose()
+    },
     dispose: async () => {
       // Reverse order, like a real fiber teardown; await async disposers so the
       // assertions can rely on their effects having landed.
@@ -214,5 +231,75 @@ describe('host mount lifecycle', () => {
     expect(await waitForStagedDrain()).toEqual([])
     await mounted.dispose()
     expect(await stagedFiles()).toEqual([])
+  })
+})
+
+describe('live disable → enable round trip', () => {
+  /** One `user/message` event, the practical auto-cleanup trigger. */
+  const userMessage = (): [Session, { type: string; seq: number }] => {
+    const session = Session.create(SessionId('lifecycle-session'))
+    const event = session.append('user/message', textMessage('hello'), { surfaceOp: 'append' })
+    return [session, event]
+  }
+
+  /** Poll until `check` holds; the auto-cleanup path is voided, not awaited. */
+  async function waitUntil(check: () => boolean): Promise<boolean> {
+    for (let attempt = 0; attempt < 50; attempt++) {
+      if (check()) return true
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    return check()
+  }
+
+  it('re-reads the locale preference instead of inheriting the previous mount', async () => {
+    const zh = mount({ settings: { locale: 'zh' } })
+    apply(zh.ctx, { snapshotDir: snapRoot })
+    const zhDescription = zh.commands.get('snapshot-auto-cleanup')!.description
+    expect(zhDescription).toBe(zLocale['cleanup.description'])
+    await zh.dispose()
+
+    // No persisted preference this time: the command copy must fall back to the
+    // neutral English default rather than the previous mount's Chinese.
+    const en = mount({ settings: {} })
+    apply(en.ctx, { snapshotDir: snapRoot })
+    expect(en.commands.get('snapshot-auto-cleanup')!.description).toBe(enLocale['cleanup.description'])
+    await en.dispose()
+  })
+
+  it('re-arms the one-shot auto-cleanup check on every mount', async () => {
+    const first = mount({ settings: {} })
+    apply(first.ctx, { snapshotDir: snapRoot })
+    const [firstSession] = userMessage()
+    first.handlers.get('session/event')!(firstSession as never, { type: 'user/message', seq: 2 } as never)
+    expect(await waitUntil(() => first.policyReads() > 0)).toBe(true)
+    await first.dispose()
+
+    // The previous mount consumed the one-shot gate; a fresh mount must check
+    // again (the flag is per mount, the 24h throttle itself is on disk).
+    const second = mount({ settings: {} })
+    apply(second.ctx, { snapshotDir: snapRoot })
+    const [secondSession] = userMessage()
+    second.handlers.get('session/event')!(secondSession as never, { type: 'user/message', seq: 2 } as never)
+    expect(await waitUntil(() => second.policyReads() > 0)).toBe(true)
+    await second.dispose()
+  })
+
+  it('fails the cleanup command closed after the settings scope is gone', async () => {
+    const mounted = mount({ settings: {} })
+    apply(mounted.ctx, { snapshotDir: snapRoot })
+    const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
+    const [session] = userMessage()
+    const invocation = { rawInput: 'status', agent: { session } } as never
+
+    const mountedResult = await cleanup.handler(invocation) as { kind: string }
+    expect(mountedResult.kind).toBe('success')
+
+    // The settings service unmounting (a live-reload restart) disposes the
+    // injected scope while the plugin stays mounted. The store handle must be
+    // cleared with it, so the read fails closed instead of touching it.
+    await mounted.disposeSettingsScope()
+    const disposedResult = await cleanup.handler(invocation) as { kind: string; text: string }
+    expect(disposedResult.kind).toBe('error')
+    expect(disposedResult.text).toContain('settings service unavailable')
   })
 })
