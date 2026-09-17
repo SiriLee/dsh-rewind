@@ -78,6 +78,7 @@
     "@deepseek-ai/schemastery": "^3.18.1",
     "@deepseek-ai/dsh-client-locale": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-client-ui-commands": "^0.1.6-alpha.1",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.6-alpha.1",
     "@deepseek-ai/dsh-commands": "^0.1.6-alpha.1",
@@ -100,6 +101,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-commands": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-primitives": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-settings": {

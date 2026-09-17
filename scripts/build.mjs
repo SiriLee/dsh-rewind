@@ -80,9 +80,13 @@ await build({
   platform: 'browser',
   target: 'es2020',
   bundle: true,
-  // React stays external: the web profile's module loader resolves these
-  // from the harness installation (the profile ships react@18).
-  external: ['react', 'react-dom', 'react/jsx-runtime'],
+  // React and the harness's client UI primitives stay external: the web
+  // profile's frozen module table (PLATFORM_MODULES) resolves these from the
+  // harness installation — React 18 plus the shell's own primitives instance,
+  // whose styles the shell has already injected. `dsh.client.external` needs no
+  // declaration for a baseline module: it only lists requests BEYOND that
+  // baseline.
+  external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
   jsx: 'automatic',
   sourcemap: false,
   define: {

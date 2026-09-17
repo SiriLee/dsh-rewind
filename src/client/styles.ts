@@ -166,94 +166,47 @@ export const STYLE = `
   pointer-events: none;
 }
 
-/* ---- Snapshot-cleanup settings card (mirrors the harness PluginCard look) ---- */
-/* Standardized on the 0.1.2 harness card look (border-radius 16px + 0.5px
-   border-l4, 0.5px internal separators). */
-.dsh-rewind-cleanup-card {
-  list-style: none;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 16px;
-  background: var(--dsw-alias-bg-layer-3);
-  transition: border-color .16s, background .16s;
-}
-.dsh-rewind-cleanup-card:hover {
-  border-color: var(--dsw-alias-label-dimmed);
-}
-.dsh-rewind-cleanup-card-open {
-  background: var(--dsw-alias-bg-layer-2);
-  border-color: var(--dsw-alias-label-dimmed);
-}
-.dsh-rewind-cleanup-header {
-  width: 100%;
-  appearance: none;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 12px;
-}
-.dsh-rewind-cleanup-header:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: -2px;
-}
-.dsh-rewind-cleanup-head-text {
-  flex: 1;
-  min-width: 0;
+/* ---- Snapshot-cleanup configuration form (mirrors the harness plugin form) ---- */
+/* The Plugins page draws the bundle's title, icon, crumb, and description; this
+   is the form body only. Every value mirrors ui-settings-plugins'
+   PluginConfigForm.module.css / fields.module.css /
+   SubagentModelSelectionFields.module.css: those components are package-internal
+   (the package ships lib/** only) and cannot be imported across packages, so the
+   numbers are copied rather than the components. */
+.dsh-rewind-cleanup-form {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-.dsh-rewind-cleanup-name {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.4;
-  color: var(--dsw-alias-label-primary);
-}
-.dsh-rewind-cleanup-desc {
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-tertiary);
-}
-.dsh-rewind-cleanup-chevron {
-  flex: none;
-  color: var(--dsw-alias-label-tertiary);
-  transition: transform .16s;
-}
-.dsh-rewind-cleanup-chevron-open {
-  transform: rotate(180deg);
-}
-.dsh-rewind-cleanup-pending {
-  flex: none;
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 11px;
-  line-height: 17px;
-  font-weight: 500;
-  white-space: nowrap;
-  background: var(--dsw-alias-bg-module-platform);
-  color: var(--dsw-alias-label-secondary);
-}
-.dsh-rewind-cleanup-body {
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
-  margin: 0 16px;
-  padding: 0 0 8px;
 }
 .dsh-rewind-cleanup-readonly {
-  margin: 12px 0 0;
+  margin: 0 0 12px;
   font-size: 12px;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
 }
+/* Auto-cleanup permission block: the label + Switch row, then the hint. */
 .dsh-rewind-cleanup-permission {
   display: grid;
   gap: 6px;
   padding: 12px 0;
+}
+.dsh-rewind-cleanup-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+}
+/* The official .toggleLabel is "flex: 1; min-width: 0" only. The badge/reset
+   pair is this form's own addition (the official selection toggle carries no
+   override state), so the label becomes a flex row to align it beside the text. */
+.dsh-rewind-cleanup-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 .dsh-rewind-cleanup-field {
   display: flex;
@@ -262,12 +215,6 @@ export const STYLE = `
   padding: 12px 0;
 }
 .dsh-rewind-cleanup-field + .dsh-rewind-cleanup-field {
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
-}
-/* Auto-cleanup (permission) block and the max-age field are consecutive control
- * sections of the open card — give them the same 0.5px divider the harness gives
- * every pair of config fields (fields.module.css field + field). */
-.dsh-rewind-cleanup-permission + .dsh-rewind-cleanup-field {
   border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 .dsh-rewind-cleanup-head {
@@ -283,6 +230,27 @@ export const STYLE = `
   line-height: 1.5;
   color: var(--dsw-alias-label-primary);
 }
+.dsh-rewind-cleanup-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dsh-rewind-cleanup-reset {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+.dsh-rewind-cleanup-reset:hover:not(:disabled) {
+  color: var(--dsw-alias-label-primary);
+}
+.dsh-rewind-cleanup-reset:disabled {
+  cursor: default;
+}
 .dsh-rewind-cleanup-hint {
   margin: 0;
   font-size: 12px;
@@ -293,62 +261,7 @@ export const STYLE = `
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: var(--dsw-alias-label-error);
-}
-/* Switch row: label left, role=switch button right, hint below (Subagent module).
- * The track mirrors the harness ui-primitives Switch (0.1.3-alpha.2 line): the
- * on/off appearance keys off aria-checked rather than a parallel class, so the
- * visual state cannot disagree with the state assistive technology reads, and
- * corner-shape: round opts the capsule track out of the global superellipse
- * (which would square the capsule ends off against the round thumb inside). */
-.dsh-rewind-cleanup-toggle-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-primary);
-}
-.dsh-rewind-cleanup-toggle-label {
-  flex: 1;
-  min-width: 0;
-}
-.dsh-rewind-cleanup-switch {
-  box-sizing: border-box;
-  position: relative;
-  flex: 0 0 auto;
-  width: 36px;
-  height: 20px;
-  padding: 2px;
-  border: 0;
-  border-radius: 10px;
-  corner-shape: round;
-  background: var(--dsw-alias-border-l3);
-  cursor: pointer;
-}
-.dsh-rewind-cleanup-switch[aria-checked='true'] {
-  background: var(--dsw-alias-brand-primary);
-}
-.dsh-rewind-cleanup-switch:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-.dsh-rewind-cleanup-switch:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: 2px;
-}
-.dsh-rewind-cleanup-thumb {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  corner-shape: round;
-  background: var(--dsw-alias-label-primary-foreground);
-  transition: transform 120ms ease;
-}
-.dsh-rewind-cleanup-switch[aria-checked='true'] .dsh-rewind-cleanup-thumb {
-  transform: translateX(16px);
+  color: var(--dsw-alias-state-error-primary);
 }
 .dsh-rewind-cleanup-input {
   box-sizing: border-box;
@@ -371,15 +284,13 @@ export const STYLE = `
   cursor: default;
 }
 .dsh-rewind-cleanup-input-invalid {
-  border-color: var(--dsw-alias-label-error);
+  border-color: var(--dsw-alias-state-error-primary);
 }
 .dsh-rewind-cleanup-footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 8px;
-  padding: 12px 0 4px;
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
+  padding-top: 16px;
 }
 .dsh-rewind-cleanup-failed {
   flex: 1;
@@ -389,7 +300,6 @@ export const STYLE = `
   line-height: 1.5;
   color: var(--dsw-alias-label-error);
 }
-.dsh-rewind-cleanup-discard,
 .dsh-rewind-cleanup-save {
   appearance: none;
   border: 1px solid transparent;
@@ -399,26 +309,13 @@ export const STYLE = `
   font-size: 13px;
   line-height: 1.5;
   cursor: pointer;
-}
-.dsh-rewind-cleanup-discard {
-  border-color: var(--dsw-alias-border-l2);
-  background: none;
-  color: var(--dsw-alias-label-secondary);
-}
-.dsh-rewind-cleanup-discard:hover:not(:disabled) {
-  color: var(--dsw-alias-label-primary);
-  border-color: var(--dsw-alias-label-dimmed);
-}
-.dsh-rewind-cleanup-save {
   background: var(--dsw-alias-label-primary);
   color: var(--dsw-alias-bg-layer-3);
 }
-.dsh-rewind-cleanup-discard:disabled,
 .dsh-rewind-cleanup-save:disabled {
   opacity: 0.4;
   cursor: default;
 }
-.dsh-rewind-cleanup-discard:focus-visible,
 .dsh-rewind-cleanup-save:focus-visible {
   outline: 2px solid var(--dsw-alias-brand-primary);
   outline-offset: 1px;

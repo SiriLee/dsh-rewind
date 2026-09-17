@@ -1,25 +1,37 @@
 /**
- * dsh-rewind client settings card: the "Snapshot cleanup" module under
- * Settings > Plugins > Plugin configuration, drawn as one `settings.plugin.item`
- * card (keyed by the host-registered settings namespace).
+ * dsh-rewind client settings card: the "Snapshot cleanup" configuration form
+ * on the bundle's own page under the sidebar's Plugins page.
  *
- * The card edits exactly two knobs — `enabled` (auto-cleanup switch) and
- * `maxAgeDays` (idle cutoff, a positive integer) — and stages them exactly like
- * the host-side /snapshot-auto-cleanup command does, so the GUI and the command
- * can never disagree. The switch collapses/expands the max-age editor; a
+ * DSH 0.1.6-alpha.2 removed the per-namespace Settings ▸ Plugins card slot
+ * (`settings.plugin.item`) and moved every plugin's configuration to the
+ * Plugins page, which asks a BUNDLE for its form through
+ * `plugins.bundle.config` (keyed by the bundle's package name; the page draws
+ * the title, the icon, and the crumb itself). This module is that form.
+ *
+ * It edits exactly two knobs — `enabled` (auto-cleanup switch) and `maxAgeDays`
+ * (idle cutoff, a positive integer) — and stages them exactly like the
+ * host-side /snapshot-auto-cleanup command does, so the GUI and the command can
+ * never disagree. The switch collapses/expands the max-age editor; a
  * non-positive/non-integer draft blocks save (the same single validator the
- * host schema enforces). "Discard changes" restores the last-read baseline.
+ * host schema enforces).
+ *
+ * Staging follows the harness's own plugin forms: only a save writes, leaving
+ * the page drops every staged edit (hence no Discard control), and a field the
+ * user layer carries gets an "overridden" badge plus a reset that stages a
+ * clear back to the composition layer.
  *
  * It neither imports the client settings typed contract nor depends on the
  * 0.1.2-rc.1-only `mutate` write API: it reads `getSnapshot().value` and writes
- * via the `set(field, value)` method, and the card receives a tiny structural
- * `CleanupCardApi` supplied by `src/client/index.ts` so the component stays
- * harness-agnostic and unit-testable in isolation.
+ * through the `set(field, value)` / `unset(field)` methods, and the card
+ * receives a tiny structural {@link CleanupCardApi} supplied by
+ * `src/client/index.ts` so the component stays harness-agnostic and
+ * unit-testable in isolation.
  *
  * @module dsh-rewind/client/settings-card
  */
 
 import { useEffect, useState } from 'react'
+import { Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
  * The dsh-settings namespace the card binds to. Duplicated here (not imported
@@ -29,6 +41,15 @@ import { useEffect, useState } from 'react'
  */
 export const CLEANUP_SETTINGS_NAMESPACE = 'dsh-rewind-snapshot-cleanup'
 
+/**
+ * The `plugins.bundle.config` key this card registers under: the BUNDLE's
+ * package name, which is how the Plugins page dispatches a bundle's form
+ * (`renderSlot('plugins.bundle.config', …, { entryKey: pkg.name })`) and how it
+ * decides a bundle is configurable. A cross-config test pins it to
+ * `package.json`'s `name`.
+ */
+export const CLEANUP_SLOT_KEY = 'dsh-rewind-plugin'
+
 /** The defaults the host uses; shown as the field placeholder until a draft. */
 export const DEFAULT_MAX_AGE_DAYS = 30
 
@@ -37,6 +58,14 @@ export interface CleanupPolicy {
   readonly enabled: boolean
   readonly maxAgeDays: number
 }
+
+/** One editable field, named exactly as the host's settings section names it. */
+export type CleanupField = 'enabled' | 'maxAgeDays'
+
+/** One staged save operation: a validated write, or a clear back to the base layer. */
+export type CleanupOp =
+  | { readonly field: CleanupField; readonly kind: 'set'; readonly value: boolean | number }
+  | { readonly field: CleanupField; readonly kind: 'reset' }
 
 /** A staged draft: the switch state and the raw (unparsed) max-age text. */
 export interface CleanupDraft {
@@ -48,10 +77,16 @@ export interface CleanupDraft {
 export interface CleanupCardApi {
   /** Read the resolved policy; `undefined` while the describe mirror loads. */
   read(): CleanupPolicy | undefined
+  /**
+   * Which fields the USER layer carries. Presence is the judgment, never value
+   * equality: an override whose value equals the composition default is still
+   * an override.
+   */
+  overridden(): Readonly<Record<CleanupField, boolean>>
   /** Whether the settings source accepts writes (false = read-only card). */
   writable(): boolean
-  /** Persist a validated policy; rejects on failure. */
-  save(next: CleanupPolicy): Promise<void>
+  /** Apply the staged operations in order; `reset` clears the field. */
+  save(ops: readonly CleanupOp[]): Promise<void>
   /** Optional change subscription (returns the disposer). */
   subscribe(cb: () => void): () => void
 }
@@ -89,20 +124,54 @@ export function dirtyOf(base: CleanupDraft, draft: CleanupDraft): boolean {
 }
 
 /**
- * The card body. Draws the switch (+ collapse), the max-age editor, and the
- * discard/save actions. Pure of host wiring: everything goes through the
- * supplied {@link CleanupCardApi}.
- * @param api - the read/write transport.
- * @param t - the client dictionary translator.
- * @returns the card element.
+ * The staged operations a save would write, in field order. A staged reset wins
+ * over an edit of the same field; the max-age field is ignored while the switch
+ * is off, matching its hidden state (a disabled policy does not carry a cutoff).
+ * @param base - the last-read baseline.
+ * @param draft - the current draft.
+ * @param resets - the fields staged for a clear.
+ * @returns the operations to apply; empty means "nothing to write".
  */
-export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTranslate }) {
-  const [open, setOpen] = useState(false)
+export function opsOf(
+  base: CleanupDraft,
+  draft: CleanupDraft,
+  resets: readonly CleanupField[],
+): readonly CleanupOp[] {
+  const ops: CleanupOp[] = []
+  if (resets.includes('enabled')) ops.push({ field: 'enabled', kind: 'reset' })
+  else if (draft.enabled !== base.enabled) ops.push({ field: 'enabled', kind: 'set', value: draft.enabled })
+  if (draft.enabled) {
+    if (resets.includes('maxAgeDays')) {
+      ops.push({ field: 'maxAgeDays', kind: 'reset' })
+    } else {
+      const days = maxAgeOf(draft.maxAgeDays)
+      if (days !== null && days !== maxAgeOf(base.maxAgeDays)) {
+        ops.push({ field: 'maxAgeDays', kind: 'set', value: days })
+      }
+    }
+  }
+  return ops
+}
+
+/**
+ * The bundle's configuration form. Renders nothing for the `summary` view: the
+ * Plugins page only ever asks a bundle configuration for its `page` form (the
+ * one-liner under the title is the package description the page already has).
+ * @param props.view - the view the Plugins page asks for.
+ * @param props.api - the read/write transport.
+ * @param props.t - the client dictionary translator.
+ * @returns the form element, or null for the summary view.
+ */
+export function SettingsCleanupCard({ view, api, t }: {
+  readonly view?: 'summary' | 'page'
+  readonly api: CleanupCardApi
+  readonly t: CardTranslate
+}) {
   const [baseline, setBaseline] = useState<CleanupDraft>(() => draftFrom(api.read()))
   const [draft, setDraft] = useState<CleanupDraft>(() => draftFrom(api.read()))
+  const [resets, setResets] = useState<readonly CleanupField[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const writable = api.writable()
 
   // Re-read the value when the namespace moves (e.g. the command edits it), and
   // only when the card is not mid-edit, so a draft is never clobbered.
@@ -114,26 +183,42 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
     })
   }), [api])
 
-  const dirty = dirtyOf(baseline, draft)
-  const days = maxAgeOf(draft.maxAgeDays)
-  const invalid = days === null
+  if (view === 'summary') return null
+
+  // Read on every render: the overridden set moves with the host document, and
+  // a reset staged for a field the user layer no longer carries is not pending.
+  const over = api.overridden()
+  const staged = resets.filter(field => over[field])
+  const writable = api.writable()
+  const invalid = draft.enabled && maxAgeOf(draft.maxAgeDays) === null
   const disabled = busy || !writable
+  const ops = opsOf(baseline, draft, staged)
+  const dirty = ops.length > 0
+  const blocked = busy || !writable || !dirty || invalid
 
   const edit = (patch: Partial<CleanupDraft>) => {
     setDraft((cur) => ({ ...cur, ...patch }))
     setError(null)
   }
 
+  const stageReset = (field: CleanupField) => {
+    setResets((cur) => (cur.includes(field) ? cur : [...cur, field]))
+    setError(null)
+  }
+
   const save = async () => {
-    if (busy || !writable || !dirty) return
-    const next = configOf(draft)
-    if (next === null) { setError(t('cleanup.invalid')); return }
+    if (blocked || ops.length === 0) return
     setBusy(true)
     setError(null)
     try {
-      await api.save(next)
-      setBaseline(draft)
-      setError(null)
+      await api.save(ops)
+      // Re-read rather than optimistically adopting the draft: a staged reset
+      // resolves to the composition layer, not to the value that was showing.
+      const reconciled = api.read()
+      const next = reconciled === undefined ? draft : draftFrom(reconciled)
+      setBaseline(next)
+      setDraft(next)
+      setResets([])
     } catch (e) {
       setError(t('cleanup.saveFailed', { message: e instanceof Error ? e.message : String(e) }))
     } finally {
@@ -141,61 +226,61 @@ export function SettingsCleanupCard({ api, t }: { api: CleanupCardApi; t: CardTr
     }
   }
 
-  const discard = () => { if (busy) return; setDraft(baseline); setError(null) }
+  /** The "overridden + reset" control pair of one field. */
+  const badges = (field: CleanupField) => (
+    <span className="dsh-rewind-cleanup-badges">
+      <Tag tone="neutral">{t('cleanup.overridden')}</Tag>
+      <button
+        type="button"
+        className="dsh-rewind-cleanup-reset"
+        disabled={disabled}
+        onClick={() => { stageReset(field) }}
+      >
+        {t('cleanup.reset')}
+      </button>
+    </span>
+  )
 
   return (
-    <li className={`dsh-rewind-cleanup-card${open ? ' dsh-rewind-cleanup-card-open' : ''}`}>
-      <button type="button" className="dsh-rewind-cleanup-header" aria-expanded={open}
-        aria-label={`${t(open ? 'cleanup.collapse' : 'cleanup.expand')}: ${t('cleanup.title')}`}
-        onClick={() => setOpen(!open)}>
-        <span className="dsh-rewind-cleanup-head-text">
-          <span className="dsh-rewind-cleanup-name">{t('cleanup.title')}</span>
-          <span className="dsh-rewind-cleanup-desc">{t('cleanup.desc')}</span>
-        </span>
-        {dirty ? <span className="dsh-rewind-cleanup-pending">{t('cleanup.unsaved')}</span> : null}
-        <svg className={`dsh-rewind-cleanup-chevron${open ? ' dsh-rewind-cleanup-chevron-open' : ''}`}
-          width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </button>
-      {open ? (
-        <div className="dsh-rewind-cleanup-body">
-          {!writable ? <p className="dsh-rewind-cleanup-readonly" role="status">{t('cleanup.readonly')}</p> : null}
-          <div className="dsh-rewind-cleanup-permission">
-            <div className="dsh-rewind-cleanup-toggle-row">
-              <span className="dsh-rewind-cleanup-toggle-label" id="dsh-rewind-cleanup-enabled-label">{t('cleanup.auto')}</span>
-              <button type="button" role="switch" className="dsh-rewind-cleanup-switch"
-                aria-checked={draft.enabled} aria-labelledby="dsh-rewind-cleanup-enabled-label" disabled={disabled}
-                onClick={() => edit({ enabled: !draft.enabled })}>
-                <span className="dsh-rewind-cleanup-thumb" />
-              </button>
-            </div>
-            <p className="dsh-rewind-cleanup-hint">{t(draft.enabled ? 'cleanup.auto.on' : 'cleanup.auto.off')}</p>
+    <div className="dsh-rewind-cleanup-form">
+      {!writable ? <p className="dsh-rewind-cleanup-readonly" role="status">{t('cleanup.readonly')}</p> : null}
+      <div className="dsh-rewind-cleanup-permission">
+        <div className="dsh-rewind-cleanup-toggle-row">
+          <span className="dsh-rewind-cleanup-toggle-label">
+            {t('cleanup.auto')}
+            {over.enabled && !staged.includes('enabled') ? badges('enabled') : null}
+          </span>
+          <Switch
+            checked={draft.enabled}
+            label={t('cleanup.auto')}
+            disabled={disabled}
+            onChange={(next) => { edit({ enabled: next }) }}
+          />
+        </div>
+        <p className="dsh-rewind-cleanup-hint">{t(draft.enabled ? 'cleanup.auto.on' : 'cleanup.auto.off')}</p>
+      </div>
+      {draft.enabled ? (
+        <div className="dsh-rewind-cleanup-field">
+          <div className="dsh-rewind-cleanup-head">
+            <label className="dsh-rewind-cleanup-label" htmlFor="dsh-rewind-cleanup-maxage">{t('cleanup.maxAge')}</label>
+            {over.maxAgeDays && !staged.includes('maxAgeDays') ? badges('maxAgeDays') : null}
           </div>
-          {draft.enabled ? (
-            <div className="dsh-rewind-cleanup-field">
-              <div className="dsh-rewind-cleanup-head">
-                <label className="dsh-rewind-cleanup-label" htmlFor="dsh-rewind-cleanup-maxage">{t('cleanup.maxAge')}</label>
-              </div>
-              <input
-                className={`dsh-rewind-cleanup-input${invalid ? ' dsh-rewind-cleanup-input-invalid' : ''}`}
-                type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
-                disabled={disabled} aria-invalid={invalid || undefined} placeholder={String(DEFAULT_MAX_AGE_DAYS)}
-                onChange={(e) => edit({ maxAgeDays: e.target.value })} />
-              <p className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>
-                {invalid ? t('cleanup.invalid') : t('cleanup.maxAge.hint')}
-              </p>
-            </div>
-          ) : null}
-          <div className="dsh-rewind-cleanup-footer">
-            {error ? <p className="dsh-rewind-cleanup-failed" role="status">{error}</p> : null}
-            <button type="button" className="dsh-rewind-cleanup-discard" disabled={!dirty || busy || !writable}
-              onClick={discard}>{t('cleanup.discard')}</button>
-            <button type="button" className="dsh-rewind-cleanup-save" disabled={!dirty || busy || !writable || invalid}
-              onClick={save}>{busy ? t('cleanup.saving') : t('cleanup.save')}</button>
-          </div>
+          <input
+            className={`dsh-rewind-cleanup-input${invalid ? ' dsh-rewind-cleanup-input-invalid' : ''}`}
+            type="text" inputMode="numeric" id="dsh-rewind-cleanup-maxage" value={draft.maxAgeDays}
+            disabled={disabled} aria-invalid={invalid || undefined} placeholder={String(DEFAULT_MAX_AGE_DAYS)}
+            onChange={(e) => { edit({ maxAgeDays: e.target.value }) }} />
+          <p className={invalid ? 'dsh-rewind-cleanup-error' : 'dsh-rewind-cleanup-hint'}>
+            {invalid ? t('cleanup.invalid') : t('cleanup.maxAge.hint')}
+          </p>
         </div>
       ) : null}
-    </li>
+      <div className="dsh-rewind-cleanup-footer">
+        {error ? <p className="dsh-rewind-cleanup-failed" role="status">{error}</p> : null}
+        <button type="button" className="dsh-rewind-cleanup-save" disabled={blocked} onClick={save}>
+          {busy ? t('cleanup.saving') : t('cleanup.save')}
+        </button>
+      </div>
+    </div>
   )
 }

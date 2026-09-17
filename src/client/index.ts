@@ -31,6 +31,9 @@ import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-contro
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+// Type-only: the settings-namespace scope contract (`bind` result: snapshot +
+// `set`/`unset`); the card's transport is the plugin's own structural face.
+import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the `mainView` Session retain-source label merge (0.1.6-alpha.2
@@ -54,7 +57,9 @@ import { STYLE } from './styles.ts'
 import {
   SettingsCleanupCard,
   CLEANUP_SETTINGS_NAMESPACE,
+  CLEANUP_SLOT_KEY,
   type CleanupCardApi,
+  type CleanupField,
   type CleanupPolicy,
   type CardTranslate,
 } from './settings-card.tsx'
@@ -99,27 +104,8 @@ interface SessionInputResolverLike {
 }
 
 /**
- * Structural face of the settings-namespace scope the snapshot-cleanup card
- * binds (the `settingsScope.bind({namespace})` result). Only the subset the
- * card uses — a resolved-value snapshot, a per-field write, and a change
- * subscription — typed locally so the plugin never imports the client settings
- * typed contract (0.1.2 adds `mutate`; it is not used here).
+ * The slot the session-scoped rewind bridge registers into (harness-declared).
  */
-interface CleanupSettingsScopeLike {
-  getSnapshot(): {
-    /** The resolved namespace value (schema-valid) or undefined while loading. */
-    value?: { enabled: boolean; maxAgeDays: number }
-    status: 'loading' | 'ready' | 'unavailable' | string
-    /** Whether the Host document accepts writes (the harness's own writable signal). */
-    writable: boolean
-  }
-  /** Write one field's user-layer value. */
-  set(field: string, value: unknown): Promise<void>
-  /** Observe snapshot replacements; returns the disposer. */
-  subscribe(cb: () => void): () => void
-}
-
-/** The slot the session-scoped rewind bridge registers into (harness-declared). */
 const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
 /**
@@ -273,25 +259,34 @@ export function apply(ctx: ClientContext): void {
       createRewindBridge({ sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, t, subscribeLocale }),
     ))
 
-    // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
+    // ---- snapshot-cleanup configuration form (sidebar Plugins page) ----
     // Reach the settings surface through a NESTED inject (the dsh-market
     // template): do NOT name settingsScope in the module-level inject, or a
     // host without it leaves this whole plugin unmounted (costing the rewind
-    // feature a card it cannot render). Nested, the card simply never registers
+    // feature a form it cannot render). Nested, the form simply never registers
     // there. The nested scope inherits the module 'slots' and 'locale', and
-    // gains 'settingsScope'; only then is the namespace bound and the card
-    // registered under `settings.plugin.item` keyed by the SAME namespace the
-    // Host half serves. The card reads/writes through a structural scope face
-    // (the 0.1.2-rc.1-only `mutate` deliberately unused).
+    // gains 'settingsScope'; only then is the namespace bound and the form
+    // registered under `plugins.bundle.config` keyed by the BUNDLE's package
+    // name — the alpha.2 contract for a bundle's own configuration. The card
+    // reads/writes through the harness's typed SettingsScope face (the
+    // 0.1.2-rc.1-only `mutate` deliberately unused).
     const clientCtx = ctx as unknown as {
       inject(services: string[], callback: (scoped: {
         slots: SlotsLike
-        settingsScope: { bind(spec: { namespace: string }): CleanupSettingsScopeLike }
+        settingsScope: { bind<T>(spec: { namespace: string }): SettingsScope<T> }
       }) => void): void
     }
     clientCtx.inject(['settingsScope'], (scoped) => {
       try {
-        const scope = scoped.settingsScope.bind({ namespace: CLEANUP_SETTINGS_NAMESPACE }) as unknown as CleanupSettingsScopeLike
+        const scope = scoped.settingsScope.bind<CleanupPolicy>({ namespace: CLEANUP_SETTINGS_NAMESPACE })
+        const overridden = (): Readonly<Record<CleanupField, boolean>> => {
+          // Presence in the user layer is the judgment (a value equal to the
+          // composition default is still an override).
+          const user = scope.getSnapshot().user
+          const has = (field: CleanupField): boolean =>
+            typeof user === 'object' && user !== null && Object.hasOwn(user, field)
+          return { enabled: has('enabled'), maxAgeDays: has('maxAgeDays') }
+        }
         const cardApi: CleanupCardApi = {
           read: () => {
             const value = scope.getSnapshot().value
@@ -299,25 +294,32 @@ export function apply(ctx: ClientContext): void {
               ? undefined
               : { enabled: value.enabled, maxAgeDays: value.maxAgeDays }
           },
+          overridden,
           writable: () => {
             // The harness's own writable signal (a read-only settings source
             // reports false); the earlier status/mode derivation was wrong and
             // left the buttons disabled.
             return scope.getSnapshot().writable === true
           },
-          save: async (next: CleanupPolicy) => {
-            await scope.set('enabled', next.enabled)
-            await scope.set('maxAgeDays', next.maxAgeDays)
+          save: async (ops) => {
+            // Sequential on purpose: the scope queues operations in order and
+            // reports the first failure, so a partial save never looks whole.
+            for (const op of ops) {
+              if (op.kind === 'reset') await scope.unset(op.field)
+              else await scope.set(op.field, op.value)
+            }
           },
           subscribe: (cb) => scope.subscribe(cb),
         }
-        scoped.slots.inject('settings.plugin.item', () => scoped.slots.register(
+        scoped.slots.inject('plugins.bundle.config', () => scoped.slots.register(
           {
-            name: 'settings.plugin.item',
-            key: CLEANUP_SETTINGS_NAMESPACE,
+            name: 'plugins.bundle.config',
+            // Keyed by the bundle's package name: the page renders this form on
+            // the bundle's own page, between its description and its rows.
+            key: CLEANUP_SLOT_KEY,
             // Match the official cards / dsh-market: locale + inject provide
-            // the card its props through the slot renderer (the keyed card owns
-            // its internals, but the page feeds it locale + the bound api).
+            // the card its props through the slot renderer (the page feeds it
+            // the `view` it asks for plus the bound api).
             locale: NS,
             inject: () => ({ t: t as unknown as CardTranslate, api: cardApi }),
           },
