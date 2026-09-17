@@ -146,6 +146,7 @@
     "@deepseek-ai/dsh-client-connection": "^0.1.6-alpha.2",
     "@deepseek-ai/dsh-client-store": "^0.1.6-alpha.2",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.6-alpha.2",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.1.6-alpha.2",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.6-alpha.2",
     "@deepseek-ai/dsh-client-ui-session": "^0.1.6-alpha.2",
     "@deepseek-ai/dsh-api-session-controller": "^0.1.6-alpha.2",
