@@ -246,6 +246,52 @@ describe('runAutoCleanupCheck', () => {
     await runAutoCleanupCheck(deps(enabled()), 'active')
     await expect(staleExists('active')).resolves.toBe(true) // skipped via keepActiveId
   })
+
+  it('does not sweep when the mount is already aborted', async () => {
+    await seedStale('old', now() - 40 * day)
+    await saveLastSweepAt(state, now() - 40 * day)
+    const abort = new AbortController()
+    abort.abort()
+    await runAutoCleanupCheck({ ...deps(enabled()), signal: abort.signal }, 'active')
+    await expect(staleExists('old')).resolves.toBe(true)
+    // The window is untouched too: a fresh mount must still see the sweep as due.
+    await expect(loadLastSweepAt(state)).resolves.toBeLessThanOrEqual(now() - 40 * day + 1000)
+  })
+
+  it('stops before the prune when the mount aborts while the policy loads', async () => {
+    await seedStale('old', now() - 40 * day)
+    await saveLastSweepAt(state, now() - 40 * day)
+    const abort = new AbortController()
+    const base = deps(enabled())
+    await runAutoCleanupCheck({
+      ...base,
+      signal: abort.signal,
+      readConfig: async () => { abort.abort(); return base.readConfig() },
+    }, 'active')
+    await expect(staleExists('old')).resolves.toBe(true)
+  })
+
+  it('prunes but does not re-anchor the window when the mount aborts mid-sweep', async () => {
+    await seedStale('old', now() - 40 * day)
+    await saveLastSweepAt(state, now() - 40 * day)
+    const abort = new AbortController()
+    const base = deps(enabled())
+    await runAutoCleanupCheck({
+      ...base,
+      signal: abort.signal,
+      // The prune is where a live unload lands: its completion is not awaited.
+      pruner: {
+        pruneStale: async (opts) => {
+          abort.abort()
+          return base.pruner.pruneStale(opts)
+        },
+      },
+    }, 'active')
+    await expect(staleExists('old')).resolves.toBe(false) // the sweep itself ran
+    // Not re-anchored: the next mount must not be throttled for 24h by a sweep
+    // this mount never finished owning.
+    await expect(loadLastSweepAt(state)).resolves.toBeLessThanOrEqual(now() - 40 * day + 1000)
+  })
 })
 
 describe('CleanupConfig schema + settingsCleanupStore', () => {

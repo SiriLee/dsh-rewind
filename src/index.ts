@@ -790,16 +790,39 @@ let autoSweepChecked = false
  * fail-closes (deletes nothing) and logs, and a prune failure logs — neither
  * blocks the activity that triggered it. The active `sessionId` is the one
  * directory that must never be pruned.
+ *
+ * The gate is re-armed by every `apply` (see the reset there), so a live
+ * disable → enable round trip checks again instead of inheriting the previous
+ * mount's "already checked" flag.
+ * @param signal - the mount's lifecycle signal; an aborted mount writes nothing.
  */
-async function maybeRunAutoCleanup(ctx: Context, store: SnapshotStore, sessionId: string | undefined, dshHome?: string): Promise<void> {
-  if (autoSweepChecked) return
+async function maybeRunAutoCleanup(
+  ctx: Context,
+  store: SnapshotStore,
+  sessionId: string | undefined,
+  dshHome: string | undefined,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (autoSweepChecked || signal?.aborted === true) return
   autoSweepChecked = true
-  await runAutoCleanupCheck({
-    pruner: store,
-    readConfig: () => readCleanupPolicy(),
-    statePath: resolveCleanupStatePath(dshHome),
-    log: msg => ctx.logger.warn(msg),
-  }, sessionId)
+  try {
+    await runAutoCleanupCheck({
+      pruner: store,
+      readConfig: () => readCleanupPolicy(),
+      statePath: resolveCleanupStatePath(dshHome),
+      log: msg => ctx.logger.warn(msg),
+      ...(signal === undefined ? {} : { signal }),
+    }, sessionId)
+  } catch (error) {
+    // The helper is contracted never to reject; this covers the one remaining
+    // path — a logger on an already-disposed context — so an unload can never
+    // surface as an unhandled rejection.
+    try {
+      ctx.logger.warn(`[dsh-rewind] snapshot auto-cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+    } catch {
+      // The context is disposed and its logger is gone: nothing left to report.
+    }
+  }
 }
 
 /**
@@ -994,6 +1017,21 @@ async function handleClearCurrent(
  *  `dshHome` (harness-home override feeding the default paths), `dedup`.
  */
 export function apply(ctx: Context, config?: RewindConfig): void {
+  // Fresh per-mount host state. These three values live at module scope because
+  // the module-level helpers below (`t`, `readCleanupPolicy`,
+  // `maybeRunAutoCleanup`) read them without a ctx thread; resetting them at
+  // every apply gives them per-mount semantics without that refactor. A stale
+  // locale, a disposed settings scope, or an already-fired one-shot sweep gate
+  // would otherwise survive a live disable → enable round trip.
+  activeLocale = 'en'
+  cleanupStore = undefined
+  autoSweepChecked = false
+  // Cancels this mount's in-flight background work when the fiber disposes: the
+  // live plugin manager can unload the plugin at any moment, and neither async
+  // listener body may keep writing to disk or reading a disposed service.
+  const lifecycle = new AbortController()
+  ctx.effect(() => () => { lifecycle.abort() }, 'dsh-rewind lifecycle abort')
+
   const dshHome = config?.dshHome
   const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup, dshHome })
   // Pending before-captures keyed by agent id + callId (callIds are unique,
@@ -1052,7 +1090,15 @@ export function apply(ctx: Context, config?: RewindConfig): void {
       CleanupConfigSchema,
       { base: DEFAULT_CLEANUP_CONFIG },
     ) as unknown as CleanupSettingsScope
-    cleanupStore = settingsCleanupStore(cleanupScope)
+    const mountedStore = settingsCleanupStore(cleanupScope)
+    cleanupStore = mountedStore
+    // Clear the module-level handle when THIS settings scope goes away, so a
+    // later caller fails closed (delete nothing) instead of reading a disposed
+    // scope. Identity-checked: a remount's store must never be cleared by the
+    // previous scope's disposer.
+    ctx.effect(() => () => {
+      if (cleanupStore === mountedStore) cleanupStore = undefined
+    }, 'dsh-rewind cleanup store')
   })
 
   ctx.effect(function* () {
@@ -1088,6 +1134,10 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     if (isSubagentSession(session)) return
     void (async () => {
       try {
+        // A live unload between the event and this body must not write under a
+        // disposed owner (the live plugin manager can disable the plugin at any
+        // moment; the fiber's disposer aborts this signal).
+        if (lifecycle.signal.aborted) return
         // Stamp snapshots recorded after this point with the loaded session's
         // format, so a future format change is detected.
         store.setFormatVersion(session.header.version)
@@ -1102,6 +1152,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
           ctx.logger.warn(`[dsh-rewind] file restore disabled for ${session.id}: ${error instanceof Error ? error.message : String(error)}`)
           return
         }
+        if (lifecycle.signal.aborted) return
         // Clear snapshots anchored under a different (now-migrated) session
         // format: their seq references would be mis-mapped by the migration.
         const result = await store.reconcileFormatVersion(session.id, session.header.version)
@@ -1132,16 +1183,18 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     if (isSubagentSession(session)) return
     void (async () => {
       try {
+        if (lifecycle.signal.aborted) return
         const sessionId = session.id
         // Lazy 24h auto-cleanup: a user message is the practical first trigger
         // of a day; it runs in the background and fail-closes on config error.
-        void maybeRunAutoCleanup(ctx, store, sessionId, dshHome)
+        void maybeRunAutoCleanup(ctx, store, sessionId, dshHome, lifecycle.signal)
         let tracked = trackedBySession.get(sessionId)
         if (tracked === undefined) {
           tracked = await store.trackedPaths(sessionId)
           trackedBySession.set(sessionId, tracked)
         }
         if (tracked.size === 0) return
+        if (lifecycle.signal.aborted) return
         await reconcileTracked(store, sessionId, event.seq, tracked)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] boundary re-check failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -1175,7 +1228,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
         // triggers the same one-shot sweep with the correct id.
         const session = exec.agent?.session
         if (session !== undefined && !isSubagentSession(session)) {
-          void maybeRunAutoCleanup(ctx, store, session.id, dshHome)
+          void maybeRunAutoCleanup(ctx, store, session.id, dshHome, lifecycle.signal)
         }
         await commitEntry(store, pending, anchorCache, trackedBySession, exec, result)
       } catch (error) {

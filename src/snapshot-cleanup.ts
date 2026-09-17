@@ -139,6 +139,19 @@ export interface AutoCleanupPruner {
 }
 
 /**
+ * Whether the caller's mount has been aborted. A function, not an inline
+ * comparison: the flag flips asynchronously between awaits, and reading it
+ * through a call keeps each check honest (an inlined `signal?.aborted === true`
+ * narrows to a constant after the first check and would be reported as a
+ * comparison with no overlap).
+ * @param signal - the mount lifecycle signal, when the caller has one.
+ * @returns whether the mount has been aborted.
+ */
+function isAborted(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true
+}
+
+/**
  * The one-shot auto-cleanup check. Loads the policy + persisted last-sweep time
  * and, only when enabled AND >=24h since the last sweep, runs the sweep and
  * re-anchors the window on disk. Dependencies (store, paths, logger) are
@@ -146,6 +159,9 @@ export interface AutoCleanupPruner {
  * a corrupt config fail-closes (no deletion) and logs, a prune failure logs.
  *
  * `sessionId` is the active session directory that must never be pruned.
+ * `signal` is the caller's mount lifecycle: an abort before the prune or before
+ * the re-anchor stops the sweep (a live plugin unload must not keep deleting
+ * under a disposed owner).
  */
 export async function runAutoCleanupCheck(
   deps: {
@@ -153,6 +169,8 @@ export async function runAutoCleanupCheck(
     readConfig: () => Promise<{ ok: true; config: CleanupConfig } | { ok: false; error: string }>
     statePath: string
     log: (msg: string) => void
+    /** Optional mount lifecycle signal; absent means "never cancelled". */
+    signal?: AbortSignal
   },
   sessionId: string | undefined,
 ): Promise<void> {
@@ -163,8 +181,13 @@ export async function runAutoCleanupCheck(
       return
     }
     if (!loaded.config.enabled) return
+    if (isAborted(deps.signal)) return
     if (!shouldRunAutoSweep(await loadLastSweepAt(deps.statePath), Date.now())) return
+    if (isAborted(deps.signal)) return
     await deps.pruner.pruneStale({ keepActiveId: sessionId, maxAgeDays: loaded.config.maxAgeDays })
+    // Re-anchoring after an unload would claim a sweep that a fresh mount then
+    // skips for 24h, so the window only moves while the mount is alive.
+    if (isAborted(deps.signal)) return
     await saveLastSweepAt(deps.statePath, Date.now())
   } catch (error) {
     deps.log(`[dsh-rewind] snapshot auto-cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
