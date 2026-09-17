@@ -23,10 +23,10 @@ import { createRoot, type Root } from 'react-dom/client'
 
 // jsdom + React act: the environment must opt in so act() does not warn.
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+import { PLUGIN_PACKAGE } from '../src/client/build-info.ts'
 import {
   SettingsCleanupCard,
   CLEANUP_SETTINGS_NAMESPACE,
-  CLEANUP_SLOT_KEY,
   configOf,
   dirtyOf,
   draftFrom,
@@ -106,14 +106,16 @@ describe('client constants', () => {
     expect(CLEANUP_SETTINGS_NAMESPACE).toBe('dsh-rewind-snapshot-cleanup')
     expect(CLEANUP_SETTINGS_NAMESPACE).toMatch(/^[a-z][a-z0-9-]*$/)
   })
-  it('keys the bundle config slot by the bundle package name', () => {
-    // The Plugins page dispatches a bundle's form by `pkg.name`
-    // (renderSlot('plugins.bundle.config', …, { entryKey: pkg.name })), so a
-    // renamed package with a hardcoded key would silently lose its form.
+  it('identifies the bundle exactly as package.json does', () => {
+    // Three consumers depend on this one identity: the client entry id the
+    // loader registers, the `plugins.bundle.config` key the Plugins page
+    // dispatches a bundle's form by, and the `data-plugin` marker the
+    // harness's owned-style fallback matches against the loader row id. A
+    // renamed package with a stale literal breaks all three silently.
     const root = join(dirname(fileURLToPath(import.meta.url)), '..')
     const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name: string }
-    expect(CLEANUP_SLOT_KEY).toBe(pkg.name)
-    expect(CLEANUP_SLOT_KEY).toBe('dsh-rewind-plugin')
+    expect(PLUGIN_PACKAGE).toBe(pkg.name)
+    expect(PLUGIN_PACKAGE).toBe('dsh-rewind-plugin')
   })
 })
 

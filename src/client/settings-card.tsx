@@ -41,15 +41,6 @@ import { Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
  */
 export const CLEANUP_SETTINGS_NAMESPACE = 'dsh-rewind-snapshot-cleanup'
 
-/**
- * The `plugins.bundle.config` key this card registers under: the BUNDLE's
- * package name, which is how the Plugins page dispatches a bundle's form
- * (`renderSlot('plugins.bundle.config', …, { entryKey: pkg.name })`) and how it
- * decides a bundle is configurable. A cross-config test pins it to
- * `package.json`'s `name`.
- */
-export const CLEANUP_SLOT_KEY = 'dsh-rewind-plugin'
-
 /** The defaults the host uses; shown as the field placeholder until a draft. */
 export const DEFAULT_MAX_AGE_DAYS = 30
 

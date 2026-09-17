@@ -51,13 +51,12 @@ import { closePopover, openPopover, knownCommandSeqs, waitForCommand } from './p
 import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
 import { rewindLog } from './log.ts'
-import { BUILD_HASH, PLUGIN_VERSION } from './build-info.ts'
+import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
 import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 import {
   SettingsCleanupCard,
   CLEANUP_SETTINGS_NAMESPACE,
-  CLEANUP_SLOT_KEY,
   type CleanupCardApi,
   type CleanupField,
   type CleanupPolicy,
@@ -150,7 +149,9 @@ export function apply(ctx: ClientContext): void {
     const t = ctx.locale.bind(NS)
 
     const style = document.createElement('style')
-    style.dataset.plugin = 'dsh-rewind'
+    // The loader row id (the harness matches its owned-style fallback by
+    // `data-plugin === entryId`, and the entry id is the package name).
+    style.dataset.plugin = PLUGIN_PACKAGE
     style.textContent = STYLE
     document.head.appendChild(style)
 
@@ -316,7 +317,7 @@ export function apply(ctx: ClientContext): void {
             name: 'plugins.bundle.config',
             // Keyed by the bundle's package name: the page renders this form on
             // the bundle's own page, between its description and its rows.
-            key: CLEANUP_SLOT_KEY,
+            key: PLUGIN_PACKAGE,
             // Match the official cards / dsh-market: locale + inject provide
             // the card its props through the slot renderer (the page feeds it
             // the `view` it asks for plus the bound api).

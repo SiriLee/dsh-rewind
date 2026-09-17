@@ -1106,9 +1106,11 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     cleanupStore = mountedStore
     // Clear the module-level handle when THIS settings scope goes away, so a
     // later caller fails closed (delete nothing) instead of reading a disposed
-    // scope. Identity-checked: a remount's store must never be cleared by the
-    // previous scope's disposer.
-    ctx.effect(() => () => {
+    // scope. Registered on the injected scope, not the plugin fiber: the
+    // settings service can also unmount on its own (a live-reload restart)
+    // while the plugin stays mounted. Identity-checked, so a remount's store
+    // can never be cleared by the previous scope's disposer.
+    settingsCtx.effect(() => () => {
       if (cleanupStore === mountedStore) cleanupStore = undefined
     }, 'dsh-rewind cleanup store')
   })
