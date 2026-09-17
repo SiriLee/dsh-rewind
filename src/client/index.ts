@@ -33,6 +33,10 @@ import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepse
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+// Type-only: pulls the `mainView` Session retain-source label merge (0.1.6-alpha.2
+// removed `SessionListState.current`, so main-view ownership is read from the
+// label the ui-session plugin contributes to `SessionReferenceSourceMap`).
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import {
   rewindCandidatesFromHostText,
   rewindCandidatesOfChat,
@@ -166,12 +170,22 @@ export function apply(ctx: ClientContext): void {
 
     // ---- rewind portals: session-scoped React mount ----
     // Capabilities handed to the portal bridge. `sessionOf` resolves a
-    // session id to its live face; `currentSessionId` is the session switch
+    // session id to its live face; `isMainViewSession` is the session switch
     // check the composer refill needs (fill only the session the rewind
     // actually happened in).
     const sessionOf = (sessionId: string): SessionFace | undefined =>
       ctx.sessions.binding(sessionId as SessionId)?.session
-    const currentSessionId = (): string | undefined => ctx.sessions.list.getSnapshot().current
+    /**
+     * Whether a session is the one the MAIN VIEW currently retains.
+     *
+     * DSH 0.1.6-alpha.2 removed `SessionListState.current`/`currentAddress` (the
+     * old navigation cell), so the plugin mirrors the harness's own "is main"
+     * check (ui-session) on the list row's `mainView` reference count. A
+     * predicate, not "the current session id": with two windows the id-shaped
+     * form would have to guess which retained row is the one on screen.
+     */
+    const isMainViewSession = (sessionId: string): boolean =>
+      (ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0
     const subscribeLocale = (cb: () => void): (() => void) => ctx.locale.subscribe(cb)
 
     /**
@@ -256,7 +270,7 @@ export function apply(ctx: ClientContext): void {
         id: 'dsh-rewind-portals',
         order: 1000,
       },
-      createRewindBridge({ sessionOf, chatOf, currentSessionId, watchChat, setComposerText, t, subscribeLocale }),
+      createRewindBridge({ sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, t, subscribeLocale }),
     ))
 
     // ---- snapshot-cleanup settings card (Settings > Plugins > Plugin config) ----
@@ -400,7 +414,7 @@ export function apply(ctx: ClientContext): void {
             preview: candidate.preview,
             anchor: composerAnchor(),
             t,
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, currentSessionId, chatOf, watchChat, setComposerText) },
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText) },
           })
         },
       },

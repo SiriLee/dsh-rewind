@@ -113,7 +113,8 @@ afterEach(() => {
 })
 
 describe('runRewindAndFill (durable rewind refill)', () => {
-  const currentSessionId = (): string => 's1'
+  /** The session of every fixture below is the main-view session. */
+  const isMainViewSession = (sessionId: string): boolean => sessionId === 's1'
 
   it('refills the empty composer (normal path emits no verbose diagnostics)', async () => {
     const { session, chatOf, command, watch } = fakeSession()
@@ -123,7 +124,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill,dsh-rewind:hiding')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
     expect(command).toHaveBeenCalledWith(`/rewind @${TARGET} both`)
     expect(setComposerText).toHaveBeenCalledTimes(1)
     expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
@@ -135,7 +136,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     addEditableDraft('in progress draft')
     const { session, chatOf, watch } = fakeSession()
     const setComposerText = vi.fn(() => true)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
   })
 
@@ -144,7 +145,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     session.command = vi.fn(async () => { throw new Error('teardown') }) as SessionFace['command']
     const setComposerText = vi.fn(() => true)
     const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await expect(runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)).resolves.toBeUndefined()
+    await expect(runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)).resolves.toBeUndefined()
     expect(setComposerText).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledTimes(1)
   })
@@ -154,7 +155,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     session.command = vi.fn(async () => ({ ok: true, value: { matched: false } })) as SessionFace['command']
     const setComposerText = vi.fn(() => true)
     const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
     // The admission miss is never silent: it is the "click does nothing"
     // symptom of SiriLee/dsh-rewind#26.
@@ -167,7 +168,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     session.command = vi.fn(async () => ({ ok: false, error: failure })) as unknown as SessionFace['command']
     const setComposerText = vi.fn(() => true)
     const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn.mock.calls[0]?.[2]).toEqual(failure)
@@ -176,7 +177,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
   it('refills after the chat-update watch fires (0.1.2 signal path: the first check misses)', async () => {
     const { session, chatOf, command, watch, settleChat, getTrigger } = fakeSessionControlled()
     const setComposerText = vi.fn(() => true)
-    const call = runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    const call = runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
     // command resolves (matched) and the first check misses; the refill waits on watch
     await Promise.resolve()
     await Promise.resolve()
@@ -192,12 +193,23 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     addEditableDraft('in progress draft')
     const { session, chatOf, watch, settleChat, getTrigger } = fakeSessionControlled()
     const setComposerText = vi.fn(() => true)
-    const call = runRewindAndFill(session, TARGET, 'both', currentSessionId, chatOf, watch, setComposerText)
+    const call = runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
     await Promise.resolve()
     await Promise.resolve()
     settleChat()
     getTrigger()?.()
     await call
+    expect(setComposerText).not.toHaveBeenCalled()
+  })
+
+  it('skips the refill when the rewound session is no longer the main view', async () => {
+    // alpha.2 replaces `SessionListState.current` with the list row's
+    // `mainView` reference count: a user who switched sessions mid-rewind must
+    // not get the withdrawn text in the other session's composer.
+    const { session, chatOf, watch } = fakeSession()
+    const setComposerText = vi.fn(() => true)
+    const notMainView = (): boolean => false
+    await runRewindAndFill(session, TARGET, 'both', notMainView, chatOf, watch, setComposerText)
     expect(setComposerText).not.toHaveBeenCalled()
   })
 })

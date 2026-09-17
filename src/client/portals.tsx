@@ -54,7 +54,7 @@ import { hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, type ChatOf, type
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
-import { matchPendingRows, retractSpan } from './pending.ts'
+import { matchPendingRows, retractSpan, steeringItemsOf, type InboxLike, type PendingSteeringItem } from './pending.ts'
 import { rewindLog } from './log.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
@@ -99,7 +99,13 @@ export interface RewindBridgeDeps {
    * snapshot changes. Passed through to `waitForCommand`.
    */
   readonly watchChat: ChatWatch
-  readonly currentSessionId: () => string | undefined
+  /**
+   * Whether a session is the one the MAIN VIEW currently retains — the alpha.2
+   * replacement for the removed `SessionListState.current` (see
+   * `isMainViewSession` in index.ts). A predicate rather than "the current
+   * session id", so a multi-window client can never refill the wrong composer.
+   */
+  readonly isMainViewSession: (sessionId: string) => boolean
   readonly t: Translate
   readonly subscribeLocale: (cb: () => void) => () => void
   /**
@@ -228,7 +234,7 @@ export async function runRewindAndFill(
   session: SessionFace,
   seq: number,
   mode: 'chat' | 'both',
-  currentSessionId: () => string | undefined,
+  isMainViewSession: (sessionId: string) => boolean,
   chatOf: ChatOf,
   watchChat: ChatWatch,
   setComposerText: (sessionId: string, text: string) => boolean,
@@ -282,7 +288,7 @@ export async function runRewindAndFill(
   }
   // The user may have switched sessions while the rewind ran — fill only
   // the composer of the session the rewind actually happened in.
-  if (currentSessionId() !== session.sessionId) {
+  if (!isMainViewSession(session.sessionId)) {
     return
   }
   let text: string | undefined
@@ -457,15 +463,18 @@ export function collectDurableTargets(
   return collectTargets(chat, hiddenSeqs)
 }
 
-/** The session snapshot slice the pending collector reads (structural subset). */
-interface QueueLike {
-  readonly queue: readonly {
-    readonly id: string
-    readonly placement: string
-    readonly preview: string
-    readonly text: string | null
-  }[]
-  readonly subagent: unknown
+/**
+ * The session's `inbox` projection value — the agent's pending input, folded by
+ * the session scope. `undefined` before the fold state exists (a session with no
+ * agent-loop has no `inbox` key), which every reader treats as "no pending rows".
+ *
+ * DSH 0.1.6-alpha.2 removed the `SessionSnapshot.queue` mirror this module used
+ * to read; the projection is the surviving host-owned source of the same rows.
+ * The face's value is typed `unknown` on purpose (projection values are wire
+ * data), so it is narrowed structurally here.
+ */
+function inboxOf(session: SessionFace): InboxLike | undefined {
+  return session.projections.faceOf('inbox').getSnapshot() as InboxLike | undefined
 }
 
 /**
@@ -493,17 +502,18 @@ function bubbleTextOf(row: HTMLElement): string {
  * inbox (running or paused), and it retracts through the session's own
  * `updateQueue` channel — no DSH behavior changes, and no stop: an unclaimed
  * next-step message has never reached a request (see `retractPending`).
+ * @param snapshot - the session snapshot slice carrying the `subagent` cell.
+ * @param steering - the session's `next-step` inbox rows (see `steeringItemsOf`).
  */
-function collectPendingTargets(snapshot: QueueLike): readonly PortalTarget[] {
+function collectPendingTargets(snapshot: SessionKindLike, steering: readonly PendingSteeringItem[]): readonly PortalTarget[] {
   // Subagent sessions reject queue mutations host-side; mirror the harness's
   // own QueueDock gate (queueMutable = subagent === null).
   if (snapshot.subagent !== null) return []
-  const steering = snapshot.queue.filter((item) => item.placement === 'steering')
   if (steering.length === 0) return []
   const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
   const matched = matchPendingRows(
     rows.map((row) => ({ text: bubbleTextOf(row) })),
-    steering.map((item) => ({ id: item.id, text: item.text })),
+    steering,
   )
   const targets: PortalTarget[] = []
   for (let i = 0; i < matched.length; i++) {
@@ -551,7 +561,7 @@ interface RewindPortalsProps extends RewindBridgeDeps {
  * skipped when the target set is unchanged), so the plugin never runs a
  * synchronous full-transcript scan inside a commit microtask.
  */
-export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, watchChat, t, subscribeLocale, setComposerText }: RewindPortalsProps): ReactNode {
+export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession, watchChat, t, subscribeLocale, setComposerText }: RewindPortalsProps): ReactNode {
   const [targets, setTargets] = useState<readonly PortalTarget[]>([])
   // Rows we have hidden; re-shown when they leave the withdrawn span.
   const hidden = useRef(new WeakSet<HTMLElement>())
@@ -608,7 +618,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
       // here would flood the console during streaming, and the rewind event
       // already carries the hide set. Nothing is logged in this per-batch scan.
       const durable = collectDurableTargets(snapshot, chat, hiddenSeqs)
-      const next = [...durable, ...collectPendingTargets(snapshot)]
+      const next = [...durable, ...collectPendingTargets(snapshot, steeringItemsOf(inboxOf(session)?.['next-step']))]
       // Diff: no change → no re-render (the observer fires on every mutation;
       // only an actual target-set change should touch React).
       setTargets(current => (sameTargets(current, next) ? current : next))
@@ -660,7 +670,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, currentSessionId, 
           sessionOf={sessionOf}
           chatOf={chatOf}
           watchChat={watchChat}
-          currentSessionId={currentSessionId}
+          isMainViewSession={isMainViewSession}
           setComposerText={setComposerText}
           t={t}
         />
@@ -676,13 +686,13 @@ interface RewindButtonProps {
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   readonly chatOf: ChatOf
   readonly watchChat: ChatWatch
-  readonly currentSessionId: () => string | undefined
+  readonly isMainViewSession: (sessionId: string) => boolean
   readonly setComposerText: (sessionId: string, text: string) => boolean
   readonly t: Translate
 }
 
 /** The per-message ↶ button (28px, matching the harness IconActions). */
-function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, currentSessionId, setComposerText, t }: RewindButtonProps): ReactNode {
+function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, isMainViewSession, setComposerText, t }: RewindButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
@@ -703,7 +713,7 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, current
       preview: messagePreviewOf(node),
       anchor: event.currentTarget,
       t,
-      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, currentSessionId, chatOf, watchChat, setComposerText) },
+      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText) },
     })
   }
 
@@ -757,11 +767,10 @@ export async function retractPending(
   text: string | null,
   setComposerText: (sessionId: string, text: string) => boolean,
 ): Promise<void> {
-  // The item id comes from the queue mirror's `id` field, which the harness
-  // brands as MessageId; cast at this single boundary to avoid a new type
-  // dependency on the branding package.
-  const queue = session.getSnapshot().queue
-  const steering = queue.filter((item) => item.placement === 'steering')
+  // The item id comes from the inbox occurrence, which the harness brands as
+  // MessageId; cast at this single boundary to avoid a new type dependency on
+  // the branding package.
+  const steering = steeringItemsOf(inboxOf(session)?.['next-step'])
   let removedTarget = false
   for (const id of retractSpan(steering, itemId)) {
     let accepted = false

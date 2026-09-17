@@ -1,6 +1,6 @@
 /**
- * Pure pending-message matching: pairs the rendered pending-steering bubble
- * rows with the session's transient queue mirror rows (`placement === 'steering'`).
+ * Pure pending-message matching: pairs the rendered pre-admission steering
+ * bubble rows with the session's `next-step` inbox rows.
  *
  * Both sides derive from the host's next-step inbox order — the ChatView
  * renders `pendingSteering` in array order and the queue mirror keeps the same
@@ -12,6 +12,13 @@
  * button's Tooltip mounts a label bubble inside that container on hover, so
  * the full row textContent would flip between "message" and "message+Copy"
  * with the mouse, flickering the button (see `bubbleTextOf` in portals.tsx).
+ *
+ * DSH 0.1.6-alpha.2 removed the `SessionSnapshot.queue` mirror (and the host's
+ * `queue-mirror.ts`), so these rows now come from the session's own `inbox`
+ * projection (`next-turn` = queued, `next-step` = steering). `steeringItemsOf`
+ * derives the retract fields from those rows with the SAME rules the harness
+ * QueueDock uses, so the DOM text this module matches and the preview the
+ * popover shows cannot drift from what the dock renders.
  *
  * The browser half lives in `portals.tsx`; this module stays DOM-free so the
  * matching contract is unit-testable in a plain node environment.
@@ -25,17 +32,91 @@ export interface PendingRow {
   readonly text: string
 }
 
-/** One steering occurrence from the session queue mirror. */
+/** One wire content block of an inbox row (only the fields the derivation reads). */
+export interface InboxBlockLike {
+  /** Wire block type (`text` | `image` | `file` | …). */
+  readonly type: string
+  /** The block's text, on a `text` block. */
+  readonly text?: string
+}
+
+/** One pending-inbox row (the alpha.2 `inbox` projection element). */
+export interface InboxMessageLike {
+  /** Agent-owned inbox occurrence identity; the harness brands it as `MessageId`. */
+  readonly id: string
+  /** Wire content blocks, in prompt order. */
+  readonly content: readonly InboxBlockLike[]
+}
+
+/**
+ * The alpha.2 `inbox` projection value: the agent's pending input folded per
+ * target order. Replaces the removed `SessionSnapshot.queue` mirror.
+ */
+export interface InboxLike {
+  /** Messages claimed at the next turn boundary. */
+  readonly 'next-turn': readonly InboxMessageLike[]
+  /** Messages injected at the next step boundary (the steering rows). */
+  readonly 'next-step': readonly InboxMessageLike[]
+}
+
+/** One steering occurrence derived from the session's inbox projection. */
 export interface PendingSteeringItem {
   readonly id: string
   /** Complete editable text; null when the message contains non-text blocks. */
   readonly text: string | null
+  /** Space-collapsed preview with image/file blocks excluded (the harness QueueDock rule). */
+  readonly preview: string
+}
+
+/** Preview width of the harness QueueDock, in code points. */
+const QUEUE_PREVIEW_CHARS = 200
+
+/**
+ * Complete editable text of one inbox row: the joined text blocks, or null
+ * when the row carries any non-text block. Mirror of the harness QueueDock's
+ * `textOf` (the owner of these rows).
+ * @param content - the row's wire content blocks.
+ * @returns the complete text, or null.
+ */
+function textOf(content: readonly InboxBlockLike[]): string | null {
+  if (!content.every(block => block.type === 'text')) return null
+  return content.map(block => block.text ?? '').join('')
+}
+
+/**
+ * Space-collapsed preview of one inbox row, excluding image/file blocks and
+ * truncated to {@link QUEUE_PREVIEW_CHARS} code points. Mirror of the harness
+ * QueueDock's `previewOf`.
+ * @param content - the row's wire content blocks.
+ * @returns the preview text.
+ */
+function previewOf(content: readonly InboxBlockLike[]): string {
+  const flat = content
+    .filter(block => block.type !== 'image' && block.type !== 'file')
+    .map(block => (block.type === 'text' ? block.text ?? '' : `[${block.type}]`))
+    .join(' ').replace(/\s+/g, ' ').trim()
+  const chars = Array.from(flat)
+  return chars.length > QUEUE_PREVIEW_CHARS ? `${chars.slice(0, QUEUE_PREVIEW_CHARS).join('')}…` : flat
+}
+
+/**
+ * Project the inbox `next-step` rows into the fields the retract path needs.
+ * @param nextStep - the inbox projection's `next-step` list (absent before the
+ *   fold state exists, hence `undefined`).
+ * @returns one item per steering row, in host (FIFO) order.
+ */
+export function steeringItemsOf(nextStep: readonly InboxMessageLike[] | undefined): readonly PendingSteeringItem[] {
+  return (nextStep ?? []).map(item => ({
+    id: item.id,
+    text: textOf(item.content),
+    preview: previewOf(item.content),
+  }))
 }
 
 /**
  * Pair rows to steering items by index, verifying text equality per row.
  * @param rows - pending bubble rows in DOM order (== render order).
- * @param steering - steering queue items in host order (== render order).
+ * @param steering - steering items in host order (== render order).
  * @returns the item id for each row, or null for rows that cannot be matched
  *   safely (missing counterpart, text mismatch). A bad row never affects the
  *   other rows.
@@ -63,7 +144,7 @@ export function matchPendingRows(
  * order. Queued (next-turn) messages are deliberately NOT included — the
  * harness QueueDock already offers the user per-item edit/remove, so a rewind
  * must not silently drop messages the user may still want to send.
- * @param steering - steering queue items in host order (== render order).
+ * @param steering - steering items in host order (== render order).
  * @param targetId - the rewind target's inbox occurrence id.
  * @returns the ids to remove, oldest-first; empty when the target is no
  *   longer pending (already claimed/consumed).

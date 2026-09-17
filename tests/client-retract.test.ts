@@ -11,30 +11,35 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { retractPending } from '../src/client/portals.tsx'
 
-/** The queue mirror slice the retract reads. */
+/** The inbox projection row shape the retract reads (alpha.2). */
 interface Row {
   readonly id: string
-  readonly placement: string
+  readonly content: readonly { readonly type: string; readonly text?: string }[]
 }
 
 /** The `RemoteResult` the client's `updateQueue` resolves with. */
 type QueueResult = { readonly ok: true; readonly value: { readonly accepted: true } } | { readonly ok: false; readonly error: { readonly code: string } }
 
-/** Build a fake session exposing the queue mirror and counting mutations. */
-function fakeSession(queue: readonly Row[]) {
+/**
+ * Build a fake session exposing the `inbox` projection and counting mutations.
+ * @param nextStep - the projection's `next-step` rows (the steering inbox).
+ * @param nextTurn - the projection's `next-turn` rows (queued; never retracted).
+ */
+function fakeSession(nextStep: readonly Row[], nextTurn: readonly Row[] = []) {
   const updateQueue = vi.fn(async (_id: string, _action: unknown): Promise<QueueResult> => ({ ok: true, value: { accepted: true } }))
   const cancel = vi.fn(async (): Promise<QueueResult> => ({ ok: true, value: { accepted: true } }))
+  const inbox = { 'next-turn': nextTurn, 'next-step': nextStep }
   const session = {
     sessionId: 's1',
-    getSnapshot: () => ({ queue }),
+    projections: { faceOf: (key: string) => ({ getSnapshot: () => (key === 'inbox' ? inbox : undefined) }) },
     updateQueue,
     cancel,
   } as unknown as SessionFace
   return { session, updateQueue, cancel }
 }
 
-/** Steering rows in host (FIFO) order. */
-const steering = (ids: readonly string[]): Row[] => ids.map(id => ({ id, placement: 'steering' }))
+/** Steering inbox rows in host (FIFO) order. */
+const steering = (ids: readonly string[]): Row[] => ids.map(id => ({ id, content: [{ type: 'text', text: `text ${id}` }] }))
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -53,7 +58,7 @@ describe('retractPending (unread steering withdraw)', () => {
   })
 
   it('never touches queued (next-turn) messages', async () => {
-    const { session, updateQueue } = fakeSession([{ id: 'q', placement: 'queued' }, ...steering(['a'])])
+    const { session, updateQueue } = fakeSession(steering(['a']), [{ id: 'q', content: [{ type: 'text', text: 'queued' }] }])
     await retractPending(session, 'a', 'text a', vi.fn(() => true))
     expect(updateQueue.mock.calls.map(call => call[0])).toEqual(['a'])
   })

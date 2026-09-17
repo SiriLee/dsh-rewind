@@ -1,15 +1,23 @@
 /**
  * Unit tests for the pending-message matching contract
  * (src/client/pending.ts): pairing the rendered pending-steering bubble rows
- * with the session queue mirror's `placement === 'steering'` items, with
- * per-row safe degradation — one bad row never takes down the others.
+ * with the session's `next-step` inbox rows (the alpha.2 replacement for the
+ * removed `queue` mirror), with per-row safe degradation — one bad row never
+ * takes down the others — plus the inbox-row derivation the retract path reads.
  */
 import { describe, expect, it } from 'vitest'
-import { matchPendingRows, retractSpan, type PendingRow, type PendingSteeringItem } from '../src/client/pending.ts'
+import {
+  matchPendingRows,
+  retractSpan,
+  steeringItemsOf,
+  type InboxMessageLike,
+  type PendingRow,
+  type PendingSteeringItem,
+} from '../src/client/pending.ts'
 
-/** A steering queue item fixture. */
+/** A steering item fixture (as `steeringItemsOf` would derive it). */
 function item(id: string, text: string | null): PendingSteeringItem {
-  return { id, text }
+  return { id, text, preview: text ?? '' }
 }
 
 /** A rendered bubble row fixture (text = bubble text, actions excluded). */
@@ -97,5 +105,52 @@ describe('retractSpan', () => {
 
   it('never includes queued (next-turn) messages — they are not in the steering list', () => {
     expect(retractSpan([{ id: 'b' }], 'b')).toEqual(['b'])
+  })
+})
+
+describe('steeringItemsOf (inbox next-step derivation)', () => {
+  /** One inbox row with text content. */
+  const textRow = (id: string, ...texts: string[]): InboxMessageLike =>
+    ({ id, content: texts.map(text => ({ type: 'text', text })) })
+
+  it('returns nothing for an absent projection (no fold state yet)', () => {
+    expect(steeringItemsOf(undefined)).toEqual([])
+    expect(steeringItemsOf([])).toEqual([])
+  })
+
+  it('joins every text block into the editable text and the preview', () => {
+    expect(steeringItemsOf([textRow('a', 'hello ', 'world')]))
+      .toEqual([{ id: 'a', text: 'hello world', preview: 'hello world' }])
+  })
+
+  it('reports null text and an empty preview for an image-only row', () => {
+    const row: InboxMessageLike = { id: 'img', content: [{ type: 'image' }] }
+    expect(steeringItemsOf([row])).toEqual([{ id: 'img', text: null, preview: '' }])
+  })
+
+  it('excludes image/file blocks from the preview', () => {
+    const row: InboxMessageLike = {
+      id: 'mixed',
+      content: [{ type: 'text', text: 'look' }, { type: 'image' }, { type: 'file' }],
+    }
+    expect(steeringItemsOf([row])).toEqual([{ id: 'mixed', text: null, preview: 'look' }])
+  })
+
+  it('collapses whitespace in the preview', () => {
+    const row: InboxMessageLike = { id: 'ws', content: [{ type: 'text', text: '  a\n\n b   c ' }] }
+    expect(steeringItemsOf([row])).toEqual([{ id: 'ws', text: '  a\n\n b   c ', preview: 'a b c' }])
+  })
+
+  it('truncates the preview at 200 code points, counting code points not units', () => {
+    const long = '🙂'.repeat(201)
+    const [item] = steeringItemsOf([textRow('long', long)])
+    expect(Array.from(item!.preview)).toHaveLength(201) // 200 + the ellipsis
+    expect(item!.preview.endsWith('…')).toBe(true)
+    expect(item!.preview.startsWith('🙂'.repeat(200))).toBe(true)
+  })
+
+  it('marks a non-text block by its type in the preview', () => {
+    const row: InboxMessageLike = { id: 'tool', content: [{ type: 'tool-call' }] }
+    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, preview: '[tool-call]' }])
   })
 })
