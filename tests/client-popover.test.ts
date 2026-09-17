@@ -96,3 +96,35 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
     expect(optionHints()).toContain('popover.checking')
   })
 })
+
+describe('closePopover (the unload teardown)', () => {
+  /** Let the popover's deferred (0ms) listener attachment actually run. */
+  const nextTick = (): Promise<void> => new Promise((resolve) => { setTimeout(resolve, 0) })
+
+  /** Whether a document-level ArrowDown is still intercepted by the popover. */
+  function stealsArrowDown(): boolean {
+    const event = new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+
+  it('removes the DOM and stops stealing keys', async () => {
+    open(fakeSession({ ok: true, value: { matched: true } }))
+    await settle()
+    await nextTick()
+    // Open: the capture-phase handler owns ↑/↓/Esc away from the composer.
+    expect(document.querySelector(`.${CLASS.popover}`)).not.toBeNull()
+    expect(stealsArrowDown()).toBe(true)
+
+    // The plugin's fiber disposer calls exactly this on unload.
+    closePopover()
+    expect(document.querySelector(`.${CLASS.popover}`)).toBeNull()
+    expect(stealsArrowDown()).toBe(false)
+  })
+
+  it('is safe with nothing open and does not throw on a repeat call', () => {
+    closePopover()
+    closePopover()
+    expect(stealsArrowDown()).toBe(false)
+  })
+})

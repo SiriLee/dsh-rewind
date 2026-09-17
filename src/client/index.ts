@@ -47,7 +47,7 @@ import {
   type CandidateChat,
   type RewindCandidate,
 } from './candidates.ts'
-import { openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
+import { closePopover, openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
 import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
 import { rewindLog } from './log.ts'
@@ -430,6 +430,12 @@ export function apply(ctx: ClientContext): void {
       document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
 
     yield () => {
+      // A live disable can land while the mode popover is open. The popover is
+      // plain DOM plus document capture-phase key listeners, so it must be
+      // closed with this fiber: otherwise the node and the key steal (↑/↓/Esc
+      // routed away from the composer) outlive the unload, and a later remount
+      // would overwrite the singleton reference and leak both for good.
+      closePopover()
       style.remove()
     }
   }, 'dsh-rewind client lifecycle')
