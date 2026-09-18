@@ -79,7 +79,9 @@ outside it.
 
 - **When to update**: when the verified range changes — a new DSH tuple, or a
   deliberate narrowing (e.g. dropping the internal `alpha` series); a release
-  already inside the range changes nothing. All `@deepseek-ai/*` packages
+  already inside the range changes nothing **unless it changes interfaces inside
+  the tuple** (`0.1.6-alpha.2` removed the client session-ownership and
+  queue-mirror APIs, so the floor moved with it). All `@deepseek-ai/*` packages
   release together; `npm view @deepseek-ai/dsh dist-tags` is the signal.
 - **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
   compares the `latest` dist-tag version against the tuple the peers cover
@@ -93,11 +95,10 @@ outside it.
   `^0.1.x`); this section can then be deleted.
 - **Declared minimum (`dsh.engines.dsh`)**: alongside the peer tuple, each
   release declares the DSH runtime floor under `dsh.engines.dsh` (e.g.
-  `>=0.1.2-rc.1`), consumed by the plugin-manager update guard. Bump it in
+  `>=0.1.2-rc.1`). Nothing reads it on the current line yet, so it is a
+  forward-looking declaration rather than an enforced guard. Bump it in
   the same release that changes the peer range; never leave code raised while
-  the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is
-  supported (`^`/`~`/multi-range are treated as "cannot verify" and
-  fail closed).
+  the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is used.
 
 ## Versioned-line release model
 
