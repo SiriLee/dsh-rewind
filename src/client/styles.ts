@@ -269,7 +269,6 @@ export const STYLE = `
   color: var(--dsw-alias-state-error-primary);
 }
 .dsh-rewind-cleanup-input {
-  box-sizing: border-box;
   height: 34px;
   padding: 0 12px;
   border: 0.5px solid var(--dsw-alias-border-l4);
@@ -288,7 +287,7 @@ export const STYLE = `
   color: var(--dsw-alias-label-tertiary);
   cursor: default;
 }
-.dsh-rewind-cleanup-input-invalid {
+.dsh-rewind-cleanup-input[aria-invalid='true'] {
   border-color: var(--dsw-alias-state-error-primary);
 }
 .dsh-rewind-cleanup-footer {

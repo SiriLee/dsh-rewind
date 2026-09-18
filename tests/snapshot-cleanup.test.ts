@@ -336,4 +336,14 @@ describe('CleanupConfig schema + settingsCleanupStore', () => {
     expect(CLEANUP_SETTINGS_NAMESPACE).toMatch(/^[a-z][a-z0-9-]*$/)
     expect(CLEANUP_SETTINGS_NAMESPACE).not.toContain('.')
   })
+
+  it('pins the literals the client half duplicates', () => {
+    // The client card cannot import this module (it must stay free of host/node
+    // imports), so it copies both values. The client suite pins the same two
+    // literals: a rename here without one there would leave the form bound to a
+    // namespace nothing serves, or a placeholder that is not the default the
+    // Host actually applies.
+    expect(CLEANUP_SETTINGS_NAMESPACE).toBe('dsh-rewind-snapshot-cleanup')
+    expect(DEFAULT_MAX_AGE_DAYS).toBe(30)
+  })
 })

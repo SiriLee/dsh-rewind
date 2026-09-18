@@ -29,6 +29,7 @@ import { PLUGIN_PACKAGE } from '../src/client/build-info.ts'
 import {
   SettingsCleanupCard,
   CLEANUP_SETTINGS_NAMESPACE,
+  DEFAULT_MAX_AGE_DAYS,
   formatEnabled,
   formatMaxAge,
   invalidOf,
@@ -176,6 +177,13 @@ describe('client constants', () => {
   it('pins the settings namespace to the host-verified literal', () => {
     expect(CLEANUP_SETTINGS_NAMESPACE).toBe('dsh-rewind-snapshot-cleanup')
     expect(CLEANUP_SETTINGS_NAMESPACE).toMatch(/^[a-z][a-z0-9-]*$/)
+  })
+
+  it('pins the default it duplicates from the Host policy', () => {
+    // The card cannot import the host module, so it copies the default; the host
+    // suite pins the same literal. Drift would show a placeholder that is not
+    // the value an empty draft actually falls back to.
+    expect(DEFAULT_MAX_AGE_DAYS).toBe(30)
   })
 
   it('identifies the bundle exactly as package.json does', () => {
