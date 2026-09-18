@@ -93,6 +93,14 @@ export const STYLE = `
 .dsh-rewind-popover-option:hover {
   background: var(--dsw-alias-interactive-bg-hover);
 }
+/* Arrow navigation moves real focus, so the focused row carries the pointer's
+   fill and the browser ring is suppressed: in dark mode the UA two-tone ring
+   draws its dark half against the filled row and reads as a residue edge (the
+   harness Menu suppresses it the same way). */
+.dsh-rewind-popover-option:focus-visible:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+  outline: none;
+}
 .dsh-rewind-popover-option:disabled {
   opacity: 0.5;
   cursor: default;

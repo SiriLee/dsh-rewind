@@ -92,6 +92,24 @@ function cleanupRules(): Map<string, Record<string, string>> {
   return parseRules(source.slice(start, end))
 }
 
+/** The whole injected stylesheet, for rules outside the cleanup block. */
+function allRules(): Map<string, Record<string, string>> {
+  const source = readFileSync(join(root, 'src/client/styles.ts'), 'utf8')
+  return parseRules(source.slice(source.indexOf('`', source.indexOf('export const STYLE')) + 1))
+}
+
+describe('popover keyboard focus', () => {
+  it('draws the focused row as the pointer fill and suppresses the browser ring', () => {
+    // Arrow navigation moves REAL focus, so without this the UA two-tone ring
+    // is painted around the filled row — in dark mode its dark half reads as a
+    // residue edge. The harness Menu draws the same fill and suppresses it too.
+    expect(allRules().get('.dsh-rewind-popover-option:focus-visible:not(:disabled)')).toEqual({
+      background: 'var(--dsw-alias-interactive-bg-hover)',
+      outline: 'none',
+    })
+  })
+})
+
 describe('cleanup form styles (exact numbers from the official CSS modules)', () => {
   const rules = cleanupRules()
 
