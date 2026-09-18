@@ -26,10 +26,9 @@ export interface HiddenChat {
 }
 
 /**
- * Reader for one session's live chat snapshot. On the 0.1.2-rc.1 line (the
- * plugin's single baseline) the chat is served by the `uiConversation`
- * service's named "chat" view (contributed by dsh-client-ui-chat through the
- * uiSession slot hook).
+ * Reader for one session's live chat snapshot: the chat is served by the
+ * `uiConversation` service's named "chat" view (contributed by
+ * dsh-client-ui-chat through the uiSession slot hook).
  */
 export type ChatOf = (
   session: { readonly sessionId: string } | undefined,
@@ -37,8 +36,8 @@ export type ChatOf = (
 
 /**
  * Subscribe to one session's live chat-update signal, for waiting on a chat
- * snapshot change without polling. The 0.1.2-rc.1 `uiConversation` "chat"
- * view's own `subscribe` is the chat-update signal; `cb` fires whenever the
+ * snapshot change without polling. The `uiConversation` "chat" view's own
+ * `subscribe` is the chat-update signal; `cb` fires whenever the
  * chat snapshot invalidates.
  */
 export type ChatWatch = (sessionId: string, cb: () => void) => () => void
@@ -130,7 +129,7 @@ export function isExecutedRewindCommand(node: CommandNode, seq: number): boolean
  *
  * Reads ONLY the machine-readable `impact=<n>` trailer the host appends to
  * preview text. Older host output without the trailer is treated as having no
- * changes (never guesses from human copy). Unknown/absent text degrades to
+ * changes (never guesses from human copy). Absent text (undefined) degrades to
  * always-show so a working option is never hidden on a failed probe.
  */
 export function hasFileImpact(text: string | undefined): boolean {

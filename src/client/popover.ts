@@ -35,7 +35,7 @@ export interface PopoverOptions {
   readonly onRetract?: () => void
   readonly preview: string
   /**
-   * Chat reader on the 0.1.2-rc.1 `uiConversation` "chat" view: the durable
+   * Chat reader on the `uiConversation` "chat" view: the durable
    * variant's command probes scan the chat through it. Unused by the
    * pending-retract variant.
    */
@@ -162,7 +162,7 @@ export function waitForCommand(
         settle({ kind: node.outcome.kind, text: node.outcome.text })
       }
     }
-    // The chat-update signal: on 0.1.2-rc.1 the session face's `subscribe` does
+    // The chat-update signal: the session face's `subscribe` does
     // not fire when the chat snapshot changes (the chat moved to the
     // `uiConversation` view), so the waiting caller passes a watch bound to
     // that view.

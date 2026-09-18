@@ -49,7 +49,7 @@ function switchValue(): string {
 }
 
 /**
- * Whether namespace `ns` is selected by `value` (the `debug`-packag convention):
+ * Whether namespace `ns` is selected by `value` (the `debug`-package convention):
  * comma-separated entries, each an exact `dsh-rewind:scope` or a `*`-suffixed
  * prefix; `*` and `dsh-rewind*` select everything.
  */

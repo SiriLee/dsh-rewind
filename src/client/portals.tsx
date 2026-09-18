@@ -34,7 +34,7 @@
  * standards-conformant alternative does not exist today; it is not a defect to
  * be removed while the DOM-portal approach stands.
  *
- * Re-verified against 0.1.6-alpha.2: the four remaining anchors still exist (the
+ * Re-verified against 0.1.6-alpha.2: the five remaining anchors still exist (the
  * anchor key and flow kind still come from `ChatNodeSeat`, values `user` /
  * `steering`); only `data-time-hover-root` is gone, and nothing read it.
  *
@@ -93,7 +93,7 @@ export type PortalTarget =
 export interface RewindBridgeDeps {
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   /**
-   * Chat reader on the 0.1.2-rc.1 `uiConversation` "chat" view: every chat
+   * Chat reader on the `uiConversation` "chat" view: every chat
    * snapshot read goes through it. See `chatSnapshotOf` in hidden.ts.
    */
   readonly chatOf: ChatOf
@@ -113,7 +113,7 @@ export interface RewindBridgeDeps {
   readonly t: Translate
   readonly subscribeLocale: (cb: () => void) => () => void
   /**
-   * Session-aware composer writer (see `writeComposer`): the 0.1.2-rc.1
+   * Session-aware composer writer (see `writeComposer`): the
    * `conversation.input` facade `setDraft` when reachable, else the DOM fill.
    * Session-scoped so the refill only lands in the session that just rewound.
    */
@@ -136,11 +136,8 @@ export interface SlotsLike {
   ): () => void
 }
 
-/** Join the text blocks of a user message into one plain preview. */
-// (shared with the `/rewind` command decoration — see `messagePreviewOf` in candidates.ts)
-
 /**
- * The 0.1.2-rc.1 session input facade's write face (structural, so the plugin
+ * The session input facade's write face (structural, so the plugin
  * never imports the conversation UI package). `setDraft` replaces the whole
  * composer draft through the harness's own Lexical editor — the correct way
  * to restore the withdrawn text.
@@ -150,7 +147,7 @@ interface ComposerDraftWriter {
 }
 
 /**
- * Write `text` into the 0.1.2-rc.1 Lexical `contenteditable` composer
+ * Write `text` into the Lexical `contenteditable` composer
  * (`[data-composer-input]`) through the native editing pipeline: set a
  * full-content selection, then `insertText`. That fires `beforeinput`, which
  * the harness's plain-text Lexical editor adopts into its model, exactly like
@@ -182,7 +179,7 @@ function fillComposerEditable(text: string): boolean {
 }
 
 /**
- * Fill the dsh composer with `text` through the 0.1.2-rc.1 `contenteditable`
+ * Fill the dsh composer with `text` through the `contenteditable`
  * DOM path. Used by `setComposerText` (the harness-facade-aware writer) as the
  * last-resort and by `runRewindAndFill` to put the withdrawn target message
  * back into the composer after a rewind. Best-effort — no composer match means
@@ -193,12 +190,12 @@ export function fillComposer(text: string): boolean {
 }
 
 /**
- * Composer write: prefer the harness facade's `setDraft` (0.1.2-rc.1, correct
- * whole-draft replace), then degrade to the DOM `fillComposer` (0.1.2-rc.1
- * contenteditable). A facade that throws (session teardown) is treated as
- * absent so the DOM path still restores the text. Never throws.
+ * Composer write: prefer the harness facade's `setDraft` (correct whole-draft
+ * replace), then degrade to the DOM `fillComposer` (contenteditable). A facade
+ * that throws (session teardown) is treated as absent so the DOM path still
+ * restores the text. Never throws.
  * @param text - the withdrawn target message text.
- * @param facade - the 0.1.2-rc.1 session input draft writer, when reachable.
+ * @param facade - the session input draft writer, when reachable.
  * @returns whether a channel applied the text.
  */
 export function writeComposer(text: string, facade: ComposerDraftWriter | undefined): boolean {
@@ -319,8 +316,8 @@ export async function runRewindAndFill(
 }
 
 /**
- * The composer's text-holding element: the 0.1.2-rc.1 Lexical `contenteditable`
- * div `[data-composer-input]` (the 0.1.2-rc.1 facade `setDraft` is preferred in
+ * The composer's text-holding element: the Lexical `contenteditable`
+ * div `[data-composer-input]` (the facade `setDraft` is preferred in
  * `writeComposer`; this DOM path is the fallback).
  */
 function composerSurface(): HTMLElement | null {
@@ -345,7 +342,7 @@ function showHint(text: string): void {
 }
 
 /**
- * The composer's text surface: the 0.1.2-rc.1 `contenteditable` div
+ * The composer's text surface: the `contenteditable` div
  * (`[data-composer-input]` uses a Lexical editor). The refill writes to this
  * node via the `setDraft` facade when reachable, else the DOM fallback.
  */
@@ -377,7 +374,7 @@ const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
  * both durable and pending row shapes without a full React portal render.
  */
 export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | undefined {
-  // The copy button's own container on the 0.1.2-rc.1 line (see the note
+  // The copy button's own container (see the note
   // above): located by the LAST action `<button>`, NOT the first `<button>` in
   // the row — a user message with an image renders its thumbnail as a
   // `<button>` (MessageImage's frame, ui-attachment) inside the media gallery,
@@ -511,8 +508,9 @@ function bubbleTextOf(row: HTMLElement): string {
  * @param steering - the session's `next-step` inbox rows (see `steeringItemsOf`).
  */
 function collectPendingTargets(snapshot: SessionKindLike, steering: readonly PendingSteeringItem[]): readonly PortalTarget[] {
-  // Subagent sessions reject queue mutations host-side; mirror the harness's
-  // own QueueDock gate (queueMutable = subagent === null).
+  // Subagent sessions reject queue mutations host-side. The harness's own
+  // QueueDock gate is wider (`subagent === null || address.mode === 'continuable'`),
+  // but a subagent session is never a rewind target, so null is the right face.
   if (snapshot.subagent !== null) return []
   if (steering.length === 0) return []
   const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
@@ -589,7 +587,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
         return
       }
       const snapshot = session.getSnapshot()
-      // `chatOf` serves the 0.1.2-rc.1 `uiConversation` "chat" view; undefined
+      // `chatOf` serves the `uiConversation` "chat" view; undefined
       // = no view registered yet: skip the durable path entirely (pending
       // targets stay collectible).
       const chat = chatOf(session)
@@ -734,7 +732,7 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, isMainV
   )
 }
 
-/** The current composer draft: the 0.1.2-rc.1 contenteditable `textContent`.
+/** The current composer draft: the contenteditable `textContent`.
  * Empty when the composer is absent. Exported as a test seam (the
  * empty-composer guard in `retractPending`). */
 export function composerText(): string {

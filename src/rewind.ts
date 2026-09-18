@@ -14,7 +14,7 @@
  *
  *   user/message (marker content) → { surfaceOp {replace, startSeq, endSeq} }
  *
- * v2 reserves surface `replace` to a node that cites every shadowed seq via
+ * v3 reserves surface `replace` to a node that cites every shadowed seq via
  * `sourceEventSeqs`, and `assistant/message` can no longer carry
  * `sourceEventSeqs` (it now embeds its provider stream instead) — so the
  * replacement node must be a `user/message`, exactly as /compact's checkpoint

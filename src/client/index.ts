@@ -64,7 +64,7 @@ import {
 } from './settings-card.tsx'
 
 export const name = 'dsh-rewind'
-// NOTE: deliberately NOT injecting the 0.1.2-rc.1 `uiConversation` service
+// NOTE: deliberately NOT injecting the `uiConversation` service
 // here as a required dependency. The service is resolved lazily per read
 // instead (see `uiConversation` in apply), the optional `ctx.get` pattern the
 // harness's own consumer plugins use.
@@ -80,7 +80,7 @@ export const inject = ['slots', 'sessions', 'locale', 'commandUi']
 const NS = 'rewind'
 
 /**
- * Structural face of the 0.1.2-rc.1 `uiConversation` service: per-session
+ * Structural face of the `uiConversation` service: per-session
  * conversation bindings exposing named view targets (the "chat" view carries
  * the chat snapshot). Typed locally so the plugin never imports the
  * conversation UI package's types and survives harness version drift.
@@ -92,7 +92,7 @@ interface UiConversationLike {
 }
 
 /**
- * Structural face of the 0.1.2-rc.1 `conversation.input` session-input resolver
+ * Structural face of the `conversation.input` session-input resolver
  * (`SessionInputResolver`): resolves a per-session input shell whose
  * `setDraft` replaces the whole composer draft through the harness's Lexical
  * editor. Typed locally so the plugin never imports the conversation UI
@@ -108,7 +108,7 @@ interface SessionInputResolverLike {
 const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
 /**
- * The composer's text surface: the 0.1.2-rc.1 Lexical `contenteditable` div
+ * The composer's text surface: the Lexical `contenteditable` div
  * `[data-composer-input]`. The `/rewind` text-flow anchor points at it.
  */
 const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
@@ -173,7 +173,7 @@ export function apply(ctx: ClientContext): void {
     const subscribeLocale = (cb: () => void): (() => void) => ctx.locale.subscribe(cb)
 
     /**
-     * The 0.1.2-rc.1 chat channel: the `uiConversation` service (contributed by
+     * The chat channel: the `uiConversation` service (contributed by
      * dsh-client-ui-conversation; dsh-client-ui-chat registers its named
      * "chat" view through the uiSession slot hook). Resolved lazily through
      * `ctx.get` — the harness's own consumer pattern — so the read is undefined
@@ -183,11 +183,11 @@ export function apply(ctx: ClientContext): void {
     const uiConversation = (): UiConversationLike | undefined =>
       (ctx as { get(name: string): unknown }).get('uiConversation') as UiConversationLike | undefined
 
-    /** The named chat view in the 0.1.2-rc.1 uiConversation registry. */
+    /** The named chat view in the `uiConversation` registry. */
     const CHAT_VIEW = 'chat'
     /**
      * The live chat snapshot of a session, or undefined when unavailable. Served
-     * by the 0.1.2-rc.1 `uiConversation` "chat" view (see `chatSnapshotOf`).
+     * by the `uiConversation` "chat" view (see `chatSnapshotOf`).
      * `uiConversation.binding` throws for a session it does not know (a
      * teardown window) — degrade to "no chat" instead of failing the caller.
      */
@@ -202,7 +202,7 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
-     * The 0.1.2-rc.1 composer writer: the `conversation` service's `input`
+     * The composer writer: the `conversation` service's `input`
      * resolver (`SessionInputResolver`) through which `setDraft` replaces the
      * whole composer draft (the harness's own Lexical editor — the correct
      * semantics, not a DOM hack). Resolved lazily through `ctx.get`; `scope` is
@@ -230,7 +230,7 @@ export function apply(ctx: ClientContext): void {
 
     /**
      * Subscribe to one session's live chat-update signal (the wait signal for
-     * `waitForCommand`): the 0.1.2-rc.1 `uiConversation` "chat" view's
+     * `waitForCommand`): the `uiConversation` "chat" view's
      * `subscribe` (see `resolveChatWatch`). Never throws.
      */
     const watchChat: ChatWatch = (sessionId, cb) => resolveChatWatch(
@@ -267,7 +267,7 @@ export function apply(ctx: ClientContext): void {
     // registered under `plugins.bundle.config` keyed by the BUNDLE's package
     // name — the alpha.2 contract for a bundle's own configuration. The card
     // reads/writes through the harness's typed SettingsScope face (the
-    // 0.1.2-rc.1-only `mutate` deliberately unused).
+    // `mutate` method deliberately unused).
     const clientCtx = ctx as unknown as {
       inject(services: string[], callback: (scoped: {
         slots: SlotsLike
@@ -427,7 +427,7 @@ export function apply(ctx: ClientContext): void {
       yield commandUi.decorate({ name, ...rewindPopupSpec })
     }
 
-    /** The composer's text-holding element: the 0.1.2-rc.1 `contenteditable` div. */
+    /** The composer's text-holding element: the `contenteditable` div. */
     const composerSurface = (): HTMLElement | null =>
       document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
 
