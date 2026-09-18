@@ -37,8 +37,8 @@ Also under `docs/` at the repo root: `persistence-catalog.md` (full
 | `CommandDefinition`, `CommandInvocation` | [packages/interaction/commands/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/interaction/commands/src/index.ts) |
 | `Agent` (`status` / `session`) | [packages/core/agent/src/runtime-types.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/agent/src/runtime-types.ts) |
 | `tools/pre-execute` / `execute` / `post-execute` | [packages/core/tools/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/index.ts) |
-| Client DOM anchors (`data-chat-flow-kind` / `data-chat-anchor-key`) | [packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-conversation/src/client/chat/ChatNodeSeat.tsx) |
-| User bubble rendering | [packages/client/ui-conversation/src/client/chat/MessageItem.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-conversation/src/client/chat/MessageItem.tsx) |
+| Client DOM anchors (`data-chat-flow-kind` / `data-chat-anchor-key`) | [packages/client/ui-chat/src/client/chat/ChatNodeSeat.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/ChatNodeSeat.tsx) |
+| User bubble rendering | [packages/client/ui-chat/src/client/chat/MessageItem.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/MessageItem.tsx) |
 | Client `SessionFace` (`command` / `cancel`) | [packages/api/session-controller/src/client/contract/session.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/api/session-controller/src/client/contract/session.ts) |
 | Client pending interaction (SessionPendingInteraction) | [packages/client/ui-session/src/client/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-session/src/client/index.ts) |
 
@@ -62,6 +62,8 @@ src/client/popover.ts   mode-selection popover (both-mode impact confirm)
 src/client/hidden.ts    withdrawn-span computation (hiddenSeqsOf), pure
 src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
 src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
+src/client/portals.tsx  per-user-message ↶ button portals (React bridge into the actions row)
+src/client/settings-card.tsx  snapshot-cleanup form on the bundle page (plugins.bundle.config)
 src/client/locales.ts   zh / en copy (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
 src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_REWIND_BUILD__)
@@ -70,6 +72,7 @@ scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader
 scripts/check-dsh-version.mjs  DSH peer-tuple check (latest dist-tag vs peers)
 scripts/update-badge.mjs       regenerate the tests badge (CI only)
 scripts/verify-host.mjs end-to-end host verification (full check suite)
+scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)
 tests/                  vitest suites (rewind / snapshot / hidden / session-cwd / integration)
 docs/                   maintainer docs: contract/, compat/, release/ subdirectories
 assets/screenshots/     UI screenshots

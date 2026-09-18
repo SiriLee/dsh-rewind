@@ -18,7 +18,7 @@ The plugin is prepared in two parts, both shipped in the new version:
 
 1. **New rewind markers use the new shape** (forward) — this is a **correct, low-risk**, long-term change aligned with the official `/compact` design (see the [README](../README.en.md), the "How it works" section), and the new shape is fully compatible with **both old and new** DSH.
 
-2. **The `/dsh-rewind-fix` command** (backward) — for **already-existing** old sessions, the plugin ships a convenient update command that translates those old markers into the new shape so the sessions are usable again.
+2. **The `/dsh-rewind-fix` command** (backward) — for **already-existing** old sessions, the plugin shipped an update command (removed in plugin `0.10.x`) that translated those old markers into the new shape so the sessions were usable again.
 
 This document covers mainly the **update command**.
 

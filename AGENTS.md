@@ -3,14 +3,14 @@
 > dsh-rewind — a DeepSeek Harness (DSH) plugin that rewinds a conversation in place
 > to any earlier user message, optionally restoring workspace files along with it.
 > This is the shared spec for every developer and agent working on this repo; it is
-> intentionally minimal. Machine-specific local details live in `AGENTS.override.md`
+> intentionally minimal. Machine-specific local details live in `AGENTS.local.md`
 > (git-ignored — do not commit).
 
 ## Positioning & principles
 - **Focused on purpose**: it does exactly one thing — rewind to any earlier user
   message in the same window, never forking a session or switching windows.
 - **Security first**: session logs are append-only and conversations are never
-  deleted; file restores are confined to the plugin's own backup directory.
+  deleted; file restores draw only from the plugin's own backup directory.
 - **Minimal**: avoid over-abstraction; keep the plugin light and maintainable.
 
 ## Common commands
@@ -35,7 +35,8 @@ them at runtime, so the published tarball does not carry them.
 - `src/locales.ts` — host i18n (`t()` renderer, `HostKey`)
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation
 - `scripts/` — `build.mjs` (artifacts), `check-dsh-version.mjs` (peer-tuple check),
-  `update-badge.mjs` (badge), `verify-host.mjs` (host verification)
+  `update-badge.mjs` (badge), `verify-host.mjs` (host verification),
+  `session-decode.mjs` / `session-encode.mjs` (log codec)
 - `docs/` — organized: `contract/` (client contract), `compat/` (audit + compatibility notes), `release/`, plus `harness-reference.md`, `format.md`, `architecture.md`; repo root holds `SECURITY.md` and `CONTRIBUTING.md`
 - `tests/` — vitest suites (rewind / snapshot / hidden / session-cwd / integration)
 

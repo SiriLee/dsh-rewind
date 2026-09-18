@@ -8,7 +8,7 @@ first), and the docs live under `docs/` with an index in `docs/README.md`.
 
 - **Focused on purpose** — one thing: in-window rewind to any earlier user
   message, never forking a session.
-- **Security first** — session logs are append-only; file restores stay inside
+- **Security first** — session logs are append-only; file restores draw only from
   the plugin's own backup directory. See `SECURITY.md`.
 - **Minimal** — avoid over-abstraction; keep the plugin light and maintainable.
 

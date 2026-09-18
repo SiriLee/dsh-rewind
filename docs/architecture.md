@@ -134,13 +134,13 @@ pruneStale            cross-session auto-cleanup (default off): whole
 
 ## Compatibility strategy
 
-- **Peer ranges as one tuple per DSH line** (`^0.1.2-rc.1`): npm's prerelease
+- **Peer ranges as one tuple per DSH line** (`^0.1.6-alpha.2`): npm's prerelease
   rules require the peer range to share the host's `[major, minor, patch]`
   tuple, so a new DSH tuple replaces the peer tuple (the single-line model);
   `scripts/check-dsh-version.mjs` flags when a new tuple arrives. See
   `docs/release/release.md`.
-- **Test-driven investigation**: `tests/compat-invariants.ts` /
-  `compat-interop` / `compat-gaps` probe harness behavior and pin findings in
+- **Test-driven investigation**: `tests/compat-invariants.test.ts` /
+  `compat-interop.test.ts` / `compat-gaps.test.ts` probe harness behavior and pin findings in
   `docs/compat/audit.md`; `scripts/verify-host.mjs` runs a real end-to-end
   rewind + `/compact` chain (the full check suite).
 - **Stable machine channels for third parties**: `dsh-rewind-plugin/client`

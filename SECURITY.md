@@ -90,7 +90,7 @@ transcript.
 
 ## Filesystem containment
 
-- **Store root**: `<harness home>/rewind-snapshots/` by default (resolved via
+- **Store root**: `<dsh home>/rewind-snapshots/` by default (resolved via
   `resolveDshHome`, so `~/.dsh/...` when `DSH_HOME` is unset); the `snapshotDir`
   config, then `DSH_REWIND_SNAPSHOT_DIR` env, override it. Deleting it only
   removes file backups and the store rebuilds from scratch.

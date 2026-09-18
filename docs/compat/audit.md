@@ -47,9 +47,9 @@ legacy branch).
 | I3 step/turn structure | Client turn-tail ordering, unique `step/start` (real turns), no ghost turns; the `user/message` rewind marker adds no step frame | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
 | I4 fold-service safety | stats / title / goal / projection fold a marker-bearing log without throwing, with predictable values | `compat-invariants` I4 |
 | I5 compact interop | A tool-call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is explicitly refused; a rewind-then-compact transaction stays legal | `compat-interop` I5, `verify-host` 12/14 |
-| I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8) for the tracked tools `write` / `edit` — `str_replace_editor` is an optional DSH package that stopped being a default tool in DSH 0.1.3, so it is not tracked; cancellation timing never hangs | `verify-host` 4–8, 15 |
+| I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8) for the tracked tools `write` / `edit` — `str_replace_editor` is an optional DSH package that stopped being a default tool in DSH 0.1.3, so it is not tracked; cancellation timing never hangs | `verify-host` 4–9 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
-| I8 runtime safety | `rewind`/`compact` combinations never leave a dangling step/turn frame | `verify-host` 15 |
+| I8 runtime safety | `rewind`/`compact` combinations never leave a dangling step/turn frame | `verify-host` 13 |
 
 ## Verified-compatible surfaces (probes pass)
 
@@ -114,13 +114,13 @@ The plugin treats these as harness-side defects it does not compensate for. Each
   command descriptions). The plugin's `t()` design is retained; localized host output is treated
   as an upstream capability to be restored when the harness provides it. (This is still not a
   plugin deviation: the client localizes only the six first-party descriptions in
-  `HOST_DESCRIPTION_KEYS` — compact, export, feedback, goal, permission, plan — while every
+  `HOST_FACES` — compact, export, feedback, goal, permission, plan — while every
   third-party description, this plugin's included, passes through verbatim.)
 - **Client-side command-description i18n is first-party-only**: DSH also localizes host command
   descriptions through the client `locale` binding (`ui-commands`), but the description keys come
-  from a **closed allowlist** (`HOST_DESCRIPTION_KEYS`: compact, export, feedback, goal,
+  from a **closed allowlist** (`HOST_FACES`: compact, export, feedback, goal,
   permission, plan). A command outside that set — every third-party plugin — is passed through
-  verbatim, never translated (`hostDescription` only rewrites a description that equals the
+  verbatim, never translated (`builtinRowFace` only rewrites a description that equals the
   first-party English copy). So the plugin's own `/rewind` command description can never ride this
   channel either; it is authored in the host's tongue (English by default), same as the host
   runtime copy above.
@@ -130,7 +130,7 @@ The plugin treats these as harness-side defects it does not compensate for. Each
 > **Root cause (harness-side)**: an unclosed step left by a crash makes token-meter replay
 > reject any later step activity. DSH `0.1.1-rc.2` now auto-closes crash-left step/turn/tool
 > boundaries at load via `interruptedTurnClosers` (`dsh-session`, consumed by
-> `session-persistence/src/coordinator.ts`) — **the crash path is fixed**.
+> `packages/core/agent-loop/src/index.ts:907`) — **the crash path is fixed**.
 >
 > **Plugin guard (attempted and reverted)**: a `hasOpenStep` + `planRewind` pre-refusal was
 > implemented (`open-step`) but misjudged on **real session logs** (normal rewinds refused, GUI
@@ -141,19 +141,19 @@ The plugin treats these as harness-side defects it does not compensate for. Each
 
 #### Concrete `step/start` trigger paths (source-confirmed)
 
-The tree has exactly **one** `append('step/start')` producer: `packages/core/agent-loop/src/agent.ts:279`
+The tree has exactly **one** `append('step/start')` producer: `packages/core/agent-loop/src/agent.ts:303`
 (no other producer inside the official packages; `session/end-seed` etc. only truncate torn writes,
 not logically-unclosed steps).
 
 | # | Trigger path | Plausibility | Basis |
 |---|---|---|---|
-| P1 | **Abnormal process termination**: `step/start` is batched to disk (write-behind, `maxDelayMs` per batch) → the step is mid-execution (LLM stream/tool, seconds to minutes) → SIGKILL / OOM-kill / power loss / WSL hard-close → `step/end` (in `finally`, only runs while the process is alive) is never persisted | **Most realistic** | `agent.ts:292` finally; write-behind batching; torn-write fix truncates only a half-written line |
+| P1 | **Abnormal process termination**: `step/start` is batched to disk (write-behind, `maxDelayMs` per batch) → the step is mid-execution (LLM stream/tool, seconds to minutes) → SIGKILL / OOM-kill / power loss / WSL hard-close → `step/end` (in `finally`, only runs while the process is alive) is never persisted | **Most realistic** | `agent.ts:313` finally; write-behind batching; torn-write fix truncates only a half-written line |
 | P2 | **Third-party plugin bug**: only the official agent-loop produces one, but external plugins may `session.append('step/start', …)` and never close it | possible | public `Session.append` |
 | P3 | **Manual session-file editing**: edit `~/.dsh/…/session.jsonl[.zstd]` (zstd needs decompress/recompress; plaintext config edits directly) | possible but laborious | `persistence-jsonl/format.ts` (`JsonlCompression = 'zstd' \| 'none'`) |
-| P4 | **append itself failing**: `append('step/end')` in `finally` throws (payload is plain numbers, nearly impossible) | theoretical | `agent.ts:292` |
+| P4 | **append itself failing**: `append('step/end')` in `finally` throws (payload is plain numbers, nearly impossible) | theoretical | `agent.ts:313` |
 
 **Amplifier (rewind is not the only trigger)**: after a crash resume, agent-loop `turn()` opens a
-new turn at `phase.turn + 1` (`agent.ts:251-255`) **without closing the leftover step** — so
+new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover step** — so
 "continue the conversation" (a new `step/start`) trips the same token-meter check. Scope:
 
 - **The conversation itself is unaffected** (the request path does not call `tokenMeter.measure`; only compaction-basic does tree-wide).

@@ -35,6 +35,7 @@ console filter:
 | `refill` | The composer refill after a rewind (command/wait/refill throws, a rejected or unmatched command, an outcome that never settles) |
 | `preview` | The `/rewind preview` impact probe behind the mode popover (command rejected/unmatched/threw, an outcome that never settles) |
 | `portals` | Per-message button mount issues (e.g. no session binding) |
+| `retract` | The pending-steering retract path (the remove lost the race, or the remove threw) |
 | `settings` | The snapshot-cleanup settings card |
 | `hiding` | **Reserved** — no active alert at present. If a future row-hiding diagnostic is added, it belongs in this region. |
 

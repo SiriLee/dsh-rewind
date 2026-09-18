@@ -7,7 +7,7 @@ and this spec disagree, the code wins and this spec is a bug.
 
 ## State root
 
-The store root defaults to `<harness home>/rewind-snapshots/` — the dsh data
+The store root defaults to `<dsh home>/rewind-snapshots/` — the dsh data
 directory (`~/.dsh/rewind-snapshots/` when `DSH_HOME` is unset) — overridable in
 order by the `snapshotDir` plugin config, then the `DSH_REWIND_SNAPSHOT_DIR`
 environment variable. It is a sibling of the workspace, never a subtree of it.
@@ -46,7 +46,7 @@ Deleting the root only removes file backups; the store rebuilds from scratch.
 - `store` is the session's store-format marker (a decimal version, written
   atomically); a missing marker means the released v1 string format. `format` is
   the DSH **session**-format marker the snapshots were anchored under (see
-  `docs/snapshot-auto-cleanup.md`) — the two are independent.
+  `SECURITY.md`) — the two are independent.
 
 ## Checkpoint entry
 
