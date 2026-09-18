@@ -7,7 +7,7 @@
  * chat nodes × action rows into the per-message ↶ portal targets — the one
  * piece the pure-function suites (`chat-channel`, `hidden`) do not reach.
  *
- * On the 0.1.2 line `actionsContainerOf` locates the actions container
+ * On the target line `actionsContainerOf` locates the actions container
  * structurally (the copy `<button>`'s own container), so the row shapes below
  * carry no `data-time-hover-root` marker.
  *

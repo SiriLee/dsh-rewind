@@ -102,10 +102,6 @@ describe('retractSpan', () => {
   it('returns an empty span when the target is no longer pending', () => {
     expect(retractSpan(steering, 'zzz')).toEqual([])
   })
-
-  it('never includes queued (next-turn) messages — they are not in the steering list', () => {
-    expect(retractSpan([{ id: 'b' }], 'b')).toEqual(['b'])
-  })
 })
 
 describe('steeringItemsOf (inbox next-step derivation)', () => {

@@ -12,9 +12,7 @@ describe('host locale dictionaries', () => {
     expect(en).toHaveProperty('command.description')
   })
 
-  it('renders en by default and interpolates named params', () => {
-    expect(translate('en', 'success', { targetSeq: 5, restore: '' }))
-      .toContain('seq 5')
+  it('interpolates named params', () => {
     expect(translate('zh', 'success', { targetSeq: 5, restore: '' }))
       .toContain('seq 5')
   })

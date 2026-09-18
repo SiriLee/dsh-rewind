@@ -1,5 +1,5 @@
 /**
- * Chat-channel probes (SiriLee/dsh-rewind#7). On the 0.1.2 line the chat
+ * Chat-channel probes (SiriLee/dsh-rewind#7). On the target line the chat
  * snapshot lives on the `uiConversation` service's named "chat" view
  * (contributed by dsh-client-ui-chat). `chatSnapshotOf` reads that single
  * channel; these probes lock the view-snapshot shape (Map-like nodes, extra

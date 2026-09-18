@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { ToolCallId } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { Session } from '@deepseek-ai/dsh-session'
 import { applyRewind, appendToolTurn, appendTurn, assertTurnTailOrdering, buildTurnedSession, newMeter } from './helpers.ts'
 
 /** Restart the host: replay the log through a fresh session (resume preflight). */

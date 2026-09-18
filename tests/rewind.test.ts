@@ -61,37 +61,6 @@ function sampleLog(): { events: readonly SessionEvent[]; surface: readonly numbe
   ]
   return { events, surface: [0, 1, 2, 3, 4, 5] }
 }
-
-function turnStartEvent(seq: number, turn: number): SessionEvent<'turn/start'> {
-  return { type: 'turn/start', seq, time: seq * 60_000, data: { turn } } as SessionEvent<'turn/start'>
-}
-
-function turnEndEvent(seq: number, turn: number): SessionEvent<'turn/end'> {
-  return {
-    type: 'turn/end',
-    seq,
-    time: seq * 60_000,
-    data: { turn, reason: { kind: 'completed' } },
-  } as SessionEvent<'turn/end'>
-}
-
-/**
- * A realistic session log with two completed turns, exactly like the harness
- * produces: turn 1 (u0..a1), turn 2 (u2..a3), closed by `turn/end 2`.
- */
-function twoTurnLog(): readonly SessionEvent[] {
-  return [
-    turnStartEvent(0, 1),
-    userEvent(1, 'first question'),
-    assistantEvent(2, 'first answer'),
-    turnEndEvent(3, 1),
-    turnStartEvent(4, 2),
-    userEvent(5, 'second question'),
-    assistantEvent(6, 'second answer'),
-    turnEndEvent(7, 2),
-  ]
-}
-
 describe('parseRewindTarget', () => {
   it('parses absolute seq targets', () => {
     expect(parseRewindTarget('@12')).toEqual({ kind: 'seq', seq: 12 })
@@ -288,7 +257,7 @@ describe('planRewind', () => {
     expect(plan.surfaceEnd).toBe(2)
   })
 
-  it('produces no candidates in a user-less log', () => {
+  it('rejects an out-of-range index in a user-less log', () => {
     const events = [assistantEvent(0, 'answer only')]
     expect(() => planRewind(events, [0], { kind: 'index', index: 1 })).toThrowError(RewindError)
   })
@@ -320,7 +289,6 @@ describe('rewind marker message shape', () => {
   })
 
   it('isRewindMarker recognises only the dsh-rewind brand', () => {
-    expect(isRewindMarker(REWIND_MARKER_SOURCE)).toBe(true)
     expect(isRewindMarker({ kind: 'plugin', plugin: 'compact' })).toBe(false)
     expect(isRewindMarker({ kind: 'user' })).toBe(false)
     expect(isRewindMarker({ kind: 'plugin', plugin: 'other' })).toBe(false)

@@ -151,7 +151,7 @@ export function simulateCompaction(session: Session, start: number, end: number)
 }
 
 /** Assert the tool-pairing balance the compaction region validator requires. */
-export function expectBalance(session: Session, start: number, end: number): void {
+function expectBalance(session: Session, start: number, end: number): void {
   const before = toolPairingBalancedBefore(session, start as SessionSeq)
   const after = toolPairingBalancedAfter(session, end as SessionSeq)
   if (before !== true || after !== true) {

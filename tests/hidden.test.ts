@@ -288,11 +288,11 @@ describe('messageTextAt (composer refill source)', () => {
 
   it('reads the text regardless of user/steering order (the refill must find either)', () => {
     const chat = snap([
-      human('u0', 'user', 0, 'first'),
       human('s4', 'steering', 4, 'design plan'),
+      human('u0', 'user', 0, 'first'),
     ])
-    expect(messageTextAt(chat, 4)).toBe('design plan')
     expect(messageTextAt(chat, 0)).toBe('first')
+    expect(messageTextAt(chat, 4)).toBe('design plan')
   })
 
   it('returns undefined for an absent seq and empty for a non-text message', () => {

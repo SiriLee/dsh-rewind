@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  *
  * `waitForCommand` wait-signal probes (SiriLee/dsh-rewind#14): a waiting caller
- * must be woken when the CHAT snapshot changes. On the 0.1.2 line the chat
+ * must be woken when the CHAT snapshot changes. On the target line the chat
  * moved off the session face into the `uiConversation` view, so the face no
  * longer fires on a chat update; the caller passes a `watch` bound to that
  * view. These tests lock the three behaviors: first-check hit, watch-triggered
@@ -84,7 +84,7 @@ describe('waitForCommand wait signal', () => {
     // First check runs synchronously but finds no outcome yet -> waits on watch.
     const pending = waitForCommand(session, chatOf, matchExecuted, 8000, watch)
     expect(callbacks).toHaveLength(1)
-    // The chat snapshot updates (as on the 0.1.2 line), then the watch fires.
+    // The chat snapshot updates (as in the target harness), then the watch fires.
     settleChatWithOutcome()
     for (const cb of callbacks) cb()
     await expect(pending).resolves.toEqual({ kind: 'success', text: OUTCOME_TEXT })

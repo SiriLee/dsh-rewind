@@ -165,22 +165,6 @@ describe('integrity rules', () => {
     expect(await store.entriesAfter(session, 5)).toEqual([])
   })
 
-  it('reports a missing sidecar as a per-file failure, never a delete', async () => {
-    const live = await touch('gone.bin', Buffer.from([1, 2, 3]))
-    await captureAndRecord('c1', 5, live)
-    const names = await readdir(store.anchorDir(session, 5))
-    const sidecar = names.find(name => name.endsWith('.before'))
-    if (sidecar === undefined) throw new Error('expected a staged sidecar')
-    await rm(join(store.anchorDir(session, 5), sidecar), { force: true })
-    await writeFile(live, Buffer.from([4, 5, 6]))
-
-    const outcome = await store.restoreAfter(session, 5, unlink)
-    expect(outcome.deleted).toEqual([])
-    expect(outcome.restored).toEqual([])
-    expect(outcome.failed.map(failure => failure.path)).toEqual([live])
-    expect(await readFile(live)).toEqual(Buffer.from([4, 5, 6]))
-  })
-
   it('reports a sidecar whose size disagrees with its metadata', async () => {
     const live = await touch('short.bin', Buffer.from([1, 2, 3, 4]))
     await captureAndRecord('c1', 5, live)

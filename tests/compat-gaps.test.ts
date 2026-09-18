@@ -10,10 +10,10 @@
  *   G2 projection checkpoint: `SessionProjectionRegistry.checkpoint` rows
  *      over a rewound log pass the unit schema and report the correct
  *      watermark seq.
- *   G3 token-meter usage anchor: a rewind marker (the last assistant/message,
- *      carrying no usage) resets the measurement baseline from provider
- *      `usage` to heuristic `estimated`; the next real usage-carrying turn
- *      restores it. Recorded behavior difference, not a crash.
+ *   G3 token-meter usage anchor: a rewind marker is a `user/message`, not an
+ *      `assistant/message` without usage, so the provider-`usage` baseline anchor
+ *      survives the rewind and the next real usage-carrying turn keeps it.
+ *      Recorded behavior, not a crash.
  */
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'

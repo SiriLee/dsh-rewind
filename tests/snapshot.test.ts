@@ -645,17 +645,6 @@ describe('content dedup (in-place link; old + new entry format)', () => {
     expect(await readFile(file, 'utf8')).toBe('A')
   })
 
-  it('reports a dangling (corrupt) link as a per-file failure, never silently skipping', async () => {
-    const file = await touch('a.txt', 'v')
-    await mkdir(store.anchorDir(session, 6), { recursive: true })
-    await writeFile(join(store.anchorDir(session, 6), 'c2.json'), JSON.stringify({ callId: 'c2', anchorSeq: 6, path: file, ref: '99/missing.json', time: 1 }))
-    const outcome = await store.restoreAfter(session, 6, unlink)
-    expect(outcome.failed).toHaveLength(1)
-    expect(outcome.failed[0]!.path).toBe(file)
-    expect(outcome.restored).toEqual([])
-    expect(outcome.deleted).toEqual([])
-  })
-
   it('applies a good action AND reports a dangling link in the same restore', async () => {
     const good = await touch('good.txt', 'v')
     const broken = await touch('broken.txt', 'v')

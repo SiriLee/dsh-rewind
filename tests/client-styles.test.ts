@@ -23,7 +23,6 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 /** The prefix every class of this form carries. */
 const P = '.dsh-rewind-cleanup-'
 
-/** Every cleanup rule and its official counterpart. */
 /**
  * One rule: the official module + selector it mirrors, and that selector's exact
  * declarations (`prop:value`, `;`-separated), copied from the official CSS.
@@ -134,7 +133,7 @@ describe('cleanup form styles (exact numbers from the official CSS modules)', ()
     expect(unmapped).toEqual([])
   })
 
-  it('uses no literal colour or size where the official rule uses a design token', () => {
+  it('uses no literal colour where the official rule uses a design token', () => {
     // Guard the token discipline itself: every declaration this form copies
     // that names a COLOUR must go through a --dsw-alias-* token.
     const colourProps = ['color', 'background', 'border-color', 'border-top', 'border', 'outline', 'box-shadow']

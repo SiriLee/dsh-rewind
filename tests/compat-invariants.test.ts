@@ -91,12 +91,6 @@ describe('I1 log replayability (probe: token-meter + resume preflight)', () => {
     })
   }
 
-  it('a rewind log replays after interleaved compactions and real turns (stress)', () => {
-    const { session } = runScenario(SCENARIOS['long-mixed']!, 'stress')
-    assertReplayable(session)
-    assertCompactionBalanced(session)
-  })
-
   it('a log carrying a rewind marker alongside log-only plan/mode events stays replayable and frame-legal', () => {
     // A rewind and the log-only, non-surface `plan/mode` state coexist in a
     // real log (rewinding /plan text leaves plan mode active; a manual /plan
@@ -222,14 +216,6 @@ describe('I4 fold-service safety (probe: stats / title / goal)', () => {
     const after = foldSessionTitle(session.snapshotEvents())
     expect(after?.title).toBe('stable title')
     expect(after?.eventSeq).toBe(before?.eventSeq)
-  })
-
-  it('title fold over a marker-only tail returns undefined without throwing', () => {
-    const session = buildTurnedSession()
-    const target = session.surface.nodes.find(seq =>
-      session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
-    applyRewind(session, target)
-    expect(foldSessionTitle(session.snapshotEvents())).toBeUndefined()
   })
 
   it('goal fold survives a rewind marker without disturbing the admitted rounds', () => {

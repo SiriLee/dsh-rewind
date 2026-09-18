@@ -44,12 +44,7 @@ describe('client contract entry (dsh-rewind-plugin/client)', () => {
     expect(targetSeqOfArgs).toBe(targetSeqOfArgsInternal)
   })
 
-  it('is usable from the entry', () => {
-    expect(targetSeqOfArgs('@5 chat')).toBe(5)
-    expect(targetSeqOfArgs('preview @5 both')).toBe(5)
-  })
-
-  it('registers only slots the harness declares', () => {
+  it('pins the declared slot list', () => {
     // The compile-time check is the type above; this pins the list so a future
     // addition cannot quietly drop one of the two registrations.
     expect([...REGISTERED_SLOTS].sort()).toEqual([

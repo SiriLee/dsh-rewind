@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  *
- * Composer-refill probes (SiriLee/dsh-rewind#9). On the 0.1.2 line the
+ * Composer-refill probes (SiriLee/dsh-rewind#9). On the target line the
  * composer is a Lexical `contenteditable` div, so the withdrawn target text is
  * written through the harness `setDraft` facade when reachable, else the DOM
  * `contenteditable` fill. These cases pin `fillComposer` / `writeComposer` /
@@ -14,7 +14,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { composerText, fillComposer, writeComposer } from '../src/client/portals.tsx'
 
-/** Build the 0.1.2 `[data-composer-input]` contenteditable div. */
+/** Build the `[data-composer-input]` contenteditable div. */
 function addEditable(text = ''): HTMLElement {
   const editable = document.createElement('div')
   editable.setAttribute('data-composer-input', '')
