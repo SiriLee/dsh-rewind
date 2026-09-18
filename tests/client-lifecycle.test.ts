@@ -2,21 +2,13 @@
  * @vitest-environment jsdom
  *
  * Client-plugin lifecycle wiring: the disposer `apply` yields is exactly what a
- * live disable runs.
+ * live disable runs. `tests/client-popover.test.ts` covers `closePopover`
+ * itself; this file covers the WIRING — that the plugin's disposer calls it —
+ * and the injected `<style data-plugin>` marker the harness reaps by.
  *
- * `tests/client-popover.test.ts` covers `closePopover` itself; this file covers
- * the WIRING — that the plugin's disposer calls it — because an open mode
- * popover is plain DOM plus document capture-phase key listeners, so leaving it
- * up would outlive the unload and keep stealing ↑/↓/Esc from the composer. The
- * same disposer is where the injected `<style>` and its `data-plugin` marker
- * (the id the harness's owned-style fallback matches) are observable in a real
- * document.
- *
- * The client context is a hand fake with exactly the surface `apply` uses
- * (`effect`, `locale`, `slots`, `sessions`, `get`, `inject`): a mount that needs
- * another service fails loudly here rather than passing silently. The nested
- * `settingsScope` inject is deliberately not served — the configuration form is
- * a separate concern and must not gate the rewind side.
+ * The client context is a hand fake with exactly the surface `apply` uses; a
+ * mount that needs another service fails loudly. The nested `settingsScope`
+ * inject is deliberately not served (the form must not gate the rewind side).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'

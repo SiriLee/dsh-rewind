@@ -1,37 +1,17 @@
 /**
- * Numeric guard for the cleanup configuration form's CSS.
+ * Numeric guard for the cleanup form's CSS: every property the form sets is
+ * compared, value for value, against the official CSS module it mirrors — the
+ * form re-implements `PluginConfigForm` / `ValueField` /
+ * `SubagentModelSelectionFields` (package-internal, so the numbers are copied).
+ * A drifted value, or a cleanup rule nobody mapped, fails here.
  *
- * The form re-implements the harness's `PluginConfigForm` / `ValueField` /
- * `SubagentModelSelectionFields` (those components are package-internal, so
- * their numbers are copied, not imported). This file is the verification that
- * the copy is EXACT: every custom property set in the cleanup block of
- * `src/client/styles.ts` is compared, property for property, against the values
- * of the official CSS module it mirrors.
+ * Source-text on purpose: jsdom applies no stylesheet, so only a real browser
+ * could assert these numbers by rendering.
  *
- * It is a source-text guard on purpose — CSS cannot be asserted through the
- * component tests (jsdom applies no stylesheet), and a rendered-diff test would
- * need a real browser for numbers this small. A change to any of these values —
- * or a new cleanup rule that nobody mapped — fails here, so drift is a
- * deliberate act rather than an accident.
- *
- * Official sources, all under
- * `packages/client/ui-settings-plugins/src/client/`:
- * - `PluginConfigForm.module.css` — the form shell, read-only/unavailable
- *   notice, footer, failure line, save button.
- * - `fields.module.css` — `ValueField`: field/head/labelGroup/label/badges/
- *   reset/input and the invalid border.
- * - `SubagentModelSelectionFields.module.css` — the permission block, the
- *   toggle row, and the hint (its `.hint`/`.notice` and `.invalid`/`.conflict`
- *   rules are selector lists; the merged values are asserted here).
- *
- * Deliberately NOT mirrored (no official counterpart in the structures this
- * form uses; see the card's module doc): `fields.module.css` `.helpButton` /
- * `.help*` (no help disclosure), `SubagentLimitsFields.module.css`
- * `.limits`/`.limit`/`.depthTable*` (a two-column layout for a different card)
- * and its `.limit input { font-variant-numeric: tabular-nums }`,
- * `SubagentCard.module.css` `.section`/`.heading` (the page draws the title and
- * this form is a single group), and the Subagent model-selection list rules
- * (`.selection`, `.models*`, `.model*`, `.route`, `.catalogError*`).
+ * Not mirrored, because the structures are not used (see the card's doc):
+ * `.helpButton`/`.help*`, `SubagentLimitsFields.module.css`
+ * `.limits`/`.limit`/`.depthTable*` (and its `tabular-nums`), `SubagentCard`'s
+ * `.section`/`.heading`, and the model-selection list rules.
  */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -43,211 +23,40 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 /** The prefix every class of this form carries. */
 const P = '.dsh-rewind-cleanup-'
 
-/** One rule's expected declarations, taken from the official CSS module. */
-interface Expectation {
-  /** Selector inside the cleanup block. */
-  readonly selector: string
-  /** The official module and selector this copies. */
-  readonly official: string
-  /** Exact declarations, in the official wording. */
-  readonly props: Readonly<Record<string, string>>
-}
-
 /** Every cleanup rule and its official counterpart. */
-const EXPECTATIONS: readonly Expectation[] = [
-  {
-    selector: `${P}form`,
-    official: 'PluginConfigForm.module.css .form',
-    props: { display: 'flex', 'flex-direction': 'column' },
-  },
-  {
-    selector: `${P}readonly`,
-    official: 'PluginConfigForm.module.css .readOnly, .unavailable',
-    props: { margin: '0 0 12px', 'font-size': '12px', 'line-height': '1.5', color: 'var(--dsw-alias-label-tertiary)' },
-  },
-  {
-    selector: `${P}unavailable`,
-    official: 'PluginConfigForm.module.css .readOnly, .unavailable',
-    props: { margin: '0 0 12px', 'font-size': '12px', 'line-height': '1.5', color: 'var(--dsw-alias-label-tertiary)' },
-  },
-  {
-    selector: `${P}footer`,
-    official: 'PluginConfigForm.module.css .footer',
-    props: { display: 'flex', 'align-items': 'center', gap: '8px', 'padding-top': '16px' },
-  },
-  {
-    selector: `${P}failed`,
-    official: 'PluginConfigForm.module.css .failed',
-    props: {
-      flex: '1',
-      'min-width': '0',
-      margin: '0',
-      'font-size': '12px',
-      'line-height': '1.5',
-      color: 'var(--dsw-alias-label-error)',
-    },
-  },
-  {
-    selector: `${P}save`,
-    official: 'PluginConfigForm.module.css .save',
-    props: {
-      appearance: 'none',
-      border: '1px solid transparent',
-      'border-radius': '8px',
-      padding: '5px 14px',
-      font: 'inherit',
-      'font-size': '13px',
-      'line-height': '1.5',
-      cursor: 'pointer',
-      background: 'var(--dsw-alias-label-primary)',
-      color: 'var(--dsw-alias-bg-layer-3)',
-    },
-  },
-  {
-    selector: `${P}save:disabled`,
-    official: 'PluginConfigForm.module.css .save:disabled',
-    props: { opacity: '0.4', cursor: 'default' },
-  },
-  {
-    selector: `${P}save:focus-visible`,
-    official: 'PluginConfigForm.module.css .save:focus-visible',
-    props: { outline: '2px solid var(--dsw-alias-brand-primary)', 'outline-offset': '1px' },
-  },
-  {
-    selector: `${P}permission`,
-    official: 'SubagentModelSelectionFields.module.css .permission',
-    props: { display: 'grid', gap: '6px', padding: '12px 0' },
-  },
-  {
-    selector: `${P}toggle-row`,
-    official: 'SubagentModelSelectionFields.module.css .toggleRow',
-    props: {
-      display: 'flex',
-      'align-items': 'flex-start',
-      'justify-content': 'space-between',
-      gap: '16px',
-      'font-size': '13px',
-      'line-height': '1.5',
-      color: 'var(--dsw-alias-label-primary)',
-    },
-  },
-  {
-    selector: `${P}toggle-label`,
-    official: 'SubagentModelSelectionFields.module.css .toggleLabel',
-    props: { flex: '1', 'min-width': '0' },
-  },
-  {
-    selector: `${P}hint`,
-    official: 'SubagentModelSelectionFields.module.css .hint (+ .hint, .notice colour rule)',
-    props: { margin: '0', 'font-size': '12px', 'line-height': '1.5', color: 'var(--dsw-alias-label-tertiary)' },
-  },
-  {
-    selector: `${P}error`,
-    official: 'fields.module.css .invalid',
-    props: {
-      margin: '0',
-      'font-size': '12px',
-      'line-height': '1.5',
-      color: 'var(--dsw-alias-state-error-primary)',
-    },
-  },
-  {
-    selector: `${P}field`,
-    official: 'fields.module.css .field',
-    props: { display: 'flex', 'flex-direction': 'column', gap: '6px', padding: '12px 0' },
-  },
-  {
-    selector: `${P}field + ${P}field`,
-    official: 'fields.module.css .field + .field',
-    props: { 'border-top': '0.5px solid var(--dsw-alias-border-l2)' },
-  },
-  {
-    selector: `${P}head`,
-    official: 'fields.module.css .head',
-    props: { display: 'flex', 'align-items': 'center', gap: '8px' },
-  },
-  {
-    selector: `${P}label-group`,
-    official: 'fields.module.css .labelGroup',
-    props: { display: 'flex', 'align-items': 'center', gap: '4px', flex: '1', 'min-width': '0' },
-  },
-  {
-    selector: `${P}label`,
-    official: 'fields.module.css .label',
-    props: {
-      flex: '1',
-      'min-width': '0',
-      'font-size': '13px',
-      'font-weight': '500',
-      'line-height': '1.5',
-      color: 'var(--dsw-alias-label-primary)',
-    },
-  },
-  {
-    selector: `${P}label-group > ${P}label`,
-    official: 'fields.module.css .labelGroup > .label',
-    props: { flex: '0 1 auto' },
-  },
-  {
-    selector: `${P}badges`,
-    official: 'fields.module.css .badges',
-    props: { display: 'inline-flex', 'align-items': 'center', gap: '8px' },
-  },
-  {
-    selector: `${P}reset`,
-    official: 'fields.module.css .reset',
-    props: {
-      border: 'none',
-      background: 'none',
-      padding: '0',
-      font: 'inherit',
-      'font-size': '12px',
-      'line-height': '1.5',
-      color: 'var(--dsw-alias-label-secondary)',
-      cursor: 'pointer',
-    },
-  },
-  {
-    selector: `${P}reset:hover:not(:disabled)`,
-    official: 'fields.module.css .reset:hover:not(:disabled)',
-    props: { color: 'var(--dsw-alias-label-primary)' },
-  },
-  {
-    selector: `${P}reset:disabled`,
-    official: 'fields.module.css .reset:disabled',
-    props: { cursor: 'default' },
-  },
-  {
-    selector: `${P}input`,
-    official: 'fields.module.css .input',
-    props: {
-      height: '34px',
-      padding: '0 12px',
-      border: '0.5px solid var(--dsw-alias-border-l4)',
-      'border-radius': '8px',
-      background: 'var(--dsw-alias-bg-layer-3)',
-      font: 'inherit',
-      'font-size': '13px',
-      'line-height': '1.5',
-      color: 'var(--dsw-alias-label-primary)',
-    },
-  },
-  {
-    selector: `${P}input:focus-visible`,
-    official: 'fields.module.css .input:focus-visible',
-    props: { outline: 'none', 'border-color': 'var(--dsw-alias-brand-primary)' },
-  },
-  {
-    selector: `${P}input:disabled`,
-    official: 'fields.module.css .input:disabled',
-    props: { color: 'var(--dsw-alias-label-tertiary)', cursor: 'default' },
-  },
-  {
-    selector: `${P}input[aria-invalid='true']`,
-    official: "fields.module.css .input[aria-invalid='true']",
-    props: { 'border-color': 'var(--dsw-alias-state-error-primary)' },
-  },
-]
+/**
+ * One rule: the official module + selector it mirrors, and that selector's exact
+ * declarations (`prop:value`, `;`-separated), copied from the official CSS.
+ */
+const EXPECTATIONS: Readonly<Record<string, readonly [official: string, declarations: string]>> = {
+  [`${P}form`]: ['PluginConfigForm.module.css .form', 'display:flex; flex-direction:column'],
+  [`${P}readonly`]: ['PluginConfigForm.module.css .readOnly, .unavailable', 'margin:0 0 12px; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-tertiary)'],
+  [`${P}unavailable`]: ['PluginConfigForm.module.css .readOnly, .unavailable', 'margin:0 0 12px; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-tertiary)'],
+  [`${P}footer`]: ['PluginConfigForm.module.css .footer', 'display:flex; align-items:center; gap:8px; padding-top:16px'],
+  [`${P}failed`]: ['PluginConfigForm.module.css .failed', 'flex:1; min-width:0; margin:0; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-error)'],
+  [`${P}save`]: ['PluginConfigForm.module.css .save', 'appearance:none; border:1px solid transparent; border-radius:8px; padding:5px 14px; font:inherit; font-size:13px; line-height:1.5; cursor:pointer; background:var(--dsw-alias-label-primary); color:var(--dsw-alias-bg-layer-3)'],
+  [`${P}save:disabled`]: ['PluginConfigForm.module.css .save:disabled', 'opacity:0.4; cursor:default'],
+  [`${P}save:focus-visible`]: ['PluginConfigForm.module.css .save:focus-visible', 'outline:2px solid var(--dsw-alias-brand-primary); outline-offset:1px'],
+  [`${P}permission`]: ['SubagentModelSelectionFields.module.css .permission', 'display:grid; gap:6px; padding:12px 0'],
+  [`${P}toggle-row`]: ['SubagentModelSelectionFields.module.css .toggleRow', 'display:flex; align-items:flex-start; justify-content:space-between; gap:16px; font-size:13px; line-height:1.5; color:var(--dsw-alias-label-primary)'],
+  [`${P}toggle-label`]: ['SubagentModelSelectionFields.module.css .toggleLabel', 'flex:1; min-width:0'],
+  [`${P}hint`]: ['SubagentModelSelectionFields.module.css .hint (+ .hint, .notice colour rule)', 'margin:0; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-tertiary)'],
+  [`${P}error`]: ['fields.module.css .invalid', 'margin:0; font-size:12px; line-height:1.5; color:var(--dsw-alias-state-error-primary)'],
+  [`${P}field`]: ['fields.module.css .field', 'display:flex; flex-direction:column; gap:6px; padding:12px 0'],
+  [`${P}field + ${P}field`]: ['fields.module.css .field + .field', 'border-top:0.5px solid var(--dsw-alias-border-l2)'],
+  [`${P}head`]: ['fields.module.css .head', 'display:flex; align-items:center; gap:8px'],
+  [`${P}label-group`]: ['fields.module.css .labelGroup', 'display:flex; align-items:center; gap:4px; flex:1; min-width:0'],
+  [`${P}label`]: ['fields.module.css .label', 'flex:1; min-width:0; font-size:13px; font-weight:500; line-height:1.5; color:var(--dsw-alias-label-primary)'],
+  [`${P}label-group > ${P}label`]: ['fields.module.css .labelGroup > .label', 'flex:0 1 auto'],
+  [`${P}badges`]: ['fields.module.css .badges', 'display:inline-flex; align-items:center; gap:8px'],
+  [`${P}reset`]: ['fields.module.css .reset', 'border:none; background:none; padding:0; font:inherit; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-secondary); cursor:pointer'],
+  [`${P}reset:hover:not(:disabled)`]: ['fields.module.css .reset:hover:not(:disabled)', 'color:var(--dsw-alias-label-primary)'],
+  [`${P}reset:disabled`]: ['fields.module.css .reset:disabled', 'cursor:default'],
+  [`${P}input`]: ['fields.module.css .input', 'height:34px; padding:0 12px; border:0.5px solid var(--dsw-alias-border-l4); border-radius:8px; background:var(--dsw-alias-bg-layer-3); font:inherit; font-size:13px; line-height:1.5; color:var(--dsw-alias-label-primary)'],
+  [`${P}input:focus-visible`]: ['fields.module.css .input:focus-visible', 'outline:none; border-color:var(--dsw-alias-brand-primary)'],
+  [`${P}input:disabled`]: ['fields.module.css .input:disabled', 'color:var(--dsw-alias-label-tertiary); cursor:default'],
+  [`${P}input[aria-invalid='true']`]: ['fields.module.css .input[aria-invalid=\'true\']', 'border-color:var(--dsw-alias-state-error-primary)'],
+}
 
 /**
  * Parse one CSS text into `selector -> declarations`, expanding selector lists
@@ -286,8 +95,14 @@ function cleanupRules(): Map<string, Record<string, string>> {
 describe('cleanup form styles (exact numbers from the official CSS modules)', () => {
   const rules = cleanupRules()
 
-  for (const { selector, official, props } of EXPECTATIONS) {
+  for (const [selector, [official, declarations]] of Object.entries(EXPECTATIONS)) {
     it(`${selector} matches ${official}`, () => {
+      const props: Record<string, string> = {}
+      for (const declaration of declarations.split(';')) {
+        const at = declaration.indexOf(':')
+        if (at < 0) continue
+        props[declaration.slice(0, at).trim()] = declaration.slice(at + 1).trim()
+      }
       expect(rules.get(selector), `${selector} is missing`).toBeDefined()
       expect(rules.get(selector)).toEqual(props)
     })
@@ -297,7 +112,7 @@ describe('cleanup form styles (exact numbers from the official CSS modules)', ()
     // Every cleanup selector must be mapped above, so a new rule cannot slip in
     // unpinned (the assertion above already pins each mapped one's numbers).
     const unmapped = [...rules.keys()].filter(selector => selector.startsWith(P))
-      .filter(selector => !EXPECTATIONS.some(expectation => expectation.selector === selector))
+      .filter(selector => !Object.hasOwn(EXPECTATIONS, selector))
     expect(unmapped).toEqual([])
   })
 

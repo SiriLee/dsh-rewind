@@ -1,17 +1,9 @@
 /**
- * Test stand-in for `@deepseek-ai/dsh-client-ui-primitives`.
- *
- * The published bundle of the real package imports the heavyweight libraries
- * the Web shell supplies at runtime (`shiki/core`, `@shikijs/*`, `anser`, …),
- * which a plugin checkout does not install — so any test that loads the client
- * entry (which reaches this package through the settings form) would fail to
- * resolve them. `vitest.config.ts` aliases the specifier here for the whole
- * suite; the plugin's own code still typechecks against the REAL package's
- * declarations, and this stub mirrors only the contract the plugin renders
- * against.
- *
- * Extend the stub when the plugin starts using more of the primitives
- * (a missing export fails loudly at test time, not silently).
+ * Test stand-in for `@deepseek-ai/dsh-client-ui-primitives`, aliased in
+ * `vitest.config.ts`: the published bundle imports shell-supplied heavyweights
+ * (`shiki/core`, `anser`, …) that a plugin checkout does not install. The
+ * plugin's own code still typechecks against the real declarations, so add an
+ * export here when it starts using more of the package.
  *
  * @module tests/support/ui-primitives-stub
  */

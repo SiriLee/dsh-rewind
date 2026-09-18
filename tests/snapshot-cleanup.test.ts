@@ -254,7 +254,7 @@ describe('runAutoCleanupCheck', () => {
     abort.abort()
     await runAutoCleanupCheck({ ...deps(enabled()), signal: abort.signal }, 'active')
     await expect(staleExists('old')).resolves.toBe(true)
-    // The window is untouched too: a fresh mount must still see the sweep as due.
+    // The window is untouched too, so a fresh mount still sees the sweep as due.
     await expect(loadLastSweepAt(state)).resolves.toBeLessThanOrEqual(now() - 40 * day + 1000)
   })
 
@@ -279,7 +279,7 @@ describe('runAutoCleanupCheck', () => {
     await runAutoCleanupCheck({
       ...base,
       signal: abort.signal,
-      // The prune is where a live unload lands: its completion is not awaited.
+      // A live unload landing on the prune itself.
       pruner: {
         pruneStale: async (opts) => {
           abort.abort()
@@ -288,8 +288,8 @@ describe('runAutoCleanupCheck', () => {
       },
     }, 'active')
     await expect(staleExists('old')).resolves.toBe(false) // the sweep itself ran
-    // Not re-anchored: the next mount must not be throttled for 24h by a sweep
-    // this mount never finished owning.
+    // Not re-anchored: the next mount must not be throttled by a sweep this one
+    // never finished owning.
     await expect(loadLastSweepAt(state)).resolves.toBeLessThanOrEqual(now() - 40 * day + 1000)
   })
 })

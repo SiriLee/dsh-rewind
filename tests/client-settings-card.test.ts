@@ -320,15 +320,6 @@ describe('SettingsCleanupCard', () => {
     expect(on.message()?.textContent).toBe('cleanup.maxAge.hint')
   })
 
-  it('stages the switch without writing', () => {
-    const { api, writes } = fakeApi({ user: { maxAgeDays: 45 } })
-    const view = mount(api)
-    act(() => { view.switch()?.click() })
-    expect(view.switch()?.getAttribute('aria-checked')).toBe('true')
-    expect(writes).toHaveLength(0) // staged, never written on click
-    expect(view.save()?.disabled).toBe(false)
-  })
-
   it('shows the overridden badge and reset for a staged set, before any save', () => {
     // The field is inherited (not stored) but saving WOULD leave an override.
     const { api } = fakeApi()
@@ -373,11 +364,14 @@ describe('SettingsCleanupCard', () => {
     expect(view.input()?.value).toBe('30')
   })
 
-  it('writes every staged field in order and drops the drafts when they land', async () => {
+  it('stages without writing, then writes every field in order and drops the drafts', async () => {
     const { api, writes } = fakeApi({ user: { maxAgeDays: 45 } })
     const view = mount(api)
     act(() => { view.switch()?.click() })
+    expect(view.switch()?.getAttribute('aria-checked')).toBe('true')
+    expect(view.save()?.disabled).toBe(false)
     act(() => { setText(view.input()!, '7') })
+    expect(writes).toHaveLength(0) // staged, never written before the save
     await act(async () => { view.save()?.click() })
     expect(writes).toEqual([
       { op: 'set', field: 'enabled', value: true },
@@ -396,17 +390,10 @@ describe('SettingsCleanupCard', () => {
     act(() => { setText(view.input()!, '5') })
     await act(async () => { view.save()?.click() })
     expect(view.root.textContent).toContain('cleanup.saveFailed')
-    // The official form keeps the drafts so the user can correct them.
+    // The official form keeps the drafts so the user can correct them...
     expect(view.input()?.value).toBe('5')
     expect(view.save()?.disabled).toBe(false)
-  })
-
-  it('clears the failure line on the next edit', async () => {
-    const { api } = fakeApi({ user: { enabled: true, maxAgeDays: 30 }, reject: 'maxAgeDays' })
-    const view = mount(api)
-    act(() => { setText(view.input()!, '5') })
-    await act(async () => { view.save()?.click() })
-    expect(view.root.textContent).toContain('cleanup.saveFailed')
+    // ...and the next edit clears the failure line.
     act(() => { setText(view.input()!, '6') })
     expect(view.root.textContent).not.toContain('cleanup.saveFailed')
   })

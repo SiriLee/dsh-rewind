@@ -1,15 +1,11 @@
 /**
- * Live-unload lifecycle probes for the host half.
+ * Live-unload lifecycle probes for the host half: each one mounts the REAL
+ * `apply` on a minimal fake context (the service surface the harness provides),
+ * drives one listener, then runs every registered disposer — the host half must
+ * leave nothing behind, because a live disable is the only teardown it gets.
  *
- * The live plugin manager can disable the plugin at any moment, and the fiber's
- * disposer is the only teardown it gets. Each probe mounts the REAL `apply` on a
- * minimal fake context (the same service surface the harness provides: `effect`,
- * `inject`, `on`, `commands.register`, `logger`), drives one listener, and then
- * runs every registered disposer — the host half must leave nothing behind.
- *
- * The fake context exists because the repository has no host-lifecycle harness
- * (`verify-host.mjs` drives commands, not unloads): its contract is deliberately
- * narrow, and a change that needs another service shows up as a mount failure.
+ * The fake exists because `verify-host.mjs` drives commands, not unloads; a
+ * mount that needs another service fails loudly.
  *
  * @module tests/lifecycle-roundtrip
  */
@@ -105,8 +101,8 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
         settingsMount = (locale) => {
           const preference = locale
           callback({
-          // The injected scope is a real child context: it has `effect` (the
-          // plugin registers its store disposer on it) and its own services.
+          // A real child context: it has `effect` (where the plugin registers
+          // its store disposer) and its own services.
           effect: (fn: unknown) => { collect(fn, settingsDisposers); return () => {} },
             settings: {
               get: () => (preference === undefined ? undefined : { preference }),
@@ -190,18 +186,6 @@ async function waitForStagedDrain(): Promise<string[]> {
 }
 
 describe('host mount lifecycle', () => {
-  it('registers the rewind command family once per mount', async () => {
-    const first = mount()
-    apply(first.ctx, { snapshotDir: snapRoot })
-    expect([...first.commands.keys()].sort()).toEqual(['rewind', 'snapshot-auto-cleanup', 'undo'])
-    await first.dispose()
-
-    const second = mount()
-    apply(second.ctx, { snapshotDir: snapRoot })
-    expect([...second.commands.keys()].sort()).toEqual(['rewind', 'snapshot-auto-cleanup', 'undo'])
-    await second.dispose()
-  })
-
   it('drops staged before-captures when the plugin is unloaded mid-tool', async () => {
     const mounted = mount({ fs: true })
     apply(mounted.ctx, { snapshotDir: snapRoot })

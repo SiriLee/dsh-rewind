@@ -115,11 +115,9 @@ describe('I1 log replayability (probe: token-meter + resume preflight)', () => {
   })
 
   it('a log carrying workspace/changes announcements stays replayable and surface-stable', () => {
-    // DSH 0.1.6-alpha.2 announces a turn's workspace changes as a log-only,
-    // NON-surface event (`deliverables/workspace-changes` appends
-    // `workspace/changes` `{ turn }`). It must not join the surface, must not
-    // move a rewind plan, and must not break either replay consumer — the
-    // turn-deliverables card hangs off exactly these announcements.
+    // `deliverables/workspace-changes` appends a log-only, NON-surface
+    // `workspace/changes` `{ turn }` per turn. It must not join the surface,
+    // move a rewind plan, or break either replay consumer.
     const baseline = buildTurnedSession()
     const session = buildTurnedSession()
     const target = session.surface.nodes.find(seq =>
