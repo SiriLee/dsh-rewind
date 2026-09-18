@@ -61,7 +61,7 @@ src/client/index.ts     client plugin: /rewind command decoration + per-message 
 src/client/popover.ts   mode-selection popover (both-mode impact confirm)
 src/client/hidden.ts    withdrawn-span computation (hiddenSeqsOf), pure
 src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
-src/client/pending.ts   pending-steering bubble ↔ queue-mirror matching, pure
+src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
 src/client/locales.ts   zh / en copy (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
 src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_REWIND_BUILD__)

@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.6-alpha.1` (the range the peers and `dsh.engines.dsh` declare).
+> Targeted version: npm `@deepseek-ai/*@0.1.6-alpha.2` (the range the peers and `dsh.engines.dsh` declare).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
@@ -15,7 +15,9 @@
 > share the range comparator's `[major, minor, patch]` tuple, so a new DSH tuple
 > replaces the peer tuple (single-line model). The range is conservative — it
 > declares only what was verified, so a release already inside it changes
-> nothing. Signal: `npm view @deepseek-ai/dsh dist-tags`;
+> nothing — unless it changes interfaces inside the tuple: `0.1.6-alpha.2`
+> removed the client session-ownership and queue-mirror APIs, so the peer floor
+> moved to it. Signal: `npm view @deepseek-ai/dsh dist-tags`;
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
 > prerelease published under another tag is a manual pre-release check).
 >
@@ -61,6 +63,9 @@ legacy branch).
 - **plan-mode**: the marker is a turn-less `user/message` (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
 - **settings-card registration**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject would keep the whole client plugin unmounted on a host without that service (card and rewind button would disappear). It reads `getSnapshot().value` + `set`, never the `mutate` write API.
+- **client session ownership (`0.1.6-alpha.2`)**: `SessionListState.current` / `currentAddress` are gone; main-view ownership is read from the row's `retainedBy.mainView` label — what `ui-workspace` retains the open session with. Pin: `tests/client-refill.test.ts`.
+- **client pending input (`0.1.6-alpha.2`)**: `SessionSnapshot.queue` and the host `queue-mirror` are gone; pending steering rows come from the session's own `inbox` projection, and only USER-sourced `next-step` rows are retractable (the removed mapping was `source.kind === 'user' ? 'steering' : 'context'`). Pins: `tests/pending.test.ts`, `tests/client-retract.test.ts`.
+- **client settings slot (`0.1.6-alpha.2`)**: `settings.plugin.item` is gone; the configuration form registers into `plugins.bundle.config`, keyed by the bundle package name. Pin: `tests/client-contract.test.ts`.
 
 - **`agent/created` lifecycle guard**: the session-format reconcile runs on the alpha line's `agent/created` (fire-and-forget); pin: `verify-host` 4e dispatches it.
 - **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
