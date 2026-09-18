@@ -139,11 +139,9 @@ export interface AutoCleanupPruner {
 }
 
 /**
- * Whether the caller's mount has been aborted. A function, not an inline
- * comparison: the flag flips asynchronously between awaits, and reading it
- * through a call keeps each check honest (an inlined `signal?.aborted === true`
- * narrows to a constant after the first check and would be reported as a
- * comparison with no overlap).
+ * Whether the caller's mount has been aborted. A call, not an inline
+ * comparison: the flag flips between awaits, and TypeScript narrows an inlined
+ * check to a constant after the first one.
  * @param signal - the mount lifecycle signal, when the caller has one.
  * @returns whether the mount has been aborted.
  */

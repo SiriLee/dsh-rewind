@@ -1004,12 +1004,10 @@ async function handleClearCurrent(
  *  `dshHome` (harness-home override feeding the default paths), `dedup`.
  */
 export function apply(ctx: Context, config?: RewindConfig): void {
-  // Fresh per-mount host state. These three values live at module scope because
-  // the module-level helpers below (`t`, `readCleanupPolicy`,
-  // `maybeRunAutoCleanup`) read them without a ctx thread; resetting them at
-  // every apply gives them per-mount semantics without that refactor. A stale
-  // locale, a disposed settings scope, or an already-fired one-shot sweep gate
-  // would otherwise survive a live disable → enable round trip.
+  // Fresh per-mount host state: these three live at module scope because
+  // module-level helpers read them without a ctx thread, and a stale locale, a
+  // disposed settings scope or a fired one-shot sweep gate would otherwise
+  // survive a live disable → enable round trip.
   activeLocale = 'en'
   cleanupStore = undefined
   autoSweepChecked = false
@@ -1024,13 +1022,10 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
-  // Live unload must not leave staged before-bytes behind: a capture is staged
-  // at `tools/execute` and consumed at `tools/post-execute` (or dropped at
-  // `tools/result`), neither of which runs for a fiber that was disposed in
-  // between. The store's `prune` would eventually collect the `.pending/`
-  // leftovers, but only after they went stale. `discardCapture` is idempotent
-  // (a consumed capture is already gone), and the disposer is async so the
-  // fiber reports inert only after the bytes are really removed.
+  // A capture staged at `tools/execute` is consumed at `tools/post-execute` (or
+  // dropped at `tools/result`); neither runs for a fiber disposed in between, so
+  // the bytes would linger until `prune` calls them stale. `discardCapture` is
+  // idempotent, and the async disposer keeps the fiber inert until they are gone.
   ctx.effect(() => () => {
     const captures = [...pending.values()]
     pending.clear()
@@ -1069,12 +1064,10 @@ export function apply(ctx: Context, config?: RewindConfig): void {
         }
       }
     }
-    // Read the durable locale preference. The 0.1.2-rc.1 settings provider
-    // accepts the raw namespace string ('locale'); no brand helper is needed.
-    // The fallback is applied FIRST: this scope can also remount on its own (a
-    // live-reload restart) while the plugin stays mounted, and a document
-    // without a preference must yield the neutral default rather than the
-    // previous document's language.
+    // Read the durable locale preference (the provider takes the raw namespace
+    // string). The fallback comes FIRST: this scope can remount on its own (a
+    // live-reload restart), and a document without a preference must yield the
+    // neutral default, not the previous document's language.
     activeLocale = 'en'
     const section = settings.settings.get('locale') as
       | { preference?: HostLocaleId }
@@ -1140,9 +1133,8 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     if (isSubagentSession(session)) return
     void (async () => {
       try {
-        // A live unload between the event and this body must not write under a
-        // disposed owner (the live plugin manager can disable the plugin at any
-        // moment; the fiber's disposer aborts this signal).
+        // An unload between the event and this body must not write under a
+        // disposed owner (the fiber's disposer aborts this signal).
         if (lifecycle.signal.aborted) return
         // Stamp snapshots recorded after this point with the loaded session's
         // format, so a future format change is detected.

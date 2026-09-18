@@ -2,24 +2,13 @@
  * Pure pending-message matching: pairs the rendered pre-admission steering
  * bubble rows with the session's `next-step` inbox rows.
  *
- * Both sides derive from the host's next-step inbox order — the ChatView
- * renders `pendingSteering` in array order and the queue mirror keeps the same
- * host order — so index-primary matching is reliable. Text equality is still
- * verified as a per-row cross-check, and a row that fails (or a row with no
- * mirror item, or a mirror item with no row) is skipped INDIVIDUALLY: one bad
- * row never takes down the other rows' buttons. The matching text is the
- * bubble's message text WITHOUT its actions container — the harness copy
- * button's Tooltip mounts a label bubble inside that container on hover, so
- * the full row textContent would flip between "message" and "message+Copy"
- * with the mouse, flickering the button (see `bubbleTextOf` in portals.tsx).
- *
- * DSH 0.1.6-alpha.2 removed the `SessionSnapshot.queue` mirror (and the host's
- * `queue-mirror.ts`), so these rows now come from the session's own `inbox`
- * projection (`next-turn` = queued, `next-step` = steering, user-sourced rows
- * only — see `steeringItemsOf`). `steeringItemsOf` derives the retract fields
- * from those rows with the SAME rules the harness QueueDock uses, so the DOM
- * text this module matches and the preview the popover shows cannot drift from
- * what the dock renders.
+ * Both sides follow the same host order, so index-primary matching is reliable;
+ * text equality is still verified per row, and a row that fails (or has no
+ * counterpart) is skipped INDIVIDUALLY: one bad row never takes down the other
+ * rows' buttons. The compared text excludes the bubble's actions container —
+ * the copy button's Tooltip mounts a label bubble there on hover, so the row's
+ * full `textContent` would flip between "message" and "message+Copy" with the
+ * mouse (see `bubbleTextOf` in portals.tsx).
  *
  * The browser half lives in `portals.tsx`; this module stays DOM-free so the
  * matching contract is unit-testable in a plain node environment.
@@ -105,16 +94,13 @@ function previewOf(content: readonly InboxBlockLike[]): string {
 /**
  * Project the inbox `next-step` rows into the fields the retract path needs.
  *
- * ONLY user-sourced rows are steering. The host's deleted mapping
- * (`queueItemsFromInbox`) classified a `next-step` row as `steering` when
- * `message.source.kind === 'user'` and as `context` otherwise, and this plugin
- * has only ever retracted the former. A `context` row is a plugin/command
- * injection the user never typed, so it must not be offered a retract button —
- * and, because `retractSpan` removes the target AND everything after it in the
- * list, keeping those rows would also let one retract silently drop injected
- * messages. The rendered rows the matcher pairs against are the browser's own
- * submission echoes (user rows by construction), so a context row would
- * additionally shift the positional match and cost every later row its button.
+ * ONLY user-sourced rows are steering: the host's deleted mapping
+ * (`queueItemsFromInbox`) called a `next-step` row `steering` for
+ * `source.kind === 'user'` and `context` otherwise, and this plugin has only
+ * ever retracted the former. An injected row must not get a button, and because
+ * `retractSpan` removes the target AND its future it must not be swept into a
+ * retract either; keeping it would also shift the positional match against the
+ * rendered submission echoes and cost every later row its button.
  * @param nextStep - the inbox projection's `next-step` list (absent before the
  *   fold state exists, hence `undefined`).
  * @returns one item per USER steering row, in host (FIFO) order.

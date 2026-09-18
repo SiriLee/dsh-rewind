@@ -163,13 +163,10 @@ export function apply(ctx: ClientContext): void {
     const sessionOf = (sessionId: string): SessionFace | undefined =>
       ctx.sessions.binding(sessionId as SessionId)?.session
     /**
-     * Whether a session is the one the MAIN VIEW currently retains.
-     *
-     * DSH 0.1.6-alpha.2 removed `SessionListState.current`/`currentAddress` (the
-     * old navigation cell), so the plugin mirrors the harness's own "is main"
-     * check (ui-session) on the list row's `mainView` reference count. A
-     * predicate, not "the current session id": with two windows the id-shaped
-     * form would have to guess which retained row is the one on screen.
+     * Whether a session is the one the MAIN VIEW retains — what
+     * `SessionListState.current` used to say before 0.1.6-alpha.2 deleted it; it
+     * is the `mainView` count `ui-session` itself checks. A predicate rather
+     * than "the current session id", so two windows cannot pick the wrong one.
      */
     const isMainViewSession = (sessionId: string): boolean =>
       (ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0
@@ -280,17 +277,16 @@ export function apply(ctx: ClientContext): void {
     clientCtx.inject(['settingsScope'], (scoped) => {
       try {
         const scope = scoped.settingsScope.bind<CleanupPolicy>({ namespace: CLEANUP_SETTINGS_NAMESPACE })
-        // The three reads the official CardForm performs on its scope: the
-        // resolved value, the composition base a reset reverts to, and the raw
-        // user layer whose PRESENCE marks a field overridden.
+        // The reads the official CardForm performs: resolved value, the
+        // composition base a reset reverts to, and the raw user layer whose
+        // PRESENCE (not its value) marks a field overridden.
         const userLayer = (): Record<string, unknown> | undefined => {
           const user = scope.getSnapshot().user
           return typeof user === 'object' && user !== null ? user as Record<string, unknown> : undefined
         }
         const cardApi: CleanupCardApi = {
-          // The official shell reads `status === 'ready'`: a namespace that is
-          // still loading is not available, so the form must not offer fields
-          // nothing would accept yet.
+          // The official shell reads `status === 'ready'`; a loading namespace
+          // is not available, so the form offers no fields yet.
           available: () => scope.getSnapshot().status === 'ready',
           writable: () => {
             // The harness's own writable signal (a read-only settings source
@@ -304,8 +300,8 @@ export function apply(ctx: ClientContext): void {
             const user = userLayer()
             return user !== undefined && Object.hasOwn(user, field)
           },
-          // The Host is the only authority on whether a write landed, so each
-          // one reports the read-back the official `CardForm.store` performs.
+          // The Host decides whether a write landed: report the read-back the
+          // official `CardForm.store` performs.
           set: async (field, value) => {
             await scope.set(field, value)
             return userLayer()?.[field] === value

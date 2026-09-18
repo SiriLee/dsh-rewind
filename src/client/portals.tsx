@@ -34,14 +34,9 @@
  * standards-conformant alternative does not exist today; it is not a defect to
  * be removed while the DOM-portal approach stands.
  *
- * All five attributes were re-verified against DSH 0.1.6-alpha.2: the anchor key
- * and the flow kind are still produced together by `ChatNodeSeat` from the routed
- * chat node (`key`/`kind`, whose user-facing values are `user` and `steering`,
- * the same pair the harness's own `ChatView` filters on), and the composer
- * editable/card markers still sit on `ComposerContentEditable` and `InputBar`.
- * The `data-time-hover-root` marker this module used to name no longer exists in
- * alpha.2; the actions-row finder never read it (it is structural — see
- * `actionsContainerOf`), so only this note had to change.
+ * Re-verified against 0.1.6-alpha.2: the four remaining anchors still exist (the
+ * anchor key and flow kind still come from `ChatNodeSeat`, values `user` /
+ * `steering`); only `data-time-hover-root` is gone, and nothing read it.
  *
  * @module dsh-rewind/client/portals
  */

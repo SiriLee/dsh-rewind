@@ -28,16 +28,9 @@ export const PLUGIN_VERSION: string =
   typeof __DSH_REWIND_VERSION__ === 'string' ? __DSH_REWIND_VERSION__ : 'dev'
 
 /**
- * The bundle's package name. One identity, three consumers:
- *   - the client entry id `lib/client.js` registers with
- *     (`window.__ModuleLoader__.load({ id })`, stamped from `package.json`);
- *   - the `plugins.bundle.config` key the Plugins page dispatches a bundle's
- *     configuration form by;
- *   - the `data-plugin` marker on the injected `<style>`, which the harness's
- *     `removeOwnedStyles(entryId)` fallback matches against the loader row id —
- *     a different value here means the plugin's own disposer is the only thing
- *     that ever removes the styles.
- * A test pins it to `package.json`'s name.
+ * The bundle's package name — one identity for the client entry id, the
+ * `plugins.bundle.config` key and the `<style data-plugin>` marker the
+ * harness's owned-style fallback matches; a test pins it to `package.json`.
  */
 export const PLUGIN_PACKAGE = 'dsh-rewind-plugin'
 

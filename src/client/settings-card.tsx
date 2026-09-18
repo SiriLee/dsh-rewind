@@ -1,56 +1,24 @@
 /**
- * dsh-rewind client settings card: the "Snapshot cleanup" configuration form
- * on the bundle's own page under the sidebar's Plugins page.
+ * dsh-rewind's configuration form for the Snapshot cleanup policy, rendered on
+ * this bundle's page under the sidebar's Plugins page (`plugins.bundle.config`,
+ * keyed by the bundle package name — 0.1.6-alpha.2 deleted the per-namespace
+ * `settings.plugin.item` slot).
  *
- * DSH 0.1.6-alpha.2 removed the per-namespace Settings ▸ Plugins card slot
- * (`settings.plugin.item`) and moved every plugin's configuration to the
- * Plugins page, which asks a BUNDLE for its form through
- * `plugins.bundle.config` (keyed by the bundle's package name; the page draws
- * the title, the icon, and the crumb itself). This module is that form.
- *
- * The harness's own plugin forms are package-internal — `PluginConfigForm`,
- * `CardForm` and `ValueField` ship inside `ui-settings-plugins`, whose `files`
- * is `lib/**` only — so this module re-implements their exact behaviour and
- * values rather than importing them. Every rule below mirrors those three:
- *
- * - `CardForm` staging (`card-form.ts`): a field shows its effective value;
- *   `overridden` is the write a save WOULD leave (a staged `set` answers for
- *   itself, a staged clear answers false, otherwise the user layer's presence);
- *   `dirty` and `invalid` are both derived from the planned writes, so an
- *   invalid draft plans an entry with no write — the form stays dirty and the
- *   save refuses rather than dropping the text; editing back to the effective
- *   value, or clearing a field the user layer never carried, is not an edit;
- *   `resetField` stages a clear whose TEXT is the composition value, so the
- *   control immediately shows what the field reverts to; a save writes in
- *   staging order and drops the drafts only when every write landed.
- * - `PluginConfigForm` chrome: an unavailable namespace replaces the whole form
- *   with one status line; a read-only document says so above the controls; the
- *   save is blocked by "not dirty / invalid / saving" (not by read-only, which
- *   the disabled controls already cover); a failed save shows the fixed
- *   "deployment did not accept these values" line and KEEPS the drafts;
- *   leaving the page drops them.
- * - `ValueField` layout: `.head > .labelGroup(.label) + .badges(Tag + reset)`,
- *   the message paragraph carrying `${id}-message` wired through
- *   `aria-describedby`, and the invalid copy replacing the hint in place.
- *
- * The card is the official SUBSET for one boolean and one number: the switch
- * follows `SubagentModelSelectionFields` (label + `Switch` row, hint below, NO
- * override badge — the official ships no boolean-with-reset control, so its
- * entry point is the plain staged toggle), the number follows `ValueField`, and
- * the footer follows `PluginConfigForm`.
+ * The harness forms (`PluginConfigForm`, `CardForm`, `ValueField`) are
+ * package-internal — `ui-settings-plugins` ships `lib/**` only — so their
+ * behaviour and numbers are re-implemented here rather than imported; each rule
+ * below names the official function it mirrors. The switch follows
+ * `SubagentModelSelectionFields` (the official ships no boolean-with-reset
+ * control, so its entry point is the plain staged toggle) and the number
+ * follows `ValueField`.
  *
  * Two deliberate divergences, both where the official provides the entry point
- * but no card exercises it:
- * - the optional `help` disclosure is unused: it needs a second, help-only copy
- *   and our single hint already carries the explanation (as in `BashCard`);
- * - `placeholder` shows the host default, because an empty draft now means
- *   "leave the default" and nothing else would tell the user what that is.
+ * but no card uses it: the optional `help` disclosure is unused (it needs a
+ * second, help-only copy), and `placeholder` shows the host default (an empty
+ * draft means "use the default", and nothing else would say what that is).
  *
- * It neither imports the client settings typed contract nor depends on the
- * 0.1.2-rc.1-only `mutate` write API: it reads the effective value, the
- * composition base and the user layer through a structural
- * {@link CleanupCardApi} supplied by `src/client/index.ts`, so the component
- * stays harness-agnostic and unit-testable in isolation.
+ * The transport is the structural {@link CleanupCardApi} supplied by
+ * `src/client/index.ts`: no client-settings type import, no `mutate`.
  *
  * @module dsh-rewind/client/settings-card
  */
@@ -59,10 +27,8 @@ import { useEffect, useState } from 'react'
 import { Switch, Tag } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
- * The dsh-settings namespace the card binds to. Duplicated here (not imported
- * from the host module) because the client build must stay free of host/node
- * imports; a cross-config test pins it equal to the host's constant. The
- * settings grammar forbids dots, so this is hyphenated.
+ * The dsh-settings namespace, duplicated from the host module (the client build
+ * must stay free of host/node imports); both sides pin the literal.
  */
 export const CLEANUP_SETTINGS_NAMESPACE = 'dsh-rewind-snapshot-cleanup'
 
@@ -142,10 +108,9 @@ export type MaxAgeWrite = { readonly kind: 'clear' } | { readonly kind: 'set'; r
 export type FieldWrite = { readonly kind: 'clear' } | { readonly kind: 'set'; readonly value: CleanupValue }
 
 /**
- * The write a max-age draft stages, or undefined when the text is not a value
- * this field accepts (which blocks the save rather than dropping the edit). An
- * EMPTY draft clears the field, matching the official `numberField` spec:
- * leaving the control blank re-inherits the default instead of being invalid.
+ * The write a max-age draft stages, or undefined when the draft is not a value
+ * this field accepts (an invalid draft blocks the save rather than dropping the
+ * edit). An EMPTY draft clears, matching the official `numberField` spec.
  * @param text - the control's draft text.
  * @returns the staged write, or undefined when the draft is invalid.
  */
@@ -168,8 +133,8 @@ export function formatEnabled(value: unknown): string {
 }
 
 /**
- * The write a boolean draft stages. The official switch is a two-state control
- * and never clears: every staged edit is a set.
+ * The write a boolean draft stages: the official switch is two-state, so every
+ * staged edit is a set and never a clear.
  * @param text - the staged toggle text (`'true'` / `'false'`).
  * @returns the staged write.
  */
@@ -202,8 +167,8 @@ export function textOf(field: CleanupField, staged: StagedEdits, reads: CleanupF
 
 /**
  * Whether saving would leave a user-layer entry for one field (the official
- * `field().overridden`): a staged clear answers false, a staged valid set
- * answers true, and with nothing staged the user layer's presence decides.
+ * `field().overridden`): a staged set answers true, a staged clear false, and
+ * with nothing staged the user layer's presence decides.
  * @param field - field to judge.
  * @param staged - the current staged edits.
  * @param reads - the field's effective value and user-layer presence.
@@ -230,10 +195,10 @@ export function invalidOf(field: CleanupField, staged: StagedEdits): boolean {
 }
 
 /**
- * Every entry a save would act on, in staging order (the official `plan()`): a
- * clear on a field the user layer never carried plans nothing; a draft equal to
- * the field's effective value plans nothing; an invalid draft plans an entry
- * with no write, so the form stays dirty and the save refuses.
+ * Every entry a save would act on, in staging order (the official `plan()`).
+ * Two drafts plan nothing — one equal to the field's effective value, and a
+ * clear of a field the user layer never carried; an invalid draft plans an
+ * entry with no write, so the form stays dirty AND the save refuses.
  * @param staged - the current staged edits.
  * @param reads - per-field effective value and user-layer presence.
  * @returns the planned entries.
@@ -272,8 +237,8 @@ export interface CardShellState {
 }
 
 /**
- * The card-level state (the official `CardShell`): dirty and invalid are both
- * derived from the plan, so the button and the drafts can never disagree.
+ * The card-level state (the official `CardShell`): both `dirty` and `invalid`
+ * come from the plan, so the button and the drafts cannot disagree.
  * @param plan - the entries a save would act on.
  * @param flags - the crossing-the-wire and failure flags.
  * @returns the footer's state.
@@ -291,9 +256,8 @@ export function shellOf(
 }
 
 /**
- * The bundle's configuration form. Renders nothing for the `summary` view: the
- * Plugins page only ever asks a bundle configuration for its `page` form (the
- * one-liner under the title is the package description the page already has).
+ * The bundle's configuration form; `summary` renders nothing (the page only
+ * asks a bundle configuration for its `page` form).
  * @param props.view - the view the Plugins page asks for.
  * @param props.api - the read/write transport.
  * @param props.t - the client dictionary translator.
@@ -307,9 +271,7 @@ export function SettingsCleanupCard({ view, api, t }: {
   const [staged, setStaged] = useState<StagedEdits>(() => new Map())
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
-  // Re-render on every scope change: nothing here keeps a draft copy of the
-  // document, so a change from the command (or another browser) simply re-reads
-  // the effective values while the staged text stays put (the official map).
+  // Re-read the effective values on every scope change; the staged text stays put.
   const [, setRevision] = useState(0)
   useEffect(() => api.subscribe(() => { setRevision(revision => revision + 1) }), [api])
 
@@ -394,8 +356,7 @@ export function SettingsCleanupCard({ view, api, t }: {
                     disabled={disabled}
                     onClick={() => {
                       // The official resetField stages a clear whose TEXT is the
-                      // composition value, so the control immediately shows what
-                      // the field reverts to.
+                      // composition value, so the control shows the reverted value.
                       stage('maxAgeDays', { text: formatMaxAge(api.base('maxAgeDays')), clear: true })
                     }}
                   >
