@@ -280,35 +280,40 @@ export function apply(ctx: ClientContext): void {
     clientCtx.inject(['settingsScope'], (scoped) => {
       try {
         const scope = scoped.settingsScope.bind<CleanupPolicy>({ namespace: CLEANUP_SETTINGS_NAMESPACE })
-        const overridden = (): Readonly<Record<CleanupField, boolean>> => {
-          // Presence in the user layer is the judgment (a value equal to the
-          // composition default is still an override).
+        // The three reads the official CardForm performs on its scope: the
+        // resolved value, the composition base a reset reverts to, and the raw
+        // user layer whose PRESENCE marks a field overridden.
+        const userLayer = (): Record<string, unknown> | undefined => {
           const user = scope.getSnapshot().user
-          const has = (field: CleanupField): boolean =>
-            typeof user === 'object' && user !== null && Object.hasOwn(user, field)
-          return { enabled: has('enabled'), maxAgeDays: has('maxAgeDays') }
+          return typeof user === 'object' && user !== null ? user as Record<string, unknown> : undefined
         }
         const cardApi: CleanupCardApi = {
-          read: () => {
-            const value = scope.getSnapshot().value
-            return value === undefined
-              ? undefined
-              : { enabled: value.enabled, maxAgeDays: value.maxAgeDays }
-          },
-          overridden,
+          // The official shell reads `status === 'ready'`: a namespace that is
+          // still loading is not available, so the form must not offer fields
+          // nothing would accept yet.
+          available: () => scope.getSnapshot().status === 'ready',
           writable: () => {
             // The harness's own writable signal (a read-only settings source
             // reports false); the earlier status/mode derivation was wrong and
             // left the buttons disabled.
             return scope.getSnapshot().writable === true
           },
-          save: async (ops) => {
-            // Sequential on purpose: the scope queues operations in order and
-            // reports the first failure, so a partial save never looks whole.
-            for (const op of ops) {
-              if (op.kind === 'reset') await scope.unset(op.field)
-              else await scope.set(op.field, op.value)
-            }
+          read: (field) => scope.getSnapshot().value?.[field],
+          base: (field) => (scope.getSnapshot().base as Partial<CleanupPolicy> | undefined)?.[field],
+          stored: (field) => {
+            const user = userLayer()
+            return user !== undefined && Object.hasOwn(user, field)
+          },
+          // The Host is the only authority on whether a write landed, so each
+          // one reports the read-back the official `CardForm.store` performs.
+          set: async (field, value) => {
+            await scope.set(field, value)
+            return userLayer()?.[field] === value
+          },
+          unset: async (field) => {
+            await scope.unset(field)
+            const user = userLayer()
+            return user === undefined || !Object.hasOwn(user, field)
           },
           subscribe: (cb) => scope.subscribe(cb),
         }

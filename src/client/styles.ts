@@ -177,7 +177,8 @@ export const STYLE = `
   display: flex;
   flex-direction: column;
 }
-.dsh-rewind-cleanup-readonly {
+.dsh-rewind-cleanup-readonly,
+.dsh-rewind-cleanup-unavailable {
   margin: 0 0 12px;
   font-size: 12px;
   line-height: 1.5;
@@ -198,13 +199,7 @@ export const STYLE = `
   line-height: 1.5;
   color: var(--dsw-alias-label-primary);
 }
-/* The official .toggleLabel is "flex: 1; min-width: 0" only. The badge/reset
-   pair is this form's own addition (the official selection toggle carries no
-   override state), so the label becomes a flex row to align it beside the text. */
 .dsh-rewind-cleanup-toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   flex: 1;
   min-width: 0;
 }
@@ -222,6 +217,13 @@ export const STYLE = `
   align-items: center;
   gap: 8px;
 }
+.dsh-rewind-cleanup-label-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
 .dsh-rewind-cleanup-label {
   flex: 1;
   min-width: 0;
@@ -229,6 +231,9 @@ export const STYLE = `
   font-weight: 500;
   line-height: 1.5;
   color: var(--dsw-alias-label-primary);
+}
+.dsh-rewind-cleanup-label-group > .dsh-rewind-cleanup-label {
+  flex: 0 1 auto;
 }
 .dsh-rewind-cleanup-badges {
   display: inline-flex;
