@@ -17,17 +17,15 @@
  * single-line model is built on. A pre-release that DSH publishes under
  * another tag (`alpha`, `rc`, `next`) is deliberately NOT tracked here —
  * `npm view @deepseek-ai/dsh dist-tags` is the manual pre-release check.
- * Consequence: while the plugin sits on a pre-release line that `latest` has
- * not reached yet (the peers declare a newer tuple than `latest`), this script
- * exits 1 even though nothing needs to change. A
- * non-zero exit therefore means "the declared tuple and `latest` disagree",
- * NOT "downgrade the tuple to `latest`".
+ * Consequence: the declared tuple can lead `latest` while the plugin sits on a
+ * pre-release line npm has not promoted yet. The direction is therefore
+ * checked, and only a `latest` line AHEAD of the declared tuple asks for an
+ * update — never a downgrade to `latest`.
  *
  * This script compares the current DSH tuple against the tuples covered by the
  * first @deepseek-ai/dsh-* peer range in package.json and exits:
- *   0 — `latest`'s tuple is covered, no action needed.
- *   1 — the declared tuple and `latest` disagree (the ordinary forward move,
- *       or a pre-release line that `latest` has not reached); see above.
+ *   0 — `latest`'s tuple is covered, or the declared tuple leads `latest`.
+ *   1 — `latest` moved past the declared tuple: the peer range needs updating.
  *   2 — registry unreachable or unparseable (never blocks a release silently
  *       as "OK"; the caller decides whether to treat it as a warning).
  */
@@ -87,21 +85,22 @@ if (covered.has(tuple)) {
   process.exit(0)
 }
 
-// Reached only when `latest`'s tuple is not among the covered tuples. This is
-// the ordinary forward case (DSH moved past the declared tuple), but it is
-// also what an alpha/rc line that `latest` has not reached produces — those
-// tags are invisible here by design (see the header). No direction check is
-// performed: when the peers deliberately lead `latest`, this branch is
-// expected and the steps below must NOT be followed.
-console.log('ACTION NEEDED: DSH moved to a new version tuple.')
-if (probe.includes('||')) {
-  // Multi-line (OR-union) peer: a new tuple is appended.
-  console.log('  1. Append "|| ^<tuple>-rc.<n>" to every @deepseek-ai/dsh-* peer range in package.json')
-  console.log('     (or a verified stable range once DSH ships a final release).')
-} else {
-  // Single-line peer (one release = one DSH line): the tuple is replaced.
-  console.log(`  1. Update every @deepseek-ai/dsh-* peer range to "^${latest}" (single-line model: replace the tuple, do not append).`)
+// Reached only when `latest`'s tuple is not among the covered tuples. Direction
+// decides the outcome: `latest` AHEAD of the declared tuple is the ordinary
+// forward move, while the declared tuple leading `latest` means the plugin sits
+// on a pre-release line npm has not promoted — nothing to do (the header
+// explains why only `latest` is probed).
+const rank = (t) => {
+  const [major, minor, patch] = t.split('.').map(Number)
+  return major * 1e6 + minor * 1e3 + patch
 }
+if ([...covered].every(t => rank(t) > rank(tuple))) {
+  console.log(`OK: the declared tuple leads npm latest (${latest}) — a pre-release line, no peer change needed.`)
+  process.exit(0)
+}
+
+console.log('ACTION NEEDED: DSH moved to a new version tuple.')
+console.log(`  1. Update every @deepseek-ai/dsh-* peer range to "^${latest}" (single-line model: replace the tuple, do not append).`)
 console.log('  2. Bump the @deepseek-ai/dsh-* devDependencies to ^' + latest + '.')
 console.log('  3. npm install, rerun typecheck / tests / scripts/verify-host.mjs, then release.')
 process.exit(1)

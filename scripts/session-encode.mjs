@@ -2,7 +2,9 @@
 /**
  * session-encode.mjs — compress a DSH `.jsonl.zstd` session log (single file).
  *
- * DSH stores a session log as a 2-frame zstd container:
+ * DSH's `.jsonl.zstd` is a concatenated-frame zstd container (one frame per
+ * append/batch; see session-decode.mjs). A FRESH write only needs to split at
+ * the header:
  *   frame 0 = the ONE header line
  *   frame 1 = every event row
  * (frame 0 must be exactly one header line, and each frame is checksummed).

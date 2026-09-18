@@ -31,7 +31,10 @@ try {
   failed = json.numFailedTests ?? 0
   pending = json.numPendingTests ?? 0
 } catch (err) {
-  console.warn(`update-badge: could not read results file, using zeros: ${err.message}`)
+  // An unreadable report means the test run did not produce results: publish a
+  // red badge, never a green "0/0 passed".
+  failed = 1
+  console.warn(`update-badge: could not read results file, publishing a red badge: ${err.message}`)
 }
 
 const total = passed + failed + pending
