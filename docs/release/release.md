@@ -43,9 +43,9 @@ The line being released determines the branch and the bump:
 
 | Release | Branch | Bump | dist-tag |
 | --- | --- | --- | --- |
-| Stable patch (current line) | `release/0.8.x` | `npm version patch` | `latest` |
+| Stable patch (current line) | `release/<line>.x` | `npm version patch` | `latest` |
 | Pre-release (next line) | `main` | `npm version prerelease --preid=alpha` | `alpha` |
-| Stable (next line) | `main` | `npm version 0.9.0` | `latest` |
+| Stable (next line) | `main` | `npm version <next>` | `latest` |
 
 Each release is `git push <branch>` followed by `git push <branch> --tags`.
 
@@ -132,8 +132,7 @@ dist-tag named by its pre-release identifier (`0.9.0-alpha.1` → `alpha`,
 
 **Support window / EOL.** A DSH line is supported within a declared window. By
 default the window runs until the next DSH line ships as `latest`; after that
-the line is EOL, frozen, and receives no further patches. Here `0.8.x`
-(`0.1.2-rc.1`) is supported until `0.9.x` (`0.1.3`) ships as `latest`.
+the line is EOL, frozen, and receives no further patches.
 
 **Bug-fix flow (forward-fix then backport).** A fix affecting multiple supported
 lines is applied on `main` first, then backported to each still-supported

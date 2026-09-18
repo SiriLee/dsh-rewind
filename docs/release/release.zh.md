@@ -40,9 +40,9 @@ npm publish --access public
 
 | 发布类型 | 分支 | 版本步进 | dist-tag |
 | --- | --- | --- | --- |
-| 当前线稳定补丁 | `release/0.8.x` | `npm version patch` | `latest` |
+| 当前线稳定补丁 | `release/<line>.x` | `npm version patch` | `latest` |
 | 下一线 pre-release | `main` | `npm version prerelease --preid=alpha` | `alpha` |
-| 下一线正式版 | `main` | `npm version 0.9.0` | `latest` |
+| 下一线正式版 | `main` | `npm version <next>` | `latest` |
 
 每次发布为 `git push <分支>`，再 `git push <分支> --tags`。
 
@@ -112,8 +112,7 @@ pre-release 发到与其 pre-release 标识符同名的 dist-tag（`0.9.0-alpha.
 `alpha`、`0.9.0-rc.1` → `rc`）。pre-release 不占据 `latest`。
 
 **支持窗口 / EOL。** 一条 DSH 线仅在声明的窗口内受支持。默认窗口到下一
-DSH 线作为 `latest` 发布为止；此后该线 EOL、冻结、不再发补丁。此处 `0.8.x`
-（`0.1.2-rc.1`）支持到 `0.9.x`（`0.1.3`）作为 `latest` 发布为止。
+DSH 线作为 `latest` 发布为止；此后该线 EOL、冻结、不再发补丁。
 
 **Bug 修复流程（先向前修，再回迁）。** 跨多条支持线的修复，先在 `main` 上
 修复，再回迁到各仍受支持的 release 分支。仅特定线的修复，只在对应线修复。
