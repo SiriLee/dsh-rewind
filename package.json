@@ -1,6 +1,6 @@
 {
   "name": "dsh-rewind-plugin",
-  "version": "0.13.0-alpha.1",
+  "version": "0.13.0-alpha.2",
   "description": "In-window conversation rewind with workspace file restore · 同窗口内对话回退并可还原工作区文件",
   "keywords": [
     "deepseek-harness",
