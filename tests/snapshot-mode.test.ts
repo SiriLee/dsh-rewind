@@ -60,9 +60,9 @@ async function captureWithMode(callId: string, anchorSeq: number, live: string, 
 }
 
 describe('file mode on restore', () => {
-  it('applies the recorded mode together with the restored content', async () => {
+  it('applies the recorded mode together with the restored content', async (ctx) => {
     const live = await touch('mode.txt', 'A0', 0o644)
-    if (!await chmodSupported(live)) return // filesystem without permission bits
+    if (!await chmodSupported(live)) return ctx.skip() // filesystem without permission bits
 
     await captureWithMode('c1', 5, live, 0o640)
     await chmod(live, 0o600)
@@ -74,9 +74,9 @@ describe('file mode on restore', () => {
     expect(await modeOf(live)).toBe(0o640)
   })
 
-  it('never plans a restore for a mode-only difference', async () => {
+  it('never plans a restore for a mode-only difference', async (ctx) => {
     const live = await touch('mode-only.txt', 'same', 0o644)
-    if (!await chmodSupported(live)) return
+    if (!await chmodSupported(live)) return ctx.skip()
 
     await captureWithMode('c1', 5, live, 0o644)
     await chmod(live, 0o600) // the user's own chmod, same content
@@ -88,9 +88,9 @@ describe('file mode on restore', () => {
     expect(await modeOf(live)).toBe(0o600)
   })
 
-  it('restores a READ-ONLY target and puts its mode back (R3)', async () => {
+  it('restores a READ-ONLY target and puts its mode back (R3)', async (ctx) => {
     const live = await touch('readonly.txt', 'A0', 0o644)
-    if (!await chmodSupported(live)) return
+    if (!await chmodSupported(live)) return ctx.skip()
 
     await captureWithMode('c1', 5, live, 0o444)
     await writeFile(live, 'A1', 'utf8')
@@ -106,9 +106,9 @@ describe('file mode on restore', () => {
     expect(await modeOf(live)).toBe(0o444)
   })
 
-  it('rolls back to the pre-restore mode it captured', async () => {
+  it('rolls back to the pre-restore mode it captured', async (ctx) => {
     const live = await touch('rollback-mode.txt', 'A1', 0o644)
-    if (!await chmodSupported(live)) return
+    if (!await chmodSupported(live)) return ctx.skip()
 
     // Recorded before-state: content 'A1' with mode 0o644.
     await captureWithMode('c1', 5, live, 0o644)
@@ -137,11 +137,11 @@ describe('file mode on restore', () => {
     expect(await modeOf(live)).toBe(0o600)
   })
 
-  it('restores a READ-ONLY target with NO recorded mode and leaves its mode alone', async () => {
+  it('restores a READ-ONLY target with NO recorded mode and leaves its mode alone', async (ctx) => {
     // The R3 pre-step widens a read-only file to write it. With no recorded
     // mode (a legacy entry), the live bits must be put back exactly.
     const live = await touch('readonly-legacy.txt', 'A1', 0o644)
-    if (!await chmodSupported(live)) return
+    if (!await chmodSupported(live)) return ctx.skip()
 
     await mkdir(store.anchorDir(session, 5), { recursive: true })
     await writeFile(join(store.anchorDir(session, 5), 'legacy.json'), JSON.stringify({
@@ -155,9 +155,9 @@ describe('file mode on restore', () => {
     expect(await modeOf(live)).toBe(0o444)
   })
 
-  it('leaves the live mode alone for a legacy entry with no recorded mode', async () => {
+  it('leaves the live mode alone for a legacy entry with no recorded mode', async (ctx) => {
     const live = await touch('legacy-mode.txt', 'A1', 0o644)
-    if (!await chmodSupported(live)) return
+    if (!await chmodSupported(live)) return ctx.skip()
 
     await mkdir(store.anchorDir(session, 5), { recursive: true })
     await writeFile(join(store.anchorDir(session, 5), 'legacy.json'), JSON.stringify({
