@@ -9,7 +9,7 @@
  * (and the rendered transcript) is untouched — only the model-visible surface
  * is cut, so the next request derives its context from the target onward.
  * The marker is a `user/message` carrying the shadowed-seq citations
- * (`sourceEventSeqs`): v2 reserves surface `replace` to a node that cites
+ * (`sourceEventSeqs`): v3 reserves surface `replace` to a node that cites
  * every shadowed seq, and `assistant/message` can no longer carry those — so
  * the replacement node is a `user/message`, exactly as /compact's checkpoint
  * is. It derives to itself (a present user turn), so the marker stays as the
@@ -80,10 +80,8 @@ export interface RewindConfig {
  * `str_replace_editor` is deliberately ABSENT even though it still exists as an
  * optional DSH package: it stopped being a DEFAULT tool in DSH 0.1.3, and the
  * plugin dropped it with the rest of the dead branches then (see the 0.10.x
- * "adapt to DSH 0.1.3-alpha.2" commit). The references left in DSH's client
- * packages render HISTORICAL transcripts, and the mentions in this repo's docs
- * are stale promises from before that removal — do not re-add it here without
- * also deciding to support opt-in deployments of that tool.
+ * "adapt to DSH 0.1.3-alpha.2" commit). Do not re-add it here without also
+ * deciding to support opt-in deployments of that tool.
  */
 const TRACKED_TOOLS = new Set(['write', 'edit'])
 
@@ -361,7 +359,7 @@ const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty mes
 
 /**
  * Build the rewind marker: a `user/message` carrying the surface-replace op.
- * v2 keeps surface `replace` for the node that cites the shadowed seqs via
+ * v3 keeps surface `replace` for the node that cites the shadowed seqs via
  * `sourceEventSeqs`; a `user/message` is the only surface type that can do so
  * (assistant/message embeds its stream and cannot cite sources; tool/result
  * is restricted to single-node rewrites). The marker is appended while idle,
@@ -602,7 +600,7 @@ async function executeRewind(
     let event: ReturnType<Session['append']>
     try {
       // The marker is a `user/message` carrying the surface-replace op.
-      // v2 keeps surface `replace` for the one node that cites every shadowed
+      // v3 keeps surface `replace` for the one node that cites every shadowed
       // seq via `sourceEventSeqs`; `assistant/message` can no longer carry
       // those (it now embeds its provider stream), so the replacement node
       // must be a `user/message` — exactly as /compact's checkpoint is. The
@@ -934,7 +932,7 @@ function formatClearReport(report: ClearSessionReport): string {
  *
  * The `--apply` mutation must only run once the session is STOPPED: a running
  * turn (the LLM thinking/outputting/editing, actively driving write tools)
- * would otherwise let a concurrent `recordEntry` at `tools/post-execute`
+ * would otherwise let a concurrent `recordBackup` at `tools/post-execute`
  * interleave with this directory `rm` and the in-memory dedup reset, leaving a
  * dangling dedup link (restore resolution then fails per-file). Mirroring
  * `rewind`, we ACTIVELY pause the running turn — cancel it and wait for
@@ -1052,7 +1050,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // was never set) leaves the default English — the ecosystem's neutral
   // fallback — without failing the plugin load.
   ctx.inject(['settings'], (settingsCtx) => {
-    // Structural face of the injected settings service: the 0.1.2-rc.1
+    // Structural face of the injected settings service: the
     // provider reads sections by raw namespace string. Kept local so the host
     // bundle never type-couples on the settings contract.
     const settings = settingsCtx as unknown as {
@@ -1081,7 +1079,7 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     // policy is always schema-valid. The namespace is hyphenated (the settings
     // grammar rejects dots). The register's returned scope is read/written
     // through a structural face so the host bundle does not type-couple on the
-    // client settings API (0.1.2 adds `mutate`; it is unused here).
+    // client settings API (`mutate` is unused here).
     const cleanupScope = settings.settings.register(
       CLEANUP_SETTINGS_NAMESPACE,
       CleanupConfigSchema,
