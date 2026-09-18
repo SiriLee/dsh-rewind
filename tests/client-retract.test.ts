@@ -15,6 +15,7 @@ import { retractPending } from '../src/client/portals.tsx'
 interface Row {
   readonly id: string
   readonly content: readonly { readonly type: string; readonly text?: string }[]
+  readonly source?: { readonly kind?: string } | undefined
 }
 
 /** The `RemoteResult` the client's `updateQueue` resolves with. */
@@ -38,8 +39,13 @@ function fakeSession(nextStep: readonly Row[], nextTurn: readonly Row[] = []) {
   return { session, updateQueue, cancel }
 }
 
-/** Steering inbox rows in host (FIFO) order. */
-const steering = (ids: readonly string[]): Row[] => ids.map(id => ({ id, content: [{ type: 'text', text: `text ${id}` }] }))
+/** Steering inbox rows in host (FIFO) order (browser submissions are user rows). */
+const steering = (ids: readonly string[]): Row[] =>
+  ids.map(id => ({ id, source: { kind: 'user' }, content: [{ type: 'text', text: `text ${id}` }] }))
+
+/** One injected (non-user) next-step row, which the host called `context`. */
+const injected = (id: string): Row =>
+  ({ id, source: { kind: 'plugin' }, content: [{ type: 'text', text: `injected ${id}` }] })
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -61,6 +67,15 @@ describe('retractPending (unread steering withdraw)', () => {
     const { session, updateQueue } = fakeSession(steering(['a']), [{ id: 'q', content: [{ type: 'text', text: 'queued' }] }])
     await retractPending(session, 'a', 'text a', vi.fn(() => true))
     expect(updateQueue.mock.calls.map(call => call[0])).toEqual(['a'])
+  })
+
+  it('never sweeps an injected (context) next-step row into a retract', async () => {
+    // The list is `a`, an injected row, then `b`. A retract of `a` removes its
+    // STEERING future only: the injected row was never the user's to withdraw,
+    // and the host's own mapping classified it as `context`, not `steering`.
+    const { session, updateQueue } = fakeSession([...steering(['a']), injected('p'), ...steering(['b'])])
+    await retractPending(session, 'a', 'text a', vi.fn(() => true))
+    expect(updateQueue.mock.calls.map(call => call[0])).toEqual(['a', 'b'])
   })
 
   it('does not refill when the target was already claimed (queue-item-not-found)', async () => {

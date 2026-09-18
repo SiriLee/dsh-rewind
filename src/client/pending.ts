@@ -15,10 +15,11 @@
  *
  * DSH 0.1.6-alpha.2 removed the `SessionSnapshot.queue` mirror (and the host's
  * `queue-mirror.ts`), so these rows now come from the session's own `inbox`
- * projection (`next-turn` = queued, `next-step` = steering). `steeringItemsOf`
- * derives the retract fields from those rows with the SAME rules the harness
- * QueueDock uses, so the DOM text this module matches and the preview the
- * popover shows cannot drift from what the dock renders.
+ * projection (`next-turn` = queued, `next-step` = steering, user-sourced rows
+ * only — see `steeringItemsOf`). `steeringItemsOf` derives the retract fields
+ * from those rows with the SAME rules the harness QueueDock uses, so the DOM
+ * text this module matches and the preview the popover shows cannot drift from
+ * what the dock renders.
  *
  * The browser half lives in `portals.tsx`; this module stays DOM-free so the
  * matching contract is unit-testable in a plain node environment.
@@ -46,6 +47,8 @@ export interface InboxMessageLike {
   readonly id: string
   /** Wire content blocks, in prompt order. */
   readonly content: readonly InboxBlockLike[]
+  /** Message origin; only `kind: 'user'` rows are retractable (see `steeringItemsOf`). */
+  readonly source?: { readonly kind?: string } | undefined
 }
 
 /**
@@ -55,7 +58,7 @@ export interface InboxMessageLike {
 export interface InboxLike {
   /** Messages claimed at the next turn boundary. */
   readonly 'next-turn': readonly InboxMessageLike[]
-  /** Messages injected at the next step boundary (the steering rows). */
+  /** Messages injected at the next step boundary (user or plugin/command). */
   readonly 'next-step': readonly InboxMessageLike[]
 }
 
@@ -101,16 +104,29 @@ function previewOf(content: readonly InboxBlockLike[]): string {
 
 /**
  * Project the inbox `next-step` rows into the fields the retract path needs.
+ *
+ * ONLY user-sourced rows are steering. The host's deleted mapping
+ * (`queueItemsFromInbox`) classified a `next-step` row as `steering` when
+ * `message.source.kind === 'user'` and as `context` otherwise, and this plugin
+ * has only ever retracted the former. A `context` row is a plugin/command
+ * injection the user never typed, so it must not be offered a retract button —
+ * and, because `retractSpan` removes the target AND everything after it in the
+ * list, keeping those rows would also let one retract silently drop injected
+ * messages. The rendered rows the matcher pairs against are the browser's own
+ * submission echoes (user rows by construction), so a context row would
+ * additionally shift the positional match and cost every later row its button.
  * @param nextStep - the inbox projection's `next-step` list (absent before the
  *   fold state exists, hence `undefined`).
- * @returns one item per steering row, in host (FIFO) order.
+ * @returns one item per USER steering row, in host (FIFO) order.
  */
 export function steeringItemsOf(nextStep: readonly InboxMessageLike[] | undefined): readonly PendingSteeringItem[] {
-  return (nextStep ?? []).map(item => ({
-    id: item.id,
-    text: textOf(item.content),
-    preview: previewOf(item.content),
-  }))
+  return (nextStep ?? [])
+    .filter(item => item.source?.kind === 'user')
+    .map(item => ({
+      id: item.id,
+      text: textOf(item.content),
+      preview: previewOf(item.content),
+    }))
 }
 
 /**

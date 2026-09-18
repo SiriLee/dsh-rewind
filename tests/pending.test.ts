@@ -109,9 +109,13 @@ describe('retractSpan', () => {
 })
 
 describe('steeringItemsOf (inbox next-step derivation)', () => {
-  /** One inbox row with text content. */
+  /** One USER-sourced inbox row with text content. */
   const textRow = (id: string, ...texts: string[]): InboxMessageLike =>
-    ({ id, content: texts.map(text => ({ type: 'text', text })) })
+    ({ id, source: { kind: 'user' }, content: texts.map(text => ({ type: 'text', text })) })
+
+  /** One injected (non-user) inbox row, e.g. a plugin or command delivery. */
+  const injectedRow = (id: string, kind: string, text: string): InboxMessageLike =>
+    ({ id, source: { kind }, content: [{ type: 'text', text }] })
 
   it('returns nothing for an absent projection (no fold state yet)', () => {
     expect(steeringItemsOf(undefined)).toEqual([])
@@ -123,21 +127,44 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
       .toEqual([{ id: 'a', text: 'hello world', preview: 'hello world' }])
   })
 
+  it('drops injected (non-user) rows — the host called those context, not steering', () => {
+    // The deleted host mapping used `message.source.kind === 'user' ? steering
+    // : context`; only steering rows ever get a retract button, and a retract
+    // removes the target and its whole future.
+    expect(steeringItemsOf([injectedRow('p', 'plugin', 'from a plugin')])).toEqual([])
+    expect(steeringItemsOf([injectedRow('c', 'command', '/x')])).toEqual([])
+  })
+
+  it('keeps only the user rows, in host order, around injected rows', () => {
+    const items = steeringItemsOf([
+      injectedRow('p1', 'plugin', 'injected'),
+      textRow('u1', 'first'),
+      injectedRow('p2', 'subagent', 'injected again'),
+      textRow('u2', 'second'),
+    ])
+    expect(items.map(item => item.id)).toEqual(['u1', 'u2'])
+  })
+
+  it('treats a row without an origin as not retractable', () => {
+    expect(steeringItemsOf([{ id: 'x', content: [{ type: 'text', text: 'no source' }] }])).toEqual([])
+  })
+
   it('reports null text and an empty preview for an image-only row', () => {
-    const row: InboxMessageLike = { id: 'img', content: [{ type: 'image' }] }
+    const row: InboxMessageLike = { id: 'img', source: { kind: 'user' }, content: [{ type: 'image' }] }
     expect(steeringItemsOf([row])).toEqual([{ id: 'img', text: null, preview: '' }])
   })
 
   it('excludes image/file blocks from the preview', () => {
     const row: InboxMessageLike = {
       id: 'mixed',
+      source: { kind: 'user' },
       content: [{ type: 'text', text: 'look' }, { type: 'image' }, { type: 'file' }],
     }
     expect(steeringItemsOf([row])).toEqual([{ id: 'mixed', text: null, preview: 'look' }])
   })
 
   it('collapses whitespace in the preview', () => {
-    const row: InboxMessageLike = { id: 'ws', content: [{ type: 'text', text: '  a\n\n b   c ' }] }
+    const row: InboxMessageLike = { id: 'ws', source: { kind: 'user' }, content: [{ type: 'text', text: '  a\n\n b   c ' }] }
     expect(steeringItemsOf([row])).toEqual([{ id: 'ws', text: '  a\n\n b   c ', preview: 'a b c' }])
   })
 
@@ -150,7 +177,7 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
   })
 
   it('marks a non-text block by its type in the preview', () => {
-    const row: InboxMessageLike = { id: 'tool', content: [{ type: 'tool-call' }] }
+    const row: InboxMessageLike = { id: 'tool', source: { kind: 'user' }, content: [{ type: 'tool-call' }] }
     expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, preview: '[tool-call]' }])
   })
 })
