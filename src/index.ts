@@ -762,29 +762,16 @@ async function handleRewind(
   return executeRewind(ctx, store, fs, invocation, target, mode, inflight)
 }
 
-/**
- * Lazy 24h auto-cleanup gate. Called on the first session activity of a
- * window (a user message or a tool result). The 24h window is anchored on a
- * PERSISTED last-sweep timestamp (read from `~/.dsh/snapshot-cleanup-last-sweep.json`
- * and written back on each run), so a host restart does NOT reset it — a real
- * deployment is rarely up 24/7, so an in-memory timestamp would re-sweep on
- * every boot. Runs in the background (voided by callers) and NEVER rejects: a
- * config error fail-closes (deletes nothing) and logs, and a prune failure
- * logs — neither blocks the activity that triggered it. The active
- * `sessionId` is the one directory that must never be pruned; an undefined
- * value (no session in scope) still honors the throttle and just skips no
- * directory.
- */
-/** Whether this process already ran its one-shot auto-cleanup check. */
+/** Whether THIS MOUNT already ran its one-shot auto-cleanup check. */
 let autoSweepChecked = false
 
 /**
- * One-shot lazy auto-cleanup gate. The FIRST session activity of a run (a user
- * message or a tool result) performs a single check: it reads the policy and the
- * persisted last-sweep time and, only when enabled AND >=24h since the last
- * sweep, runs the sweep and re-anchors the 24h window on disk. After that one
- * check the process stops considering auto-cleanup (a short-lived run reads the
- * policy at most once), while the 24h cadence survives a restart because the
+ * One-shot lazy auto-cleanup gate. The FIRST session activity of a mount (a
+ * user message or a tool result) performs a single check: it reads the policy
+ * and the persisted last-sweep time and, only when enabled AND >=24h since the
+ * last sweep, runs the sweep and re-anchors the 24h window on disk. After that
+ * one check the mount stops considering auto-cleanup (a mount reads the policy
+ * at most once), while the 24h cadence survives a restart because the
  * last-sweep time is persisted rather than kept in memory. Runs in the
  * background (voided by callers) and NEVER rejects: an invalid config
  * fail-closes (deletes nothing) and logs, and a prune failure logs — neither
@@ -1084,6 +1071,11 @@ export function apply(ctx: Context, config?: RewindConfig): void {
     }
     // Read the durable locale preference. The 0.1.2-rc.1 settings provider
     // accepts the raw namespace string ('locale'); no brand helper is needed.
+    // The fallback is applied FIRST: this scope can also remount on its own (a
+    // live-reload restart) while the plugin stays mounted, and a document
+    // without a preference must yield the neutral default rather than the
+    // previous document's language.
+    activeLocale = 'en'
     const section = settings.settings.get('locale') as
       | { preference?: HostLocaleId }
       | undefined

@@ -40,6 +40,8 @@ interface Mounted {
   readonly policyReads: () => number
   /** Teardown of the injected settings scope ALONE (a live-reload service restart). */
   disposeSettingsScope(): Promise<void>
+  /** Re-run the settings inject callback, as a remounted service does. */
+  remountSettings(options?: { readonly locale?: string }): void
   /** Run every disposer (depth-first) and await the async ones. */
   dispose(): Promise<void>
 }
@@ -84,6 +86,9 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
   // The host reads the resolved policy through `scope.get()`; one counter per
   // mount is what makes "the one-shot sweep gate re-armed on remount" observable.
   const policyRead = vi.fn(() => ({ enabled: false, maxAgeDays: 30 }))
+  // Set when the settings service is available; re-invoking it models a
+  // service remount (Cordis runs the inject callback again).
+  let settingsMount: ((locale: string | undefined) => void) | undefined
 
   const ctx = {
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
@@ -97,16 +102,19 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
     },
     inject: (services: readonly string[], callback: (scoped: unknown) => void) => {
       if (services.includes('settings') && options.settings !== undefined) {
-        const preference = options.settings.locale
-        callback({
+        settingsMount = (locale) => {
+          const preference = locale
+          callback({
           // The injected scope is a real child context: it has `effect` (the
           // plugin registers its store disposer on it) and its own services.
           effect: (fn: unknown) => { collect(fn, settingsDisposers); return () => {} },
-          settings: {
-            get: () => (preference === undefined ? undefined : { preference }),
-            register: () => ({ get: () => policyRead(), update: async () => {} }),
-          },
-        })
+            settings: {
+              get: () => (preference === undefined ? undefined : { preference }),
+              register: () => ({ get: () => policyRead(), update: async () => {} }),
+            },
+          })
+        }
+        settingsMount(options.settings.locale)
       }
       if (services.includes('fs') && options.fs === true) {
         callback({
@@ -126,6 +134,10 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
     policyReads: () => policyRead.mock.calls.length,
     disposeSettingsScope: async () => {
       for (const dispose of settingsDisposers.splice(0).reverse()) await dispose()
+    },
+    remountSettings: (next = {}) => {
+      if (settingsMount === undefined) throw new Error('settings were not injected at mount')
+      settingsMount(next.locale)
     },
     dispose: async () => {
       // Reverse order, like a real fiber teardown; await async disposers so the
@@ -251,11 +263,24 @@ describe('live disable → enable round trip', () => {
     return check()
   }
 
-  it('re-reads the locale preference instead of inheriting the previous mount', async () => {
+  it('re-reads the locale preference instead of inheriting a stale one', async () => {
     const zh = mount({ settings: { locale: 'zh' } })
     apply(zh.ctx, { snapshotDir: snapRoot })
-    const zhDescription = zh.commands.get('snapshot-auto-cleanup')!.description
-    expect(zhDescription).toBe(zLocale['cleanup.description'])
+    expect(zh.commands.get('snapshot-auto-cleanup')!.description).toBe(zLocale['cleanup.description'])
+    // Per-invocation output reads the locale that is current at CALL time, so it
+    // is the honest observable for a service remount (command descriptions are
+    // captured once, when the command registers).
+    const [session] = userMessage()
+    const status = { rawInput: 'status', agent: { session } } as never
+    expect(((await zh.commands.get('snapshot-auto-cleanup')!.handler(status)) as { text: string }).text)
+      .toContain(zLocale['cleanup.status'].replace('{state}', zLocale['cleanup.disabled']).replace('{days}', '30'))
+
+    // The settings service remounts on its own (a live-reload restart) with a
+    // document that has no preference: the next read must fall back to the
+    // neutral default, not keep the previous document's language.
+    zh.remountSettings({})
+    expect(((await zh.commands.get('snapshot-auto-cleanup')!.handler(status)) as { text: string }).text)
+      .toContain(enLocale['cleanup.disabled'])
     await zh.dispose()
 
     // No persisted preference this time: the command copy must fall back to the
