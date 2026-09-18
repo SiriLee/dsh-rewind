@@ -99,14 +99,6 @@ const COMPARE_CHUNK_BYTES = 64 * 1024
 /** The Unicode replacement character a lossy UTF-8 decode produces. */
 const REPLACEMENT_CHAR = '\uFFFD'
 
-/**
- * Default store root: `<harness home>/rewind-snapshots`. Resolved through
- * {@link resolveDshHome} so the plugin follows `$DSH_HOME` (or a configured
- * harness home) rather than hardcoding `~/.dsh` — matching the other
- * first-party DSH packages. See `SECURITY.md` "Sensitive files".
- */
-export const DEFAULT_SNAPSHOT_ROOT = join(resolveDshHome(), SNAPSHOT_DIR_NAME)
-
 /** Environment variable overriding the store root (tests, exotic homes). */
 export const SNAPSHOT_ROOT_ENV = 'DSH_REWIND_SNAPSHOT_DIR'
 
@@ -2455,7 +2447,7 @@ export class SnapshotStore {
     }
   }
 
-  /** True when a path exists on disk (used by tests and diagnostics). */
+  /** True when a path exists on disk. */
   async exists(path: string): Promise<boolean> {
     try {
       await stat(path)

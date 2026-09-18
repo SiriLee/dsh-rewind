@@ -123,11 +123,6 @@ export function rewindOptionsOf(snap: CandidateChat, t: Translate): SelectOption
   }))
 }
 
-/** Resolve one candidate by log seq (the mode popover's re-entry after a pick). */
-export function candidateBySeq(snap: CandidateChat, seq: number): RewindCandidate | undefined {
-  return rewindCandidatesOfChat(snap).find(candidate => candidate.seq === seq)
-}
-
 /**
  * Header prefix of the host's machine-readable candidate list (matches
  * `CANDIDATE_LIST_HEADER` in src/rewind.ts). Kept as a local literal so the

@@ -60,7 +60,7 @@ export const CleanupConfigSchema: z<CleanupConfig> = z.object({
  * Structural face of the settings scope the host needs for the policy: a
  * resolved read and a validated write. Kept local (never imports the settings
  * contract) so the host bundle does not type-couple on the client settings
- * API (0.1.2 adds `mutate`; it is unused here), and the seam the host passes
+ * API (`mutate` is unused here), and the seam the host passes
  * in isolates the drift to this module.
  */
 export interface CleanupSettingsScope {
@@ -217,10 +217,6 @@ export function parseCleanupConfig(raw: unknown): { ok: true; config: CleanupCon
   }
   return { ok: true, config: { enabled, maxAgeDays } }
 }
-
-/**
- * The `/snapshot-auto-cleanup` sub-command the parser can resolve to.
- */export type CleanupCommandAction = 'status' | 'on' | 'off' | 'max-age' | 'run'
 
 /** A parsed `/snapshot-auto-cleanup` command (excludes the error branch). */
 export type CleanupCommand =
