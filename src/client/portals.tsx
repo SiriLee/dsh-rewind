@@ -25,14 +25,23 @@
  * `conversation.chat.assistant-actions` slot are wired for assistant messages
  * only, and no per-user-message action slot exists. So this portal targets
  * undocumented internal structure — the `data-chat-flow-kind`,
- * `data-chat-anchor-key`, `data-composer-input`, `data-composer-card`,
- * `data-pending-steering` and `data-time-hover-root` attributes plus the
- * `anchorSeq` field read in `client/hidden.ts`. Those are harness-internal and
- * may change with the UI; this module (and `hidden.ts`) must be re-adapted to
- * follow, and is the migration target when a first-class user-action slot or
- * an official renderer hook surface appears. The coupling is accepted
- * deliberately because a standards-conformant alternative does not exist
- * today; it is not a defect to be removed while the DOM-portal approach stands.
+ * `data-chat-anchor-key`, `data-composer-input`, `data-composer-card` and
+ * `data-pending-steering` attributes plus the `anchorSeq` field read in
+ * `client/hidden.ts`. Those are harness-internal and may change with the UI;
+ * this module (and `hidden.ts`) must be re-adapted to follow, and is the
+ * migration target when a first-class user-action slot or an official renderer
+ * hook surface appears. The coupling is accepted deliberately because a
+ * standards-conformant alternative does not exist today; it is not a defect to
+ * be removed while the DOM-portal approach stands.
+ *
+ * All five attributes were re-verified against DSH 0.1.6-alpha.2: the anchor key
+ * and the flow kind are still produced together by `ChatNodeSeat` from the routed
+ * chat node (`key`/`kind`, whose user-facing values are `user` and `steering`,
+ * the same pair the harness's own `ChatView` filters on), and the composer
+ * editable/card markers still sit on `ComposerContentEditable` and `InputBar`.
+ * The `data-time-hover-root` marker this module used to name no longer exists in
+ * alpha.2; the actions-row finder never read it (it is structural — see
+ * `actionsContainerOf`), so only this note had to change.
  *
  * @module dsh-rewind/client/portals
  */
@@ -360,11 +369,12 @@ const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
  * Locate the actions container of a user/steering seat row — the element the
  * ↶ button portals into (the copy/branch IconActions row).
  *
- * On the 0.1.2-rc.1 line the `data-time-hover-root` marker lives only on the
- * per-turn tail footer (`TurnTailNodeView`), and the user action row is
- * revealed via CSS `:has()`. The container is located structurally: the direct
- * holder of the copy `<button>` (the `MessageIconActions` container, which
- * mounts that button as a direct child — `MessageIconActions.tsx:83,86`).
+ * The finder is STRUCTURAL on purpose: no harness attribute marks the actions
+ * row on the user seat (the old `data-time-hover-root` marker lived on the
+ * per-turn tail footer and is gone in 0.1.6-alpha.2), so the container is
+ * located as the direct holder of the copy `<button>` (the `MessageIconActions`
+ * container, which mounts that button as a direct child —
+ * `MessageIconActions.tsx:83,86`).
  *
  * Returns undefined when no qualifying container is found; the caller refuses
  * to portal (never a crash, never a wrong attachment). Exported as a test seam
