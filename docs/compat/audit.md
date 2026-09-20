@@ -161,6 +161,29 @@ new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover
 - **Automatic compaction silently stays disabled** (the `agent/pre-step` hook catches and warns; the conversation continues).
 - **rewind's role (resolved)**: the v2 `user/message` rewind marker appends no `step/start`, so a rewind no longer introduces the first trip-wire and the R-OPENSTEP rewind amplifier is closed. The harness-side root cause (an unclosed step after a crash, tripped by continuing the conversation) remains.
 
+### R-PROMPTCARD (not compensated): the `System prompt` card repeats at every new request series
+
+> **Root cause (harness-side, by design since 0.1.2)**: Chat renders a collapsed `System prompt`
+> card at every request-series start. Any surface mutation bumps `contentGeneration` (a positional
+> `replace` — rewind, `/compact` — or a `SessionMessageProjection`, e.g. image offload), so the next
+> request logs `request/header { reason: 'series' }`; a process restart logs `'resume'`. The client
+> shows the card for every reason except `'change'`. The effective prompt is unchanged — only the
+> card repeats. Triggers beyond rewind: `/compact`, restart/resume, projections, explicit
+> `startsSeries`.
+>
+> **Upstream decision (deliberate, twice)**: `6ad01cbd8d` suppressed the repeat on `resume` (note
+> `2026-09-03-resume-headers-do-not-repeat-system-prompts.md`, rejecting the card as a "lifecycle
+> marker" that "incorrectly implies another prompt injection"); three days later `77b6b10c21`
+> restored it — a resume/series header starts a visible request series. Locked by the `ui-chat` test
+> `repeats an unchanged system prompt after a surface rewrite…`.
+>
+> **Plugin stance**: no compensation (README known issue #4). Display-layer hiding was analysed and
+> rejected: the card node carries `data.text` but not its `reason`, and boundaries can coincide
+> (rewind then restart/`/compact`), so exact attribution is impossible client-side. The only clean
+> fixes are upstream (decouple boundary annotation from prompt display, or expose `reason`/visibility
+> to third-party clients). The existing DOM row-hiding seam (`hiddenSeqsOf`) covers withdrawn
+> messages, where hiding is essential, not cosmetic.
+
 ## Uncovered boundaries (need an additional e2e layer; non-blocking)
 
 - Real LLM streaming and auto title generation (L2 stubbed).
@@ -186,7 +209,7 @@ new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover
 | client ordering | — | — | ✓ | — | — | — | ✓ | — |
 | plan-mode | ✓ | — | ✓ | — | — | — | — | ✓ (static) |
 
-✓ = probe passes; — = not applicable. RU-I18N and R-OPENSTEP are upstream issues the plugin
-does not compensate for (see above); G3 is a confirmed-non-defect behavior pinned in
+✓ = probe passes; — = not applicable. RU-I18N, R-OPENSTEP and R-PROMPTCARD are upstream issues the
+plugin does not compensate for (see above); G3 is a confirmed-non-defect behavior pinned in
 `compat-gaps.test.ts` (G1 surface classification via `foldSurface` and G2 projection checkpoint
 both pass).
