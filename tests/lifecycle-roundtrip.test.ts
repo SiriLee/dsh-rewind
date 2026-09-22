@@ -9,15 +9,18 @@
  *
  * @module tests/lifecycle-roundtrip
  */
+import { existsSync } from 'node:fs'
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
+import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { en as enLocale, zh as zLocale } from '../src/locales.ts'
+import { en as enLocale } from '../src/locales.ts'
 import { apply } from '../src/index.ts'
-import { textMessage } from './helpers.ts'
+import { resolveCleanupStatePath } from '../src/snapshot-cleanup.ts'
+import { testConfig, textMessage } from './helpers.ts'
 
 /** A function a mount yielded; its return value is awaited on dispose. */
 type Disposer = () => unknown
@@ -32,12 +35,12 @@ interface Mounted {
   readonly handlers: ReadonlyMap<string, (...args: never[]) => unknown>
   /** `tools/*` handlers registered by the nested `fs` scope, by event name. */
   readonly toolHandlers: ReadonlyMap<string, (...args: never[]) => unknown>
-  /** The policy reads the mounted settings scope answered (one per `load()`). */
-  readonly policyReads: () => number
-  /** Teardown of the injected settings scope ALONE (a live-reload service restart). */
-  disposeSettingsScope(): Promise<void>
-  /** Re-run the settings inject callback, as a remounted service does. */
-  remountSettings(options?: { readonly locale?: string }): void
+  /**
+   * Set the Loader entry id the host reads (`ctx.fiber.entry.id`). A real mount
+   * always has one; a test that exercises the cleanup policy sets it before
+   * `apply`, exactly as a profile entry does.
+   */
+  setEntryId(id: string): void
   /** Run every disposer (depth-first) and await the async ones. */
   dispose(): Promise<void>
 }
@@ -68,25 +71,21 @@ function collect(fn: unknown, into: Disposer[]): void {
 
 /**
  * Mount the plugin on a minimal fake context.
- * @param options - the optional services the mount may reach: `settings` (with
- *   an optional persisted locale preference) and `fs`.
+ * @param options - the optional services the mount may reach (a real fs).
  * @returns the mount's recorded surface plus its disposer.
  */
-function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): Mounted {
+function mount(options: { fs?: boolean } = {}): Mounted {
   const disposers: Disposer[] = []
-  const settingsDisposers: Disposer[] = []
   const commands = new Map<string, { name: string; description?: string; handler: (invocation: unknown) => Promise<unknown> }>()
   const handlers = new Map<string, (...args: never[]) => unknown>()
   const toolHandlers = new Map<string, (...args: never[]) => unknown>()
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
-  // The host reads the resolved policy through `scope.get()`; one counter per
-  // mount is what makes "the one-shot sweep gate re-armed on remount" observable.
-  const policyRead = vi.fn(() => ({ enabled: false, maxAgeDays: 30 }))
-  // Set when the settings service is available; re-invoking it models a
-  // service remount (Cordis runs the inject callback again).
-  let settingsMount: ((locale: string | undefined) => void) | undefined
+  // The Loader entry id the cleanup policy is addressed by; absent until a test
+  // sets it (an entry-less mount has nowhere to write).
+  const fiber: { entry?: { id: string } } = {}
 
   const ctx = {
+    fiber,
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
     on: (event: string, handler: (...args: never[]) => unknown) => { handlers.set(event, handler); return () => {} },
     logger,
@@ -97,21 +96,6 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
       },
     },
     inject: (services: readonly string[], callback: (scoped: unknown) => void) => {
-      if (services.includes('settings') && options.settings !== undefined) {
-        settingsMount = (locale) => {
-          const preference = locale
-          callback({
-          // A real child context: it has `effect` (where the plugin registers
-          // its store disposer) and its own services.
-          effect: (fn: unknown) => { collect(fn, settingsDisposers); return () => {} },
-            settings: {
-              get: () => (preference === undefined ? undefined : { preference }),
-              register: () => ({ get: () => policyRead(), update: async () => {} }),
-            },
-          })
-        }
-        settingsMount(options.settings.locale)
-      }
       if (services.includes('fs') && options.fs === true) {
         callback({
           fs: fakeFs(),
@@ -127,14 +111,7 @@ function mount(options: { settings?: { locale?: string }; fs?: boolean } = {}): 
     commands,
     handlers,
     toolHandlers,
-    policyReads: () => policyRead.mock.calls.length,
-    disposeSettingsScope: async () => {
-      for (const dispose of settingsDisposers.splice(0).reverse()) await dispose()
-    },
-    remountSettings: (next = {}) => {
-      if (settingsMount === undefined) throw new Error('settings were not injected at mount')
-      settingsMount(next.locale)
-    },
+    setEntryId: (id: string) => { fiber.entry = { id } },
     dispose: async () => {
       // Reverse order, like a real fiber teardown; await async disposers so the
       // assertions can rely on their effects having landed.
@@ -188,7 +165,7 @@ async function waitForStagedDrain(): Promise<string[]> {
 describe('host mount lifecycle', () => {
   it('drops staged before-captures when the plugin is unloaded mid-tool', async () => {
     const mounted = mount({ fs: true })
-    apply(mounted.ctx, { snapshotDir: snapRoot })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
 
     // A real file for the capture to copy bytes from.
     const target = join(root, 'edited.txt')
@@ -211,7 +188,7 @@ describe('host mount lifecycle', () => {
 
   it('a tool result drains its staged capture before the unload', async () => {
     const mounted = mount({ fs: true })
-    apply(mounted.ctx, { snapshotDir: snapRoot })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
     const target = join(root, 'edited.txt')
     await writeFile(target, 'before', 'utf8')
     const session = Session.create(SessionId('lifecycle-session'))
@@ -247,68 +224,61 @@ describe('live disable → enable round trip', () => {
     return check()
   }
 
-  it('re-reads the locale preference instead of inheriting a stale one', async () => {
-    const zh = mount({ settings: { locale: 'zh' } })
-    apply(zh.ctx, { snapshotDir: snapRoot })
-    expect(zh.commands.get('snapshot-auto-cleanup')!.description).toBe(zLocale['cleanup.description'])
-    // Per-invocation output reads the locale that is current at CALL time, so it
-    // is the honest observable for a service remount (command descriptions are
-    // captured once, when the command registers).
+  it('reads the live config on every call instead of a stale snapshot', async () => {
+    const mounted = mount()
+    mounted.setEntryId('dsh-rewind-plugin')
+    const enabled = createVolatile(false)
+    apply(mounted.ctx, { ...testConfig({ snapshotDir: snapRoot }), enabled })
+    const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
     const [session] = userMessage()
     const status = { rawInput: 'status', agent: { session } } as never
-    expect(((await zh.commands.get('snapshot-auto-cleanup')!.handler(status)) as { text: string }).text)
-      .toContain(zLocale['cleanup.status'].replace('{state}', zLocale['cleanup.disabled']).replace('{days}', '30'))
+    expect(((await cleanup.handler(status)) as { text: string }).text)
+      .toContain(enLocale['cleanup.status'].replace('{state}', enLocale['cleanup.disabled']).replace('{days}', '30'))
 
-    // The settings service remounts on its own (a live-reload restart) with a
-    // document that has no preference: the next read must fall back to the
-    // neutral default, not keep the previous document's language.
-    zh.remountSettings({})
-    expect(((await zh.commands.get('snapshot-auto-cleanup')!.handler(status)) as { text: string }).text)
-      .toContain(enLocale['cleanup.disabled'])
-    await zh.dispose()
-
-    // No persisted preference this time: the command copy must fall back to the
-    // neutral English default rather than the previous mount's Chinese.
-    const en = mount({ settings: {} })
-    apply(en.ctx, { snapshotDir: snapRoot })
-    expect(en.commands.get('snapshot-auto-cleanup')!.description).toBe(enLocale['cleanup.description'])
-    await en.dispose()
+    // A settings write updates the reference in place; the next call must see
+    // the new value without a remount.
+    updateVolatile(enabled, createVolatile(true))
+    expect(((await cleanup.handler(status)) as { text: string }).text)
+      .toContain(enLocale['cleanup.status'].replace('{state}', enLocale['cleanup.enabled']).replace('{days}', '30'))
+    await mounted.dispose()
   })
 
   it('re-arms the one-shot auto-cleanup check on every mount', async () => {
-    const first = mount({ settings: {} })
-    apply(first.ctx, { snapshotDir: snapRoot })
+    // The gate reads the policy once per mount and, only when enabled, sweeps
+    // and re-anchors the 24h window — the state file is the observable proof
+    // that the policy was read. A fresh mount must check again.
+    const stateFile = resolveCleanupStatePath(root)
+    await rm(stateFile, { force: true })
+    const first = mount()
+    first.setEntryId('dsh-rewind-plugin')
+    apply(first.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, enabled: true }))
     const [firstSession] = userMessage()
     first.handlers.get('session/event')!(firstSession as never, { type: 'user/message', seq: 2 } as never)
-    expect(await waitUntil(() => first.policyReads() > 0)).toBe(true)
+    expect(await waitUntil(() => existsSync(stateFile))).toBe(true)
     await first.dispose()
 
     // The previous mount consumed the one-shot gate; a fresh mount must check
     // again (the flag is per mount, the 24h throttle itself is on disk).
-    const second = mount({ settings: {} })
-    apply(second.ctx, { snapshotDir: snapRoot })
+    await rm(stateFile, { force: true })
+    const second = mount()
+    second.setEntryId('dsh-rewind-plugin')
+    apply(second.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, enabled: true }))
     const [secondSession] = userMessage()
     second.handlers.get('session/event')!(secondSession as never, { type: 'user/message', seq: 2 } as never)
-    expect(await waitUntil(() => second.policyReads() > 0)).toBe(true)
+    expect(await waitUntil(() => existsSync(stateFile))).toBe(true)
     await second.dispose()
   })
 
-  it('fails the cleanup command closed after the settings scope is gone', async () => {
-    const mounted = mount({ settings: {} })
-    apply(mounted.ctx, { snapshotDir: snapRoot })
+  it('fails the cleanup command closed without a resolved config', async () => {
+    // A mount without the Loader resolves no config, so the policy has nowhere
+    // to read or write; every path must fail closed instead of guessing.
+    const mounted = mount()
+    apply(mounted.ctx)
     const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
     const [session] = userMessage()
     const invocation = { rawInput: 'status', agent: { session } } as never
-
-    const mountedResult = await cleanup.handler(invocation) as { kind: string }
-    expect(mountedResult.kind).toBe('success')
-
-    // The settings service unmounting (a live-reload restart) disposes the
-    // injected scope while the plugin stays mounted. The store handle must be
-    // cleared with it, so the read fails closed instead of touching it.
-    await mounted.disposeSettingsScope()
-    const disposedResult = await cleanup.handler(invocation) as { kind: string; text: string }
-    expect(disposedResult.kind).toBe('error')
-    expect(disposedResult.text).toContain('settings service unavailable')
+    const result = await cleanup.handler(invocation) as { kind: string; text: string }
+    expect(result.kind).toBe('error')
+    expect(result.text).toContain('cleanup policy unavailable')
   })
 })

@@ -45,17 +45,16 @@ import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewin
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
 import {
-  CLEANUP_SETTINGS_NAMESPACE,
-  CleanupConfigSchema,
   DEFAULT_CLEANUP_CONFIG,
   parseCleanupCommand,
   resolveCleanupStatePath,
   runAutoCleanupCheck,
   saveLastSweepAt,
-  settingsCleanupStore,
+  volatileCleanupStore,
   type CleanupConfig,
   type CleanupConfigStore,
-  type CleanupSettingsScope,
+  type CleanupConfigWriter,
+  type CleanupSettings,
 } from './snapshot-cleanup.ts'
 
 export { SnapshotStore } from './snapshot.ts'
@@ -73,6 +72,23 @@ export interface RewindConfig {
   /** In-place content dedup (identical before-content → link). Default `true`. */
   readonly dedup?: boolean
 }
+
+/**
+ * The plugin's full configuration: the ordinary store options plus the
+ * user-editable cleanup policy. The two policy fields are `.volatile()`, so the
+ * host resolves them into live references before `apply` and the Plugins page
+ * exposes exactly them.
+ */
+export interface Config extends RewindConfig, CleanupSettings {}
+
+/** The `Config` schema the host resolves and projects as this entry's form. */
+export const Config = z.object({
+  snapshotDir: z.string().required(false),
+  dshHome: z.string().required(false),
+  dedup: z.boolean().default(true),
+  enabled: z.boolean().default(DEFAULT_CLEANUP_CONFIG.enabled).volatile(),
+  maxAgeDays: z.number().step(1).min(1).default(DEFAULT_CLEANUP_CONFIG.maxAgeDays).volatile(),
+})
 
 /**
  * Tool names whose mutations the checkpoint tracker follows.
@@ -105,10 +121,10 @@ function isSubagentSession(session: Session): boolean {
 let activeLocale: HostLocaleId = 'en'
 
 /**
- * The cleanup-policy store, mounted when the settings service registers the
- * namespace. `undefined` until then (or in settings-less deployments), which
- * makes the cleanup command and auto-sweep fail-closed (delete nothing) rather
- * than guess. Follows the same "optional injected service" pattern as `fsService`.
+ * The cleanup-policy store, mounted from this plugin's resolved config plus the
+ * Loader entry that owns it. `undefined` when either is absent (an entry-less
+ * mount has nowhere to write), which makes the cleanup command and auto-sweep
+ * fail closed (delete nothing) rather than guess.
  */
 let cleanupStore: CleanupConfigStore | undefined
 
@@ -812,20 +828,20 @@ async function maybeRunAutoCleanup(
 }
 
 /**
- * Read the resolved cleanup policy from the settings-backed store. Before the
- * settings service is present the read fails closed (an error, deleting
- * nothing).
+ * Read the resolved cleanup policy from the config-backed store. Without a
+ * resolved config (a mount without the Loader, so nowhere to write) the read
+ * fails closed: an error, deleting nothing.
  */
 async function readCleanupPolicy(): Promise<{ ok: true; config: CleanupConfig } | { ok: false; error: string }> {
   if (cleanupStore === undefined) {
-    return { ok: false, error: 'settings service unavailable; snapshot cleanup policy cannot be read' }
+    return { ok: false, error: 'cleanup policy unavailable; snapshot cleanup policy cannot be read' }
   }
   return { ok: true, config: cleanupStore.load() }
 }
 
-/** Persist a validated cleanup policy through the settings-backed store. */
+/** Persist a validated cleanup policy through the config-backed store. */
 async function writeCleanupPolicy(next: CleanupConfig): Promise<void> {
-  if (cleanupStore === undefined) throw new Error('settings service unavailable; snapshot cleanup policy cannot be written')
+  if (cleanupStore === undefined) throw new Error('cleanup policy unavailable; snapshot cleanup policy cannot be written')
   await cleanupStore.save(next)
 }
 
@@ -999,14 +1015,14 @@ async function handleClearCurrent(
  * disk at `tools/post-execute` under the turn's anchor message seq.
  *
  * @param ctx - context carrying `commands`, `tools`, and an optional `fs`.
- * @param config - optional plugin config: `snapshotDir` (exact store-root override),
- *  `dshHome` (harness-home override feeding the default paths), `dedup`.
+ * @param config - resolved plugin config: the store options (`snapshotDir`,
+ *  `dshHome`, `dedup`) plus the live cleanup policy (`enabled`, `maxAgeDays`).
  */
-export function apply(ctx: Context, config?: RewindConfig): void {
+export function apply(ctx: Context, config?: Config): void {
   // Fresh per-mount host state: these three live at module scope because
   // module-level helpers read them without a ctx thread, and a stale locale, a
-  // disposed settings scope or a fired one-shot sweep gate would otherwise
-  // survive a live disable → enable round trip.
+  // fired one-shot sweep gate or the previous mount's policy store would
+  // otherwise survive a live disable → enable round trip.
   activeLocale = 'en'
   cleanupStore = undefined
   autoSweepChecked = false
@@ -1018,6 +1034,26 @@ export function apply(ctx: Context, config?: RewindConfig): void {
 
   const dshHome = config?.dshHome
   const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup, dshHome })
+  // The cleanup policy reads the config's live references, so a settings write
+  // is visible here without a remount; writes go through the settings service's
+  // entry API, which is the only owner of the document. An entry-less mount
+  // (mounted without the Loader) has nowhere to write, so the policy stays
+  // fail-closed: reads report "unavailable" and a sweep deletes nothing.
+  const entryId = (ctx as unknown as { fiber?: { entry?: { id?: string } } }).fiber?.entry?.id
+  if (config !== undefined && entryId !== undefined) {
+    const settingsCtx = ctx as unknown as {
+      settings: {
+        update(entryId: string, patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+        mutate(entryId: string, ops: readonly { op: 'unset'; path: readonly string[] }[]): Promise<void>
+      }
+    }
+    const writer: CleanupConfigWriter = {
+      entryId,
+      update: (id, patch) => settingsCtx.settings.update(id, patch),
+      clear: (id, fields) => settingsCtx.settings.mutate(id, fields.map(field => ({ op: 'unset' as const, path: [field] }))),
+    }
+    cleanupStore = volatileCleanupStore(config, writer)
+  }
   // Pending before-captures keyed by agent id + callId (callIds are unique,
   // but scoping by agent makes cross-session collisions impossible).
   const pending = new Map<string, PendingCapture>()
@@ -1044,60 +1080,6 @@ export function apply(ctx: Context, config?: RewindConfig): void {
   // Undefined until the service mounts (or in fs-less deployments): the sync
   // then degrades to a no-op and the pre-existing stale-error fallback stays.
   let fsService: FileSystem | undefined
-
-  // Resolve the durable locale preference (registered by dsh-client-locale's
-  // host half) and keep the command output following it. Settings is optional
-  // and injected dynamically like fs: an absent service (or a preference that
-  // was never set) leaves the default English — the ecosystem's neutral
-  // fallback — without failing the plugin load.
-  ctx.inject(['settings'], (settingsCtx) => {
-    // Structural face of the injected settings service: the
-    // provider reads sections by raw namespace string. Kept local so the host
-    // bundle never type-couples on the settings contract.
-    const settings = settingsCtx as unknown as {
-      settings: {
-        get(ns: string): unknown
-        register(ns: string, schema: unknown, opts: { base: CleanupConfig }): {
-          get(): unknown
-          update(patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
-        }
-      }
-    }
-    // Read the durable locale preference (the provider takes the raw namespace
-    // string). The fallback comes FIRST: this scope can remount on its own (a
-    // live-reload restart), and a document without a preference must yield the
-    // neutral default, not the previous document's language.
-    activeLocale = 'en'
-    const section = settings.settings.get('locale') as
-      | { preference?: HostLocaleId }
-      | undefined
-    if (section?.preference === 'zh' || section?.preference === 'en') {
-      activeLocale = section.preference
-    }
-
-    // Register the snapshot-cleanup policy namespace and back the store with
-    // it. `base` is the defaults layer (below the user layer), so the resolved
-    // policy is always schema-valid. The namespace is hyphenated (the settings
-    // grammar rejects dots). The register's returned scope is read/written
-    // through a structural face so the host bundle does not type-couple on the
-    // client settings API (`mutate` is unused here).
-    const cleanupScope = settings.settings.register(
-      CLEANUP_SETTINGS_NAMESPACE,
-      CleanupConfigSchema,
-      { base: DEFAULT_CLEANUP_CONFIG },
-    ) as unknown as CleanupSettingsScope
-    const mountedStore = settingsCleanupStore(cleanupScope)
-    cleanupStore = mountedStore
-    // Clear the module-level handle when THIS settings scope goes away, so a
-    // later caller fails closed (delete nothing) instead of reading a disposed
-    // scope. Registered on the injected scope, not the plugin fiber: the
-    // settings service can also unmount on its own (a live-reload restart)
-    // while the plugin stays mounted. Identity-checked, so a remount's store
-    // can never be cleared by the previous scope's disposer.
-    settingsCtx.effect(() => () => {
-      if (cleanupStore === mountedStore) cleanupStore = undefined
-    }, 'dsh-rewind cleanup store')
-  })
 
   ctx.effect(function* () {
     // One handler serves both `/rewind` and its alias `/undo`.

@@ -1,5 +1,5 @@
 /**
- * Snapshot cleanup policy: the settings-backed policy, its validation, the
+ * Snapshot cleanup policy: the config-backed policy, its validation, the
  * `/snapshot-auto-cleanup` command's argument grammar, and the auto-sweep
  * throttle. Kept free of host wiring so the policy and the parser are
  * unit-testable in isolation; `src/index.ts` is the only consumer.
@@ -11,21 +11,19 @@
  *   member stamp is older than this many days of idle is removed by a sweep.
  *   `0`/negative/non-integer are rejected, so a broken value can never steer
  *   the sweep into deleting everything.
- * - The policy lives in the dsh-settings document under
- *   `dsh-rewind-snapshot-cleanup`, created ONLY by an explicit
- *   `/snapshot-auto-cleanup` write. An absent value is the safe default (off);
- *   an unreadable or invalid value fail-closes a sweep (deletes nothing)
- *   instead of guessing.
+ * - The policy is this plugin entry's live configuration (`enabled` /
+ *   `maxAgeDays`); an absent value is the safe default (off), and an invalid
+ *   one fail-closes a sweep (deletes nothing) instead of guessing.
  *
  * @module dsh-rewind/snapshot-cleanup
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import type { Volatile } from '@deepseek-ai/cordis'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import z from '@deepseek-ai/schemastery'
 
-/** The cleanup policy, as persisted in the dsh-settings document. */
+/** The cleanup policy, as resolved from this plugin entry's configuration. */
 export interface CleanupConfig {
   readonly enabled: boolean
   readonly maxAgeDays: number
@@ -34,40 +32,33 @@ export interface CleanupConfig {
 /** The default keep threshold: finished sessions idle > 30 days are pruned. */
 export const DEFAULT_MAX_AGE_DAYS = 30
 
-/** The safe default policy (off) — a missing/corrupt file behaves like this. */
+/** The safe default policy (off) — a missing/corrupt value behaves like this. */
 export const DEFAULT_CLEANUP_CONFIG: CleanupConfig = { enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS }
 
 /**
- * The dsh-settings namespace that backs the cleanup policy.
- * Namespaces must match the settings provider's `^[a-z][a-z0-9-]*$` grammar (no
- * dots), so this is hyphenated, not dotted.
+ * The live configuration slice the cleanup policy reads: the two schema fields
+ * the host resolves into stable references before `apply` runs. The host's
+ * `Config` schema (see `src/index.ts`) declares both as `.volatile()`, which is
+ * what makes them user-editable in the Plugins page and live-updated without a
+ * restart.
  */
-export const CLEANUP_SETTINGS_NAMESPACE = 'dsh-rewind-snapshot-cleanup'
+export interface CleanupSettings {
+  readonly enabled: Volatile<boolean>
+  readonly maxAgeDays: Volatile<number>
+}
 
 /**
- * The schemastery schema that persists + validates the cleanup policy in the
- * dsh-settings document. This is the SINGLE storage validator: the `maxAgeDays`
- * rule is enforced by `.step(1).min(1)` (positive integer) and the defaults by
- * `.default(...)`, so the resolved value is always a valid {@link CleanupConfig}
- * and a bad stored/user value cannot steer the sweep into deleting everything.
+ * The host settings service's entry write port. A write is a revision-fenced
+ * document mutation, so clearing a field is what lets it re-inherit the schema
+ * default instead of pinning a copy of it.
  */
-export const CleanupConfigSchema: z<CleanupConfig> = z.object({
-  enabled: z.boolean().default(DEFAULT_CLEANUP_CONFIG.enabled),
-  maxAgeDays: z.number().step(1).min(1).default(DEFAULT_CLEANUP_CONFIG.maxAgeDays),
-})
-
-/**
- * Structural face of the settings scope the host needs for the policy: a
- * resolved read and a validated write. Kept local (never imports the settings
- * contract) so the host bundle does not type-couple on the client settings
- * API (`mutate` is unused here), and the seam the host passes
- * in isolates the drift to this module.
- */
-export interface CleanupSettingsScope {
-  /** The resolved policy: schema defaults, then base, then the user layer. */
-  get(): CleanupConfig
-  /** Merge a partial patch into the user layer (validated by the schema). */
-  update(patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+export interface CleanupConfigWriter {
+  /** Entry id the write addresses (this plugin's profile entry). */
+  readonly entryId: string
+  /** Merge field values into the entry's user layer. */
+  update(entryId: string, patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+  /** Remove fields from the entry's user layer, restoring the inherited value. */
+  clear(entryId: string, fields: readonly string[]): Promise<void>
 }
 
 /** A validated policy read/write port the command + auto-sweep use. */
@@ -79,18 +70,31 @@ export interface CleanupConfigStore {
 }
 
 /**
- * Adapter that turns a {@link CleanupSettingsScope} into a
- * {@link CleanupConfigStore}. Reads come straight from the resolved scope; a
- * write validates via `parseCleanupConfig` before touching the scope, so a bad
- * value can never reach the document (defense-in-depth below the schema).
+ * Adapter over the live {@link CleanupSettings} references and the host's entry
+ * write port. Reads re-read the references, so a settings write is visible
+ * without a remount; writes validate via `parseCleanupConfig` first, so a bad
+ * value can never reach the document (defense-in-depth below the schema), and a
+ * defaulted field is cleared rather than pinned.
  */
-export function settingsCleanupStore(scope: CleanupSettingsScope): CleanupConfigStore {
+export function volatileCleanupStore(
+  settings: CleanupSettings,
+  writer: CleanupConfigWriter,
+): CleanupConfigStore {
   return {
-    load: () => scope.get(),
+    load: () => ({
+      enabled: settings.enabled.get() ?? DEFAULT_CLEANUP_CONFIG.enabled,
+      maxAgeDays: settings.maxAgeDays.get() ?? DEFAULT_CLEANUP_CONFIG.maxAgeDays,
+    }),
     save: async (next) => {
       const parsed = parseCleanupConfig({ enabled: next.enabled, maxAgeDays: next.maxAgeDays })
       if (!parsed.ok) throw new RangeError(parsed.error)
-      await scope.update({ enabled: parsed.config.enabled, maxAgeDays: parsed.config.maxAgeDays })
+      const clears = (['enabled', 'maxAgeDays'] as const)
+        .filter(field => parsed.config[field] === DEFAULT_CLEANUP_CONFIG[field])
+      if (clears.length > 0) await writer.clear(writer.entryId, clears)
+      const patch: { enabled?: boolean; maxAgeDays?: number } = {}
+      if (!clears.includes('enabled')) patch.enabled = parsed.config.enabled
+      if (!clears.includes('maxAgeDays')) patch.maxAgeDays = parsed.config.maxAgeDays
+      if (Object.keys(patch).length > 0) await writer.update(writer.entryId, patch)
     },
   }
 }

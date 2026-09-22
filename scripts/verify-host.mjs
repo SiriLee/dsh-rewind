@@ -50,7 +50,8 @@ import { chmod, mkdtemp, mkdir, rename, rm, symlink, writeFile, readFile, readdi
 import { createHash, randomBytes } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { apply as applyRewind } from '../lib/index.js'
+import { apply as applyRewind, Config } from '../lib/index.js'
+import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 
 const aborted = () => new AbortController().signal
 
@@ -98,30 +99,36 @@ class FakeFs extends FileSystem {
 
 const fs = new FakeFs(new Context())
 
-// Minimal `settings` service double: provides `register`/`get`/`update` backed
-// by an in-memory per-namespace user-section store, enough for the plugin's
-// settings-optional locale read and the snapshot-cleanup policy namespace.
-// register returns a scope whose get() resolves defaults + base + user layer and
-// whose update() validates through the registered schema before merging.
+// The plugin's own `Config` schema resolves the live cleanup references (the
+// same call the Loader makes), and `tmpRoot` stays unrouted: `snapshotDir` /
+// `dshHome` are pinned by the config below.
+const resolvedConfig = Config({ snapshotDir: snapRoot, dshHome: tmpRoot })
+// The fake entry's stored user layer: PRESENCE, not value, is what marks an
+// override, exactly like the real document. It starts empty, so every field
+// resolves from the schema defaults.
+const storedPolicy = {}
+// What every write resolves the entry to (the user layer over the defaults).
+const effectivePolicy = {
+  enabled: resolvedConfig.enabled.get(),
+  maxAgeDays: resolvedConfig.maxAgeDays.get(),
+}
+
+/** Re-resolve the stored policy into the live references, as the Loader does. */
+function applyFakeWrite() {
+  const next = Config({ snapshotDir: snapRoot, dshHome: tmpRoot, ...storedPolicy })
+  updateVolatile(resolvedConfig.enabled, createVolatile(next.enabled.get()))
+  updateVolatile(resolvedConfig.maxAgeDays, createVolatile(next.maxAgeDays.get()))
+  effectivePolicy.enabled = resolvedConfig.enabled.get()
+  effectivePolicy.maxAgeDays = resolvedConfig.maxAgeDays.get()
+}
+
+/** The entry-write port the plugin's cleanup store addresses. */
 const fakeSettings = {
-  sections: new Map(),
-  register(ns, schema, opts = {}) {
-    const section = () => this.sections.get(ns) ?? {}
-    const scope = {
-      get: () => {
-        const u = section()
-        return { ...(opts.base ?? {}), ...u }
-      },
-      update: async (patch) => {
-        schema({ ...scope.get(), ...patch }) // validates; throws on invalid
-        this.sections.set(ns, { ...section(), ...patch })
-      },
-      replace: async (s) => { this.sections.set(ns, { ...s }) },
-      watch: () => () => {},
-    }
-    return scope
+  update: async (_entryId, patch) => { Object.assign(storedPolicy, patch); applyFakeWrite() },
+  mutate: async (_entryId, ops) => {
+    for (const op of ops) if (op.op === 'unset') delete storedPolicy[op.path[0]]
+    applyFakeWrite()
   },
-  get(ns) { return this.sections.get(ns) },
 }
 
 const user = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -207,6 +214,9 @@ const session = buildSession('verify-host')
 const agent = makeAgent(session.id, session)
 
 const ctx = new Context()
+// The Loader entry id the cleanup policy is addressed by: a real mount always
+// carries one, and `ctx.fiber.entry.id` is where the plugin reads it.
+ctx.fiber.entry = { id: 'dsh-rewind-plugin' }
 const commands = new Map()
 ctx.provide('commands', {
   register: definition => {
@@ -215,6 +225,8 @@ ctx.provide('commands', {
   },
 })
 ctx.provide('fs', fs)
+// The entry-write port the plugin's cleanup store addresses; the policy itself
+// resolves through the config the plugin is mounted with.
 ctx.provide('settings', fakeSettings)
 ctx.provide('sessions', { flush: async () => {} })
 // The real token-meter service (registers itself as ctx.tokenMeter) and a
@@ -229,7 +241,7 @@ class StubCompactionEngine extends BasicCompactionEngine {
   }
 }
 new StubCompactionEngine(ctx)
-applyRewind(ctx, { snapshotDir: snapRoot, dshHome: tmpRoot })
+applyRewind(ctx, resolvedConfig)
 applyCommandCompact(ctx)
 
 const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: CommandId('cid'), agent: agentOf, rawInput, signal: aborted() })
@@ -871,13 +883,12 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
 }
 
-// 15. /snapshot-auto-cleanup: view/configure via the settings document, run
+// 15. /snapshot-auto-cleanup: view/configure the entry's live policy, run
 //     (dry then apply), and reject invalid max-age without writing.
 {
   const cleanupDef = commands.get('snapshot-auto-cleanup')
   const callCleanup = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent, rawInput, signal: aborted() })
   const exists = async (path) => { try { await stat(path); return true } catch { return false } }
-  const NS = 'dsh-rewind-snapshot-cleanup'
   const seedDir = async (sessionId, mtime) => {
     const anchor = join(snapRoot, sessionId, '1')
     await mkdir(anchor, { recursive: true })
@@ -893,22 +904,22 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   // a plain message. Guard that the descriptor keeps it.
   check('snapshot-auto-cleanup declares input', cleanupDef?.input !== undefined, JSON.stringify(cleanupDef))
 
-  // Default: disabled, nothing written to the settings document yet.
+  // Default: disabled, and the entry still carries no user-set field.
   const status0 = await callCleanup('')
   check('cleanup default status is disabled', status0.kind === 'success' && /disabled/.test(status0.text), status0.text)
-  check('cleanup default writes nothing', (fakeSettings.sections.get(NS) ?? { enabled: false }).enabled === false, JSON.stringify(fakeSettings.sections.get(NS)))
+  check('cleanup default writes nothing', storedPolicy.enabled === undefined, JSON.stringify(storedPolicy))
 
-  // Enable persists enabled:true in the settings document.
+  // Enable persists enabled:true on the entry.
   const onResult = await callCleanup('on')
   check('cleanup on succeeds', onResult.kind === 'success', onResult.text)
-  check('cleanup config persisted (enabled)', fakeSettings.sections.get(NS)?.enabled === true, JSON.stringify(fakeSettings.sections.get(NS)))
+  check('cleanup config persisted (enabled)', effectivePolicy.enabled === true, JSON.stringify(storedPolicy))
   const statusOn = await callCleanup('')
   check('cleanup status reflects enabled', statusOn.kind === 'success' && /enabled/.test(statusOn.text), statusOn.text)
 
   // max-age persists; an invalid value is rejected without writing.
   const maxAgeResult = await callCleanup('max-age 5')
   check('cleanup max-age set', maxAgeResult.kind === 'success', maxAgeResult.text)
-  check('cleanup config persisted (maxAgeDays)', fakeSettings.sections.get(NS)?.maxAgeDays === 5, JSON.stringify(fakeSettings.sections.get(NS)))
+  check('cleanup config persisted (maxAgeDays)', effectivePolicy.maxAgeDays === 5, JSON.stringify(storedPolicy))
   const badAge = await callCleanup('max-age 0')
   check('cleanup rejects max-age 0', badAge.kind === 'error', badAge.text)
 

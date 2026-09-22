@@ -9,10 +9,10 @@ import { tmpdir } from 'node:os'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { SnapshotStore } from '../src/snapshot.ts'
+import { Config } from '../src/index.ts'
 import {
-  CLEANUP_SETTINGS_NAMESPACE,
-  CleanupConfigSchema,
   DEFAULT_CLEANUP_CONFIG,
   DEFAULT_MAX_AGE_DAYS,
   loadLastSweepAt,
@@ -21,10 +21,10 @@ import {
   resolveCleanupStatePath,
   runAutoCleanupCheck,
   saveLastSweepAt,
-  settingsCleanupStore,
   shouldRunAutoSweep,
+  volatileCleanupStore,
   type CleanupConfig,
-  type CleanupSettingsScope,
+  type CleanupConfigWriter,
 } from '../src/snapshot-cleanup.ts'
 
 let cfg: string
@@ -294,56 +294,83 @@ describe('runAutoCleanupCheck', () => {
   })
 })
 
-describe('CleanupConfig schema + settingsCleanupStore', () => {
-  // schemastery's TS call type requires the full config shape; `.default()` makes
-  // absent fields fall back at runtime, so tests drive the schema through a
-  // widened call helper that still exercises the runtime defaults/rejections.
-  const at = (v: Record<string, unknown>): CleanupConfig => CleanupConfigSchema(v as unknown as CleanupConfig)
-
-  it('resolves the default (off) policy when nothing is set', () => {
-    expect(at({})).toEqual({ enabled: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS })
-  })
-
-  it('keeps provided values', () => {
-    expect(at({ enabled: true, maxAgeDays: 7 })).toEqual({ enabled: true, maxAgeDays: 7 })
-  })
-
-  it('rejects a non-positive or non-integer maxAgeDays', () => {
-    expect(() => at({ enabled: false, maxAgeDays: 0 })).toThrow()
-    expect(() => at({ enabled: false, maxAgeDays: -1 })).toThrow()
-    expect(() => at({ enabled: false, maxAgeDays: 2.5 })).toThrow()
-    expect(() => at({ enabled: false, maxAgeDays: NaN })).toThrow()
-  })
-
-  it('rejects a non-enum enabled', () => {
-    expect(() => at({ enabled: 'yes' })).toThrow()
-  })
-
-  it('store load() reads the scope and save() validates then updates', async () => {
-    const scope: CleanupSettingsScope = {
-      get: (): CleanupConfig => ({ enabled: true, maxAgeDays: 9 }),
-      update: vi.fn(async () => undefined),
+describe('Config schema + volatileCleanupStore', () => {
+  /** One fake entry writer recording what each save wrote. */
+  function fakeWriter(): CleanupConfigWriter & {
+    readonly updates: readonly { readonly entryId: string; readonly patch: Record<string, unknown> }[]
+    readonly clears: readonly { readonly entryId: string; readonly fields: readonly string[] }[]
+  } {
+    const updates: { entryId: string; patch: Record<string, unknown> }[] = []
+    const clears: { entryId: string; fields: readonly string[] }[] = []
+    return {
+      entryId: 'dsh-rewind-plugin',
+      updates,
+      clears,
+      update: async (entryId, patch) => { updates.push({ entryId, patch }) },
+      clear: async (entryId, fields) => { clears.push({ entryId, fields }) },
     }
-    const store = settingsCleanupStore(scope)
+  }
+
+  it('the Config schema declares both policy fields as live with the shared defaults', () => {
+    const resolved = Config({} as never) as {
+      enabled: { get(): unknown }
+      maxAgeDays: { get(): unknown }
+    }
+    expect(resolved.enabled.get()).toBe(DEFAULT_CLEANUP_CONFIG.enabled)
+    expect(resolved.maxAgeDays.get()).toBe(DEFAULT_CLEANUP_CONFIG.maxAgeDays)
+    expect(DEFAULT_MAX_AGE_DAYS).toBe(DEFAULT_CLEANUP_CONFIG.maxAgeDays)
+  })
+
+  it('the Config schema rejects a non-positive or non-integer maxAgeDays', () => {
+    for (const value of [0, -1, 2.5, Number.NaN]) {
+      expect(() => Config({ maxAgeDays: value } as never)).toThrow()
+    }
+  })
+
+  it('the Config schema rejects a non-boolean enabled', () => {
+    expect(() => Config({ enabled: 'yes' } as never)).toThrow()
+  })
+
+  it('load() reads the live references, defaulting an absent value', () => {
+    const enabled = createVolatile(true)
+    const maxAgeDays = createVolatile(9)
+    const store = volatileCleanupStore({ enabled, maxAgeDays }, fakeWriter())
     expect(store.load()).toEqual({ enabled: true, maxAgeDays: 9 })
-    await store.save({ enabled: false, maxAgeDays: 12 })
-    expect(scope.update).toHaveBeenCalledWith({ enabled: false, maxAgeDays: 12 })
+    // A settings write updates the reference in place; the next read sees it.
+    updateVolatile(enabled, createVolatile(false))
+    expect(store.load()).toEqual({ enabled: false, maxAgeDays: 9 })
+  })
+
+  it('save() validates, writes a non-default value, and clears a defaulted field', async () => {
+    const writer = fakeWriter()
+    const store = volatileCleanupStore(
+      { enabled: createVolatile(false), maxAgeDays: createVolatile(DEFAULT_MAX_AGE_DAYS) },
+      writer,
+    )
+    await store.save({ enabled: true, maxAgeDays: 12 })
+    expect(writer.updates).toEqual([{ entryId: 'dsh-rewind-plugin', patch: { enabled: true, maxAgeDays: 12 } }])
+    expect(writer.clears).toEqual([])
+  })
+
+  it('save() clears a field set to its default instead of pinning it', async () => {
+    const writer = fakeWriter()
+    const store = volatileCleanupStore(
+      { enabled: createVolatile(true), maxAgeDays: createVolatile(5) },
+      writer,
+    )
+    await store.save({ ...DEFAULT_CLEANUP_CONFIG })
+    expect(writer.clears).toEqual([{ entryId: 'dsh-rewind-plugin', fields: ['enabled', 'maxAgeDays'] }])
+    expect(writer.updates).toEqual([])
+  })
+
+  it('save() refuses an invalid policy before it reaches the entry', async () => {
+    const writer = fakeWriter()
+    const store = volatileCleanupStore(
+      { enabled: createVolatile(false), maxAgeDays: createVolatile(30) },
+      writer,
+    )
     await expect(store.save({ enabled: false, maxAgeDays: 0 })).rejects.toThrow()
-    expect(scope.update).toHaveBeenCalledTimes(1) // invalid value never touched scope
-  })
-
-  it('namespace is lowercase-hyphenated (settings grammar, no dots)', () => {
-    expect(CLEANUP_SETTINGS_NAMESPACE).toMatch(/^[a-z][a-z0-9-]*$/)
-    expect(CLEANUP_SETTINGS_NAMESPACE).not.toContain('.')
-  })
-
-  it('pins the literals the client half duplicates', () => {
-    // The client card cannot import this module (it must stay free of host/node
-    // imports), so it copies both values. The client suite pins the same two
-    // literals: a rename here without one there would leave the form bound to a
-    // namespace nothing serves, or a placeholder that is not the default the
-    // Host actually applies.
-    expect(CLEANUP_SETTINGS_NAMESPACE).toBe('dsh-rewind-snapshot-cleanup')
-    expect(DEFAULT_MAX_AGE_DAYS).toBe(30)
+    expect(writer.updates).toEqual([])
+    expect(writer.clears).toEqual([])
   })
 })

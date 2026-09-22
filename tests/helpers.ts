@@ -9,6 +9,7 @@
 import { ToolCallId, createAssistantMessage, createToolResultMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { AssistantMessage, UserMessage } from '@deepseek-ai/dsh-llm'
 import { Session, SessionId, type SessionSeq } from '@deepseek-ai/dsh-session'
+import { createVolatile } from '@deepseek-ai/cosmokit'
 import {
   CompactionId,
   compactCheckpointSource,
@@ -16,6 +17,8 @@ import {
   toolPairingBalancedBefore,
 } from '@deepseek-ai/dsh-compaction'
 import { planRewind, REWIND_MARKER_SOURCE } from '../src/rewind.ts'
+import type { CleanupSettings } from '../src/snapshot-cleanup.ts'
+import type { RewindConfig } from '../src/index.ts'
 import { Context } from '@deepseek-ai/cordis'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
@@ -47,6 +50,30 @@ export function assistantMessage(text: string): AssistantMessage {
 /** The `(empty message)`-content `user/message` rewind marker the host appends. */
 export function rewindMarker(): UserMessage {
   return createUserMessage({ content: [{ type: 'text', text: '(empty message)' }], source: REWIND_MARKER_SOURCE })
+}
+
+/**
+ * One resolved plugin config for a test mount, shaped like the host's own:
+ * the ordinary store options plus the two live cleanup references. The
+ * defaults mirror the `Config` schema (`tests/snapshot-cleanup.test.ts` pins
+ * that parity).
+ * @param overrides - store options and cleanup values to override.
+ * @returns the config object `apply` consumes.
+ */
+export function testConfig(overrides: {
+  readonly snapshotDir?: string
+  readonly dshHome?: string
+  readonly dedup?: boolean
+  readonly enabled?: boolean
+  readonly maxAgeDays?: number
+} = {}): RewindConfig & CleanupSettings {
+  return {
+    snapshotDir: overrides.snapshotDir,
+    dshHome: overrides.dshHome,
+    dedup: overrides.dedup,
+    enabled: createVolatile(overrides.enabled ?? false),
+    maxAgeDays: createVolatile(overrides.maxAgeDays ?? 30),
+  }
 }
 
 /**

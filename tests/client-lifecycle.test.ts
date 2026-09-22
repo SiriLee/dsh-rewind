@@ -7,8 +7,9 @@
  * and the injected `<style data-plugin>` marker the harness reaps by.
  *
  * The client context is a hand fake with exactly the surface `apply` uses; a
- * mount that needs another service fails loudly. The nested `settingsScope`
- * inject is deliberately not served (the form must not gate the rewind side).
+ * mount that needs another service fails loudly. The configuration form is
+ * served a minimal fake form (the card's own behaviour is covered by
+ * `tests/client-settings-card.test.ts`).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
@@ -80,8 +81,16 @@ function mountClient(): Mounted {
     get: (name: string) => (name === 'commandUi'
       ? { decorate: (spec: { name: string }) => { decorated.push(spec.name); return () => {} } }
       : undefined),
-    // The settings-form side is optional by design; not serving it here keeps
-    // this probe about the rewind surface.
+    // The per-entry configuration form the cleanup card stages over. A minimal
+    // read/write face is enough for the registration probe; the card's own
+    // behaviour is covered by tests/client-settings-card.test.ts.
+    configForms: {
+      get: () => ({
+        getSnapshot: () => ({ status: 'ready', value: undefined, base: {}, user: {}, writable: true, revision: 0 }),
+        subscribe: () => () => {},
+        mutate: async () => true,
+      }),
+    },
     inject: () => {},
   } as unknown as ClientContext
 
@@ -131,8 +140,11 @@ describe('client plugin lifecycle', () => {
   it('registers the rewind surface and decorates both commands', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
-    expect(mounted.slotEntries.map(entry => entry.name)).toEqual(['conversation.session.header.actions'])
+    expect(mounted.slotEntries.map(entry => entry.name))
+      .toEqual(['conversation.session.header.actions', 'plugins.bundle.config'])
     expect(mounted.slotEntries[0]?.id).toBe('dsh-rewind-portals')
+    // The configuration form is keyed by the bundle's package name.
+    expect(mounted.slotEntries[1]?.key).toBe('dsh-rewind-plugin')
     expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
   })

@@ -15,7 +15,7 @@ function userEvent(seq: number, text: string, time = seq * 60_000): SessionEvent
     seq,
     time,
     data: createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
-  } as SessionEvent<'user/message'>
+  } as unknown as SessionEvent<'user/message'>
 }
 
 /** A plugin-injected `user/message` (renders as a `context` node, not a user bubble). */
@@ -30,7 +30,7 @@ function injectedContextEvent(seq: number, text: string, plugin = 'compact'): Se
       content: [{ type: 'text', text }],
       source: { kind: 'plugin', plugin },
     },
-  } as SessionEvent<'user/message'>
+  } as unknown as SessionEvent<'user/message'>
 }
 
 function assistantEvent(seq: number, text: string): SessionEvent<'assistant/message'> {
@@ -46,7 +46,7 @@ function assistantEvent(seq: number, text: string): SessionEvent<'assistant/mess
         source: { provider: 'test', model: 'test-model' },
       }),
     },
-  } as SessionEvent<'assistant/message'>
+  } as unknown as SessionEvent<'assistant/message'>
 }
 
 /** A small log: u0, a1, u2, a3, u4, a5 (surface = every seq). */
@@ -222,7 +222,7 @@ describe('planRewind', () => {
           content: [{ type: 'text' as const, text: 'injected system context' }],
           source: { kind: 'plugin', plugin: 'compact' },
         },
-      } as SessionEvent<'user/message'>,
+      } as unknown as SessionEvent<'user/message'>,
     ]
     const surface = [0, 1]
     expect(() => planRewind(events, surface, { kind: 'seq', seq: 1 })).toThrowError(/not a human user message/)

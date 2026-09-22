@@ -31,9 +31,9 @@ import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-contro
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
-// Type-only: the settings-namespace scope contract (`bind` result: snapshot +
-// `set`/`unset`); the card's transport is the plugin's own structural face.
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: the per-entry configuration form (`ctx.configForms`) the cleanup
+// card stages over; the form model itself is the harness's own.
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the ctx.locale merge from the locale plugin.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the `mainView` Session retain-source label merge (0.1.6-alpha.2
@@ -56,9 +56,9 @@ import { en, zh } from './locales.ts'
 import { STYLE } from './styles.ts'
 import {
   SettingsCleanupCard,
-  CLEANUP_SETTINGS_NAMESPACE,
-  type CleanupCardApi,
-  type CleanupField,
+  cleanupForm,
+  CLEANUP_ENTRY_ID,
+  type CleanupFormScope,
   type CleanupPolicy,
   type CardTranslate,
 } from './settings-card.tsx'
@@ -69,13 +69,11 @@ export const name = 'dsh-rewind'
 // instead (see `uiConversation` in apply), the optional `ctx.get` pattern the
 // harness's own consumer plugins use.
 //
-// `settingsScope` is likewise NOT a module-level inject. Following the
-// dsh-market template (see src/client/index.ts below), the settings surface is
-// reached through a NESTED `ctx.inject(['settingsScope'], ...)`: naming it at
-// the module level would keep this whole plugin unmounted on a host without
-// that service, costing the rewind feature its settings card. Nested, the card
-// simply never registers there.
-export const inject = ['slots', 'sessions', 'locale', 'commandUi']
+// `configForms` IS a module-level inject: the rewind surface itself never needs
+// it, but the configuration card is addressed through it, and the web profile
+// always composes `ui-settings` (the same dependency the official settings
+// pages declare).
+export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms']
 
 const NS = 'rewind'
 
@@ -130,6 +128,8 @@ export interface ClientContext {
   get(name: string): unknown
   slots: unknown
   commandUi: unknown
+  /** Per-entry configuration forms (this bundle's own entry included). */
+  configForms: { get<T>(entryId: string): ConfigForm<T> }
 }
 
 /**
@@ -258,81 +258,29 @@ export function apply(ctx: ClientContext): void {
     ))
 
     // ---- snapshot-cleanup configuration form (sidebar Plugins page) ----
-    // Reach the settings surface through a NESTED inject (the dsh-market
-    // template): do NOT name settingsScope in the module-level inject, or a
-    // host without it leaves this whole plugin unmounted (costing the rewind
-    // feature a form it cannot render). Nested, the form simply never registers
-    // there. The nested scope inherits the module 'slots' and 'locale', and
-    // gains 'settingsScope'; only then is the namespace bound and the form
-    // registered under `plugins.bundle.config` keyed by the BUNDLE's package
-    // name — the alpha.2 contract for a bundle's own configuration. The card
-    // reads/writes through the harness's typed SettingsScope face (the
-    // `mutate` method deliberately unused).
-    const clientCtx = ctx as unknown as {
-      inject(services: string[], callback: (scoped: {
-        slots: SlotsLike
-        settingsScope: { bind<T>(spec: { namespace: string }): SettingsScope<T> }
-      }) => void): void
+    // The card is this bundle's own configuration page: it registers under
+    // `plugins.bundle.config`, keyed by the BUNDLE's package name, and stages
+    // its edits over the entry's shared configuration form (`ctx.configForms`),
+    // exactly like the official settings pages.
+    try {
+      const { store, form, labels } = cleanupForm(
+        ctx.configForms.get<CleanupPolicy>(CLEANUP_ENTRY_ID) as unknown as CleanupFormScope<CleanupPolicy>,
+        t as unknown as CardTranslate,
+      )
+      yield slots.inject('plugins.bundle.config', () => slots.register(
+        {
+          name: 'plugins.bundle.config',
+          key: PLUGIN_PACKAGE,
+          locale: NS,
+          inject: () => ({ hooks: { cleanupCard: store }, labels, ...form.actions() }),
+        },
+        SettingsCleanupCard,
+      ))
+    } catch (error) {
+      // A settings-card failure must never break the plugin: the rewind
+      // feature is independent of the settings surface.
+      rewindLog.error('settings', 'settings card register failed', error)
     }
-    clientCtx.inject(['settingsScope'], (scoped) => {
-      try {
-        const scope = scoped.settingsScope.bind<CleanupPolicy>({ namespace: CLEANUP_SETTINGS_NAMESPACE })
-        // The reads the official CardForm performs: resolved value, the
-        // composition base a reset reverts to, and the raw user layer whose
-        // PRESENCE (not its value) marks a field overridden.
-        const userLayer = (): Record<string, unknown> | undefined => {
-          const user = scope.getSnapshot().user
-          return typeof user === 'object' && user !== null ? user as Record<string, unknown> : undefined
-        }
-        const cardApi: CleanupCardApi = {
-          // The official shell reads `status === 'ready'`; a loading namespace
-          // is not available, so the form offers no fields yet.
-          available: () => scope.getSnapshot().status === 'ready',
-          writable: () => {
-            // The harness's own writable signal (a read-only settings source
-            // reports false); the earlier status/mode derivation was wrong and
-            // left the buttons disabled.
-            return scope.getSnapshot().writable === true
-          },
-          read: (field) => scope.getSnapshot().value?.[field],
-          base: (field) => (scope.getSnapshot().base as Partial<CleanupPolicy> | undefined)?.[field],
-          stored: (field) => {
-            const user = userLayer()
-            return user !== undefined && Object.hasOwn(user, field)
-          },
-          // The Host decides whether a write landed: report the read-back the
-          // official `CardForm.store` performs.
-          set: async (field, value) => {
-            await scope.set(field, value)
-            return userLayer()?.[field] === value
-          },
-          unset: async (field) => {
-            await scope.unset(field)
-            const user = userLayer()
-            return user === undefined || !Object.hasOwn(user, field)
-          },
-          subscribe: (cb) => scope.subscribe(cb),
-        }
-        scoped.slots.inject('plugins.bundle.config', () => scoped.slots.register(
-          {
-            name: 'plugins.bundle.config',
-            // Keyed by the bundle's package name: the page renders this form on
-            // the bundle's own page, between its description and its rows.
-            key: PLUGIN_PACKAGE,
-            // Match the official cards / dsh-market: locale + inject provide
-            // the card its props through the slot renderer (the page feeds it
-            // the `view` it asks for plus the bound api).
-            locale: NS,
-            inject: () => ({ t: t as unknown as CardTranslate, api: cardApi }),
-          },
-          SettingsCleanupCard,
-        ))
-      } catch (error) {
-        // A settings-card failure must never break the plugin: the rewind
-        // feature is independent of the settings surface.
-        rewindLog.error('settings', 'settings card register failed', error)
-      }
-    })
 
     // ---- /rewind command decoration (the standard text-driven flow) ----
     // A bare `/rewind` — picked from the slash-menu completion, or typed in
