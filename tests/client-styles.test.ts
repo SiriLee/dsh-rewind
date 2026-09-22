@@ -1,7 +1,8 @@
 /**
- * Guard for the cleanup card's own CSS: the shared form frame and the numeric
- * field are the harness's components now, so this pins only the block the card
- * still owns — the auto-cleanup toggle row and the two status lines.
+ * Guard for the cleanup card's own CSS: the shared form frame (its unavailable,
+ * read-only, save, and failure lines included) and the numeric field are the
+ * harness's components now, so this pins only the block the card still owns —
+ * the auto-cleanup toggle row and its hint.
  *
  * Source-text on purpose: jsdom applies no stylesheet, so only a real browser
  * could assert these numbers by rendering.
@@ -22,7 +23,6 @@ const EXPECTATIONS: Readonly<Record<string, string>> = {
   [`${P}toggle-row`]: 'display:flex; align-items:flex-start; justify-content:space-between; gap:16px; font-size:13px; line-height:1.5; color:var(--dsw-alias-label-primary)',
   [`${P}toggle-label`]: 'flex:1; min-width:0',
   [`${P}hint`]: 'margin:0; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-tertiary)',
-  [`${P}unavailable`]: 'margin:0; font-size:12px; line-height:1.5; color:var(--dsw-alias-label-tertiary)',
 }
 
 /**

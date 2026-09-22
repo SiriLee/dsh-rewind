@@ -262,9 +262,13 @@ export function SettingsForm({ labels, state, onSave, onDiscard, children }: {
   readonly onDiscard: () => void
   readonly children?: ReactNode
 }): ReactNode {
+  // Mirrors the published frame: an unserved entry replaces the form with one
+  // status line (the read-only notice replaces the controls of an edited form).
+  if (!state.available) return createElement('p', { role: 'status' }, labels.unavailable)
+  const showChildren = state.writable || !state.dirty
   return createElement('div', { className: 'settings-form' },
     !state.writable ? createElement('p', { role: 'status' }, labels.readOnly) : null,
-    children,
+    showChildren ? children : null,
     state.failed ? createElement('p', { role: 'status' }, labels.saveFailed) : null,
     createElement('button', {
       type: 'button',

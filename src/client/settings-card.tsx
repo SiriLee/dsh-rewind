@@ -13,7 +13,7 @@
  */
 
 import { SettingsFormModel, settingsNumberField, SettingsForm, SettingsValueField, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SettingsFieldState, SettingsFormActions, SettingsFormLabels } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { SettingsFieldState, SettingsFormActions, SettingsFormLabels, SettingsFormShell } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { InjectFace, LocaleNamespaceMap, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RewindKey } from './locales.ts'
 // Type-only: supplies the `plugins.bundle.config` slot declaration this card's
@@ -73,15 +73,11 @@ function enabledField(): FieldSpec {
 }
 
 /** One form snapshot as this card reads it (the shared store's `getSnapshot`). */
-/** One form snapshot as this card reads it (the shared store's `getSnapshot`). */
-export interface CleanupCardSnapshot {
-  readonly status: 'loading' | 'ready' | 'unavailable'
-  readonly available: boolean
-  readonly writable: boolean
-  readonly dirty: boolean
-  readonly invalid: boolean
-  readonly saving: boolean
-  readonly failed: boolean
+/**
+ * One form snapshot as this card reads it: the shared form frame's own state
+ * (`SettingsFormShell`) plus the two field drafts.
+ */
+export interface CleanupCardSnapshot extends SettingsFormShell {
   readonly enabled: SettingsFieldState
   readonly maxAgeDays: SettingsFieldState
 }
@@ -171,15 +167,11 @@ export function cleanupForm(scope: CleanupFormScope<CleanupPolicy>) {
   ])
   return {
     form,
-    store: form.bind((): CleanupCardSnapshot => {
-      const shell = form.shell()
-      return {
-        ...shell,
-        status: shell.available ? 'ready' : 'unavailable',
-        enabled: form.field('enabled'),
-        maxAgeDays: form.field('maxAgeDays'),
-      }
-    }),
+    store: form.bind((): CleanupCardSnapshot => ({
+      ...form.shell(),
+      enabled: form.field('enabled'),
+      maxAgeDays: form.field('maxAgeDays'),
+    })),
   }
 }
 
@@ -193,9 +185,8 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
   const { t, useCleanupCard } = props
   const state = useCleanupCard(snapshot => snapshot)
   if (props.view === 'summary') return null
-  if (state.status !== 'ready') {
-    return <p className="dsh-rewind-cleanup-unavailable" role="status">{t('cleanup.unavailable')}</p>
-  }
+  // The shared frame renders the unavailable and read-only lines itself, from
+  // the state it is given; the card only supplies the controls.
   const disabled = !state.writable || state.saving
   const enabled = state.enabled.text === 'true'
   return (
