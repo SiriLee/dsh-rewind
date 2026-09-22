@@ -158,7 +158,7 @@ describe('I2 surface consistency (probe: deriveMessages + node legality)', () =>
     expect(lastEvent.type).toBe('user/message')
     const data = lastEvent.data as { content?: unknown[]; source?: { kind?: string } }
     expect(data.content).toEqual([{ type: 'text', text: '(empty message)' }])
-    expect(data.source?.kind).toBe('plugin')
+    expect(data.source?.kind).toBe('dsh-rewind')
   })
 })
 

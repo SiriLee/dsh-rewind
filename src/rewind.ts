@@ -9,8 +9,9 @@
  * transcript) is untouched; only the model-visible surface is cut, so the
  * next request derives its context from the target message onward.
  *
- * Marker shape (v0.1.5/v3): the marker is a `user/message` carrying a replace
- * `surfaceOp` — a single event:
+ * Marker shape (v4): the marker is a `user/message` carrying a replace
+ * `surfaceOp` and the producer-owned source `{ kind: 'dsh-rewind' }` (see
+ * `marker.ts`) — a single event:
  *
  *   user/message (marker content) → { surfaceOp {replace, startSeq, endSeq} }
  *
@@ -27,8 +28,9 @@
  * @module dsh-rewind/rewind
  */
 
-import type { MessageSource } from '@deepseek-ai/dsh-llm/message'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+
+export { REWIND_MARKER_KIND, REWIND_MARKER_SOURCE, isRewindMarker } from './marker.ts'
 
 /** Which of the two rewind modes a rewind executes. */
 export type RewindMode = 'chat' | 'both'
@@ -85,26 +87,6 @@ export interface RewindPlan {
   readonly surfaceStart: number
   /** Last surface node — the replace range end (inclusive). */
   readonly surfaceEnd: number
-}
-
-/**
- * The rewind-marker source: the backend-independent identity carried by every
- * marker the plugin appends. It is the plain third-party plugin source shape
- * `{ kind: 'plugin', plugin: 'dsh-rewind' }` — no extra fields, because a
- * plugin source is a CLOSED shape in the harness (only `kind`/`plugin`, plus
- * the context-injection `form`/`sections`/`summary`; see `MessageSourceMap` and
- * the released-format source validator). A plugin extends the source map by
- * adding a new `kind`, never by hanging private fields off `plugin`.
- */
-export const REWIND_MARKER_SOURCE = Object.freeze({ kind: 'plugin', plugin: 'dsh-rewind' } as const)
-
-/**
- * Test whether a persisted message source identifies a rewind marker.
- * @param source - source restored from a surface user message.
- * @returns whether the source carries the backend-independent rewind brand.
- */
-export function isRewindMarker(source: MessageSource): boolean {
-  return source.kind === 'plugin' && source.plugin === REWIND_MARKER_SOURCE.plugin
 }
 
 /** Preview length cap for candidate listings. */

@@ -264,7 +264,7 @@ describe('planRewind', () => {
 })
 
 describe('rewind marker message shape', () => {
-  it('the marker is a user/message with the conformant plugin source and the (empty message) content (v3 surface replace)', () => {
+  it('the marker is a user/message with the producer-owned source and the (empty message) content', () => {
     // The marker content is a constant `(empty message)` placeholder so it is
     // accepted by every provider: the session log is immutable but the model
     // serving it may change (Issue #21).
@@ -273,24 +273,32 @@ describe('rewind marker message shape', () => {
       source: REWIND_MARKER_SOURCE,
     })
     expect(marker.role).toBe('user')
-    expect(marker.source.kind).toBe('plugin')
-    expect((marker.source as { plugin?: string }).plugin).toBe('dsh-rewind')
-    expect(marker.source).toEqual({ kind: 'plugin', plugin: 'dsh-rewind' })
+    expect(marker.source).toEqual({ kind: 'dsh-rewind' })
     expect(marker.content).toEqual([{ type: 'text', text: '(empty message)' }])
   })
 
-  it('REWIND_MARKER_SOURCE is the frozen, closed third-party plugin source shape', () => {
-    // A plugin source is a CLOSED shape (`kind`/`plugin` only): it must carry
-    // no private field (see docs/compat/audit.md — the released-format source
-    // validator rejects any member outside the allowlist).
-    expect(REWIND_MARKER_SOURCE).toEqual({ kind: 'plugin', plugin: 'dsh-rewind' })
+  it('REWIND_MARKER_SOURCE is the frozen producer-owned source shape', () => {
+    // One `kind`, no private field: the v4 source admission rejects the retired
+    // plugin wrapper and any field outside the producer's own shape.
+    expect(REWIND_MARKER_SOURCE).toEqual({ kind: 'dsh-rewind' })
     expect(Object.isFrozen(REWIND_MARKER_SOURCE)).toBe(true)
     expect(isRewindMarker(REWIND_MARKER_SOURCE)).toBe(true)
   })
 
-  it('isRewindMarker recognises only the dsh-rewind brand', () => {
+  it('isRewindMarker recognizes every shape a stored marker can carry', () => {
+    // Current writes.
+    expect(isRewindMarker({ kind: 'dsh-rewind' })).toBe(true)
+    // Logs written before this build: the released v3 plugin wrapper, and the
+    // form the v3→v4 conversion gives an unlisted third-party producer.
+    expect(isRewindMarker({ kind: 'plugin', plugin: 'dsh-rewind' })).toBe(true)
+    expect(isRewindMarker({ kind: 'plugin:dsh-rewind' })).toBe(true)
+  })
+
+  it('isRewindMarker rejects every other source', () => {
     expect(isRewindMarker({ kind: 'plugin', plugin: 'compact' })).toBe(false)
+    expect(isRewindMarker({ kind: 'plugin:compact' })).toBe(false)
     expect(isRewindMarker({ kind: 'user' })).toBe(false)
     expect(isRewindMarker({ kind: 'plugin', plugin: 'other' })).toBe(false)
+    expect(isRewindMarker({ kind: 'dsh-rewind-extra' })).toBe(false)
   })
 })

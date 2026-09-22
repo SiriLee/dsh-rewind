@@ -359,13 +359,14 @@ const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty mes
 
 /**
  * Build the rewind marker: a `user/message` carrying the surface-replace op.
- * v3 keeps surface `replace` for the node that cites the shadowed seqs via
+ * Surface `replace` belongs to the node that cites the shadowed seqs via
  * `sourceEventSeqs`; a `user/message` is the only surface type that can do so
  * (assistant/message embeds its stream and cannot cite sources; tool/result
- * is restricted to single-node rewrites). The marker is appended while idle,
- * outside any turn — no ghost `step/start`…`step/end` frame is needed, because
- * the token-meter's step machine ignores `user/message` and the session
- * invariant imposes no open-turn requirement on it.
+ * is restricted to single-node rewrites). The source is the producer-owned
+ * `{ kind: 'dsh-rewind' }` (see `marker.ts`). The marker is appended while
+ * idle, outside any turn — no ghost `step/start`…`step/end` frame is needed,
+ * because the token-meter's step machine ignores `user/message` and the
+ * session invariant imposes no open-turn requirement on it.
  */
 function buildMarker(): UserMessage {
   return createUserMessage({
