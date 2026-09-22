@@ -123,6 +123,7 @@ function mount(options: Parameters<typeof fakeForm>[0] = {}, view: 'summary' | '
     input: () => el.querySelector<HTMLInputElement>('input'),
     save: () => Array.from(el.querySelectorAll('button')).find(b => b.textContent === 'cleanup.save'),
     reset: () => Array.from(el.querySelectorAll('button')).find(b => b.textContent === 'cleanup.reset'),
+    discard: () => Array.from(el.querySelectorAll('button')).find(b => b.textContent === 'discard'),
   }
 }
 
@@ -185,6 +186,26 @@ describe('field specs (what this card adds to the harness form model)', () => {
     typeInto(view.input()!, '')
     click(view.save())
     await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'unset', path: ['maxAgeDays'] }) })
+  })
+
+  it('resets an overridden day count to the inherited value', async () => {
+    // The official field renders its reset control only while the user layer
+    // carries the field; resetting stages a clear so the value re-inherits.
+    const view = mount({ user: { enabled: true, maxAgeDays: 7 } })
+    expect(view.input()?.value).toBe('7')
+    click(view.reset())
+    expect(view.input()?.value).toBe(String(BASE.maxAgeDays))
+    click(view.save())
+    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'unset', path: ['maxAgeDays'] }) })
+  })
+
+  it('drops every staged edit on discard', () => {
+    const view = mount()
+    click(view.switch())
+    expect(view.switch()?.getAttribute('aria-checked')).toBe('true')
+    click(view.discard())
+    expect(view.switch()?.getAttribute('aria-checked')).toBe('false')
+    expect(view.writes).toEqual([])
   })
 })
 

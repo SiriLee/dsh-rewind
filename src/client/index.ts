@@ -118,7 +118,7 @@ const COMPOSER_EDITABLE_SELECTOR = '[data-composer-input]'
  * `ISessions` from `@deepseek-ai/dsh-api-session-controller`.
  */
 export interface ClientContext {
-  effect(execute: () => Iterable<unknown>, label?: string): unknown
+  effect(execute: (() => Iterable<unknown>) | (() => void), label?: string): unknown
   locale: {
     register(namespace: string, messages: Record<string, Record<string, string>>): unknown
     bind(namespace: string): (key: string) => string
@@ -267,6 +267,9 @@ export function apply(ctx: ClientContext): void {
         ctx.configForms.get<CleanupPolicy>(CLEANUP_ENTRY_ID) as unknown as CleanupFormScope<CleanupPolicy>,
         t as unknown as CardTranslate,
       )
+      // The model subscribes to the entry's form on construction, so the fiber
+      // must release it on unload (the official settings pages do the same).
+      ctx.effect(() => () => { form.dispose() }, 'dsh-rewind cleanup form')
       yield slots.inject('plugins.bundle.config', () => slots.register(
         {
           name: 'plugins.bundle.config',

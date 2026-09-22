@@ -174,25 +174,11 @@ export const STYLE = `
   pointer-events: none;
 }
 
-/* ---- Snapshot-cleanup configuration form (mirrors the harness plugin form) ---- */
-/* The Plugins page draws the bundle's title, icon, crumb, and description; this
-   is the form body only. Every value mirrors ui-settings-plugins'
-   PluginConfigForm.module.css / fields.module.css /
-   SubagentModelSelectionFields.module.css: those components are package-internal
-   (the package ships lib/** only) and cannot be imported across packages, so the
-   numbers are copied rather than the components. */
-.dsh-rewind-cleanup-form {
-  display: flex;
-  flex-direction: column;
-}
-.dsh-rewind-cleanup-readonly,
-.dsh-rewind-cleanup-unavailable {
-  margin: 0 0 12px;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-tertiary);
-}
-/* Auto-cleanup permission block: the label + Switch row, then the hint. */
+/* ---- Snapshot-cleanup configuration form ---- */
+/* The Plugins page draws the bundle's title, icon, crumb, description, and the
+   shared settings form frame (labels, save, read-only and failure lines); this
+   styles only the one control the card owns — the auto-cleanup toggle row — plus
+   the two standalone status lines. */
 .dsh-rewind-cleanup-permission {
   display: grid;
   gap: 6px;
@@ -211,125 +197,11 @@ export const STYLE = `
   flex: 1;
   min-width: 0;
 }
-.dsh-rewind-cleanup-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 12px 0;
-}
-.dsh-rewind-cleanup-field + .dsh-rewind-cleanup-field {
-  border-top: 0.5px solid var(--dsw-alias-border-l2);
-}
-.dsh-rewind-cleanup-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.dsh-rewind-cleanup-label-group {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: 1;
-  min-width: 0;
-}
-.dsh-rewind-cleanup-label {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-primary);
-}
-.dsh-rewind-cleanup-label-group > .dsh-rewind-cleanup-label {
-  flex: 0 1 auto;
-}
-.dsh-rewind-cleanup-badges {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.dsh-rewind-cleanup-reset {
-  border: none;
-  background: none;
-  padding: 0;
-  font: inherit;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-}
-.dsh-rewind-cleanup-reset:hover:not(:disabled) {
-  color: var(--dsw-alias-label-primary);
-}
-.dsh-rewind-cleanup-reset:disabled {
-  cursor: default;
-}
-.dsh-rewind-cleanup-hint {
+.dsh-rewind-cleanup-hint,
+.dsh-rewind-cleanup-unavailable {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
   color: var(--dsw-alias-label-tertiary);
-}
-.dsh-rewind-cleanup-error {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-state-error-primary);
-}
-.dsh-rewind-cleanup-input {
-  height: 34px;
-  padding: 0 12px;
-  border: 0.5px solid var(--dsw-alias-border-l4);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-3);
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-primary);
-}
-.dsh-rewind-cleanup-input:focus-visible {
-  outline: none;
-  border-color: var(--dsw-alias-brand-primary);
-}
-.dsh-rewind-cleanup-input:disabled {
-  color: var(--dsw-alias-label-tertiary);
-  cursor: default;
-}
-.dsh-rewind-cleanup-input[aria-invalid='true'] {
-  border-color: var(--dsw-alias-state-error-primary);
-}
-.dsh-rewind-cleanup-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 16px;
-}
-.dsh-rewind-cleanup-failed {
-  flex: 1;
-  min-width: 0;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--dsw-alias-label-error);
-}
-.dsh-rewind-cleanup-save {
-  appearance: none;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 5px 14px;
-  font: inherit;
-  font-size: 13px;
-  line-height: 1.5;
-  cursor: pointer;
-  background: var(--dsw-alias-label-primary);
-  color: var(--dsw-alias-bg-layer-3);
-}
-.dsh-rewind-cleanup-save:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.dsh-rewind-cleanup-save:focus-visible {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: 1px;
 }
 `

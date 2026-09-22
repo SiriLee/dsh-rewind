@@ -281,4 +281,18 @@ describe('live disable → enable round trip', () => {
     expect(result.kind).toBe('error')
     expect(result.text).toContain('cleanup policy unavailable')
   })
+
+  it('fails closed when a config resolved but the Loader entry did not', async () => {
+    // A mount without the Loader has a config to read but no entry id to write
+    // back to, so mounting the store would report values it can never persist.
+    // It must stay unmounted.
+    const mounted = mount()
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
+    const [session] = userMessage()
+    const status = { rawInput: 'status', agent: { session } } as never
+    expect((await cleanup.handler(status) as { kind: string }).kind).toBe('error')
+    const on = { rawInput: 'on', agent: { session } } as never
+    expect((await cleanup.handler(on) as { kind: string }).kind).toBe('error')
+  })
 })

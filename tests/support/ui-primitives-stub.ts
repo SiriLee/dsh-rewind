@@ -130,6 +130,7 @@ export class SettingsFormModel<T> {
   private readonly specs: Map<string, SettingsFieldSpec>
   private readonly staged = new Map<string, { readonly text: string; readonly clear: boolean }>()
   private readonly listeners = new Set<() => void>()
+  private readonly releaseScope: () => void
   private saving = false
   private failed = false
 
@@ -138,7 +139,7 @@ export class SettingsFormModel<T> {
     specs: readonly SettingsFieldSpec[],
   ) {
     this.specs = new Map(specs.map(spec => [spec.field, spec]))
-    this.scope.subscribe(() => { this.publish() })
+    this.releaseScope = this.scope.subscribe(() => { this.publish() })
   }
 
   bind<S>(project: () => S): { getSnapshot(): S; subscribe(listener: () => void): () => void } {
@@ -245,6 +246,12 @@ export class SettingsFormModel<T> {
   }
 
   private publish(): void { for (const listener of this.listeners) listener() }
+
+  /** Release the model's subscription, as the published class does. */
+  dispose(): void {
+    this.releaseScope()
+    this.listeners.clear()
+  }
 }
 
 /** The shared form frame: the copy, the state, and the save/discard controls. */

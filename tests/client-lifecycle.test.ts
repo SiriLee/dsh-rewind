@@ -27,6 +27,10 @@ interface Mounted {
   readonly slotEntries: readonly { readonly name: string; readonly id?: string; readonly key?: string }[]
   /** Commands the plugin decorated (`commandUi.decorate`). */
   readonly decorated: readonly string[]
+  /** Subscriptions the cleanup form opened on its configuration scope. */
+  readonly formSubscriptions: () => number
+  /** Releases of those subscriptions (the model's `dispose`). */
+  readonly formUnsubscriptions: () => number
   /** Run every disposer in reverse registration order, as a fiber does. */
   dispose(): void
 }
@@ -54,6 +58,10 @@ function mountClient(): Mounted {
   const disposers: Disposer[] = []
   const slotEntries: { name: string; id?: string; key?: string }[] = []
   const decorated: string[] = []
+  // The cleanup form's subscription to its configuration scope: the plugin must
+  // release it on unload, so both ends are counted.
+  const subscribeScope = vi.fn(() => () => {})
+  const unsubscribeScope = vi.fn(() => {})
   const locale = {
     register: () => () => {},
     bind: () => (key: string) => key,
@@ -87,7 +95,10 @@ function mountClient(): Mounted {
     configForms: {
       get: () => ({
         getSnapshot: () => ({ status: 'ready', value: undefined, base: {}, user: {}, writable: true, revision: 0 }),
-        subscribe: () => () => {},
+        subscribe: (cb: () => void) => {
+          subscribeScope()
+          return () => { unsubscribeScope(); void cb }
+        },
         mutate: async () => true,
       }),
     },
@@ -98,6 +109,8 @@ function mountClient(): Mounted {
     ctx,
     slotEntries,
     decorated,
+    formSubscriptions: () => subscribeScope.mock.calls.length,
+    formUnsubscriptions: () => unsubscribeScope.mock.calls.length,
     dispose: () => {
       for (const dispose of disposers.splice(0).reverse()) void dispose()
     },
@@ -147,6 +160,18 @@ describe('client plugin lifecycle', () => {
     expect(mounted.slotEntries[1]?.key).toBe('dsh-rewind-plugin')
     expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
+  })
+
+  it('releases the configuration form subscription on unload', () => {
+    // The staged form model subscribes to its entry's shared form on
+    // construction; a fiber that unmounts must release it instead of leaving the
+    // card's listener reachable through the scope.
+    const mounted = mountClient()
+    apply(mounted.ctx)
+    expect(mounted.formSubscriptions()).toBe(1)
+    expect(mounted.formUnsubscriptions()).toBe(0)
+    mounted.dispose()
+    expect(mounted.formUnsubscriptions()).toBe(1)
   })
 
   it('injects its styles under the package identity the harness reaps by', () => {
