@@ -18,7 +18,8 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode } from '../src/client/hidden.ts'
 import {
-  actionsContainerOf, collectDurableTargets, collectTargets, isRewindInertSession, resolveSeatAnchorSeq,
+  actionsContainerOf, collectDurableTargets, collectTargets, hideWithdrawnSeats, isRewindInertSession,
+  resolveSeatAnchorSeq,
 } from '../src/client/portals.tsx'
 import { hiddenSeqsOf, type HiddenChat } from '../src/client/hidden.ts'
 
@@ -256,9 +257,30 @@ describe('resolveSeatAnchorSeq (withdrawn-seat hiding)', () => {
     expect(resolveSeatAnchorSeq(processed, chat)).toBe(7)
   })
 
+  /** One step/process group shell in the shape the official ChatGroupSeat renders. */
+  function appendShell(members: HTMLElement[]): HTMLElement {
+    const shell = document.createElement('div')
+    shell.dataset.chatAnchorKey = `group:${JSON.stringify(['process', 'a1', 'reasoning'])}`
+    shell.dataset.chatTurn = '1'
+    const body = document.createElement('div')
+    for (const member of members) body.appendChild(member)
+    shell.appendChild(body)
+    document.body.appendChild(shell)
+    return shell
+  }
+
+  /** A process member seat: composite flow key, plain node key. */
+  function appendMember(nodeKey: string, part: string): HTMLElement {
+    const seat = document.createElement('div')
+    seat.dataset.chatAnchorKey = JSON.stringify([nodeKey, part])
+    seat.dataset.chatNodeKey = nodeKey
+    document.body.appendChild(seat)
+    return seat
+  }
+
   it('hides the withdrawn reasoning rows a rewind cut', () => {
-    // End-to-end over the two pure pieces the DOM scan combines: the hidden set
-    // the marker produces, and the seat → anchorSeq resolution above.
+    // End-to-end over the real hiding pass: the hidden set the marker produces,
+    // the seat → anchorSeq resolution, and the DOM mutation itself.
     const chat = chatWith([
       ['u1', userNode(5)],
       ['a1', assistantNode(6)],
@@ -266,24 +288,111 @@ describe('resolveSeatAnchorSeq (withdrawn-seat hiding)', () => {
     ])
     const hiddenSeqs = hiddenSeqsOf(chat)
     expect(hiddenSeqs).toEqual(new Set([5, 6, 9]))
+    const userSeat = document.createElement('div')
+    userSeat.dataset.chatAnchorKey = 'u1'
+    document.body.appendChild(userSeat)
+    const processSeat = appendMember('a1', 'reasoning')
 
-    const seats = [
-      { key: '5', nodeKey: 'u1', anchorKey: 'u1' },
-      { key: '6', nodeKey: 'a1', anchorKey: JSON.stringify(['a1', 'process']) },
-    ].map(spec => {
-      const seat = document.createElement('div')
-      seat.dataset.chatAnchorKey = spec.anchorKey
-      seat.dataset.chatNodeKey = spec.nodeKey
-      // The hide branch from the client scan, applied to this seat.
-      const anchor = resolveSeatAnchorSeq(seat, chat)
-      if (anchor !== undefined && hiddenSeqs.has(anchor)) seat.style.display = 'none'
-      document.body.appendChild(seat)
-      return seat
-    })
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), hiddenSeqs, new WeakSet())
 
-    expect(seats[0]!.style.display).toBe('none')
+    expect(userSeat.style.display).toBe('none')
     // The pre-fix behaviour: a composite-key seat resolved to undefined and
     // stayed visible even though its node was withdrawn.
-    expect(seats[1]!.style.display).toBe('none')
+    expect(processSeat.style.display).toBe('none')
+  })
+
+  it('hides the group shell once every member is withdrawn', () => {
+    // A fully withdrawn "analysis completed" group: its members hide, and the
+    // shell around them has to go too, or it stays as an empty expandable row.
+    const chat = chatWith([
+      ['u1', userNode(5)],
+      ['a1', assistantNode(6)],
+      ['m1', markerCommand(9, 5)],
+    ])
+    const shell = appendShell([appendMember('a1', 'reasoning')])
+
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), hiddenSeqsOf(chat), new WeakSet())
+
+    expect(shell.style.display).toBe('none')
+    expect(shell.dataset.dshRewindHidden).toBe('true')
+  })
+
+  it('leaves a group shell alone when the batch carries no member of it', () => {
+    // Conservative by design: a shell whose members are not in this batch cannot
+    // be judged, and hiding it could take live content off screen. The measured
+    // residue always renders its member seat, so only observed members decide.
+    const chat = chatWith([['u1', userNode(5)], ['m1', markerCommand(9, 5)]])
+    const shell = appendShell([])
+
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), hiddenSeqsOf(chat), new WeakSet())
+
+    expect(shell.style.display).toBe('')
+    expect(shell.dataset.dshRewindHidden).toBeUndefined()
+  })
+
+  it('keeps a group shell that still holds a member on the surface', () => {
+    // The group's first member was withdrawn by the rewind; a later one is still
+    // on the surface, so the shell must keep rendering it.
+    const chat = chatWith([
+      ['u1', userNode(5)],
+      ['a1', assistantNode(6)],
+      ['a2', assistantNode(12)],
+      ['m1', markerCommand(9, 5)],
+    ])
+    const shell = appendShell([
+      appendMember('a1', 'reasoning'),
+      appendMember('a2', 'reasoning'),
+    ])
+
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), hiddenSeqsOf(chat), new WeakSet())
+
+    expect(shell.style.display).toBe('')
+    expect(shell.dataset.dshRewindHidden).toBeUndefined()
+  })
+
+  it('shows a hidden shell again when its member is no longer withdrawn', () => {
+    // The shell pass owns the shell in BOTH directions: hiding it when the last
+    // member goes cannot make it impossible to show again when a member returns.
+    const chat = chatWith([['a1', assistantNode(6)]])
+    const shell = appendShell([appendMember('a1', 'reasoning')])
+    const hidden = new WeakSet<HTMLElement>()
+
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), new Set([6]), hidden)
+    expect(shell.style.display).toBe('none')
+    expect(shell.dataset.dshRewindHidden).toBe('true')
+
+    // The withdrawn span shrinks: the member is live again, so the shell it
+    // emptied has to come back.
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), new Set(), hidden)
+    expect(shell.style.display).toBe('')
+    expect(shell.dataset.dshRewindHidden).toBeUndefined()
+  })
+
+  it('never lets the seat pass un-hide a shell the shell pass hid', () => {
+    // Two passes over an unchanged all-withdrawn batch: the shell must end
+    // hidden and no pass may write `display` back to ''. That write is what the
+    // refresh's own MutationObserver (`style` on document.body) saw, which
+    // re-entered refresh as a microtask and froze the renderer.
+    const chat = chatWith([['a1', assistantNode(6)]])
+    const shell = appendShell([appendMember('a1', 'reasoning')])
+    const hidden = new WeakSet<HTMLElement>()
+    const seats = document.querySelectorAll<HTMLElement>('[data-chat-anchor-key]')
+
+    hideWithdrawnSeats(chat, seats, new Set([6]), hidden)
+    const writes: string[] = []
+    const spy = new Proxy(shell.style, {
+      set: (target, prop, value: unknown) => {
+        writes.push(`${String(prop)}=${String(value)}`)
+        return Reflect.set(target, prop, value)
+      },
+    })
+    Object.defineProperty(shell, 'style', { value: spy, configurable: true })
+    hideWithdrawnSeats(chat, seats, new Set([6]), hidden)
+
+    expect(shell.style.display).toBe('none')
+    // A same-value `display = 'none'` write produces no mutation record, so it
+    // cannot re-enter refresh; a write back to '' would.
+    expect(writes.some(write => write === 'display=')).toBe(false)
   })
 })
+

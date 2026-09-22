@@ -362,6 +362,13 @@ const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"][data-chat-anchor-key], 
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 
 /**
+ * A step/process GROUP shell. It wraps its member rows and carries the
+ * composite `group:<json>` anchor, which resolves to no chat node — the group
+ * is a view construct, not a message — so it has to be judged by its members.
+ */
+const GROUP_SHELL_SELECTOR = '[data-chat-anchor-key^="group:"]'
+
+/**
  * The snapshot seq a rendered seat stands for.
  *
  * A seat carries two keys: `data-chat-anchor-key` (the FLOW key, which for a
@@ -422,6 +429,87 @@ export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | 
   const structural = lastButton?.parentElement
   if (structural instanceof HTMLElement && structural.querySelector('button') !== null) return structural
   return undefined
+}
+
+/**
+ * Hide every rendered seat a rewind withdrew, plus the step/process GROUP shells
+ * those seats empty.
+ *
+ * A seat's seq comes from `resolveSeatAnchorSeq`: `data-chat-anchor-key` (the
+ * FLOW key, composite for a step/process part) with `data-chat-node-key` (always
+ * the plain node key) as the fallback. A group shell is different: it carries
+ * the composite `group:<json>` anchor, which resolves to no chat node — the
+ * group is a view construct, not a message. It is therefore judged by its
+ * members, which THIS batch already holds: a shell whose every member seat is
+ * withdrawn has no live content left, so it is hidden too. That is what stops a
+ * fully withdrawn "analysis completed" / "command executed" group from staying
+ * on screen as an expandable empty row. A shell keeps one live member only if
+ * that member is genuinely on the surface, in which case the shell stays; a
+ * shell the batch carries no member of is left alone.
+ *
+ * Cost stays O(seats) per refresh: the caller queries the batch once, and each
+ * shell decision reuses the member outcomes already computed here — no second
+ * document scan, and no per-shell subtree walk.
+ *
+ * Every hidden element carries `data-dsh-rewind-hidden`, so DevTools, other DOM
+ * plugins and tests can tell a rewind-hide apart from a collapse/filter hide; a
+ * re-created row has no marker and is re-judged, and a row that leaves the
+ * withdrawn span is shown again.
+ *
+ * @param chat - the live chat snapshot the seats belong to.
+ * @param seats - this refresh's seat batch (every `[data-chat-anchor-key]`).
+ * @param hiddenSeqs - anchor seqs withdrawn by the executed rewinds.
+ * @param hidden - elements this pass has hidden, so a re-created row is re-judged.
+ */
+export function hideWithdrawnSeats(
+  chat: HiddenChat | undefined,
+  seats: Iterable<HTMLElement>,
+  hiddenSeqs: ReadonlySet<number>,
+  hidden: WeakSet<HTMLElement>,
+): void {
+  if (chat === undefined) return
+  // Shell → "every member in this batch was withdrawn". A shell is only judged
+  // through members the batch actually carries: an unobserved shell is left
+  // alone, because hiding it could take live content off screen.
+  const shells = new Map<HTMLElement, boolean>()
+  for (const seat of seats) {
+    // A group shell is ITSELF matched by the seat selector (it carries
+    // `data-chat-anchor-key="group:<json>"`), but that composite key resolves to
+    // no chat node. Running the seat branches on it made the two passes fight
+    // over one element: the seat pass un-hid the shell the shell pass had just
+    // hidden, which mutated `style` on every pass and kept the observer
+    // re-entering refresh as a microtask — an unbounded microtask loop. Shells
+    // are owned by the shell pass below only; members still feed its decision.
+    if (seat.matches(GROUP_SHELL_SELECTOR)) continue
+    const anchor = resolveSeatAnchorSeq(seat, chat)
+    const withdrawn = anchor !== undefined && hiddenSeqs.has(anchor)
+    if (withdrawn) {
+      seat.style.display = 'none'
+      seat.dataset.dshRewindHidden = 'true'
+      hidden.add(seat)
+    } else if (hidden.has(seat)) {
+      seat.style.display = ''
+      delete seat.dataset.dshRewindHidden
+      hidden.delete(seat)
+    }
+    // The shell is an ancestor of the seat, so its own hide is applied below.
+    const shell = seat.parentElement?.closest<HTMLElement>(GROUP_SHELL_SELECTOR)
+    if (shell === null || shell === undefined) continue
+    shells.set(shell, (shells.get(shell) ?? true) && withdrawn)
+  }
+  for (const [shell, allWithdrawn] of shells) {
+    // Symmetric with the seat branches: the shell pass owns the shell, so it is
+    // also the one that shows it again when it regains a live member.
+    if (allWithdrawn) {
+      shell.style.display = 'none'
+      shell.dataset.dshRewindHidden = 'true'
+      hidden.add(shell)
+    } else if (hidden.has(shell)) {
+      shell.style.display = ''
+      delete shell.dataset.dshRewindHidden
+      hidden.delete(shell)
+    }
+  }
 }
 
 /**
@@ -636,18 +724,15 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       // from any collapse/filter hide. Purely observational: the marker is
       // kept in sync with the hide/show state on both branches (a recreated
       // row has no marker and is re-marked when it re-enters a hidden span).
-      for (const seat of chat === undefined ? [] : document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
-        const anchor = resolveSeatAnchorSeq(seat, chat)
-        if (anchor !== undefined && hiddenSeqs.has(anchor)) {
-          seat.style.display = 'none'
-          seat.dataset.dshRewindHidden = 'true'
-          hidden.current.add(seat)
-        } else if (hidden.current.has(seat)) {
-          seat.style.display = ''
-          delete seat.dataset.dshRewindHidden
-          hidden.current.delete(seat)
-        }
-      }
+      // Apply the hide to this batch's seats (and the group shells they empty):
+      // `document.querySelectorAll(CHAT_SEAT_SELECTOR)` is the batch, re-read on
+      // every refresh because React recreates rows.
+      hideWithdrawnSeats(
+        chat,
+        chat === undefined ? [] : document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR),
+        hiddenSeqs,
+        hidden.current,
+      )
       // Hiding diagnostics are event-level: logged once where a rewind
       // settles (runRewindAndFill), not per mutation batch — printing them
       // here would flood the console during streaming, and the rewind event
