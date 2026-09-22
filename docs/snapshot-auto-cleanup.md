@@ -47,8 +47,8 @@ The auto-cleanup switch and the idle-day cutoff live in the **dsh-settings confi
 
 <img src="../assets/screenshots/cleanup-setting.png" alt="Snapshot cleanup settings: auto-cleanup and idle days" width="600">
 
-- `autoCleanupEnabled` — whether automatic cleanup runs (default `false`). The plugin's own `disabled` flag is the entry switch; this one gates only the background sweep, so `/snapshot-auto-cleanup run` still works while it is off.
-- `autoCleanupMaxAgeDays` — how many idle days before a session's snapshots are removed (default `30`). Only positive integers are accepted, so a broken setting can never delete everything.
+- `enabled` — whether automatic cleanup runs (default `false`).
+- `maxAgeDays` — how many idle days before a session's snapshots are removed (default `30`). Only positive integers are accepted, so a broken setting can never delete everything.
 
 ## When automatic cleanup runs
 
