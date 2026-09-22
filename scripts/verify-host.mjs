@@ -103,23 +103,25 @@ const fs = new FakeFs(new Context())
 // same call the Loader makes), and `tmpRoot` stays unrouted: `snapshotDir` /
 // `dshHome` are pinned by the config below.
 const resolvedConfig = Config({ snapshotDir: snapRoot, dshHome: tmpRoot })
-// The fake entry's stored user layer: PRESENCE, not value, is what marks an
-// override, exactly like the real document. It starts empty, so every field
-// resolves from the schema defaults.
+// The fake entry's stored user layer, under the DOCUMENT's field names (what
+// the plugin's writes address): PRESENCE, not value, is what marks an override,
+// exactly like the real document. It starts empty, so every field resolves from
+// the schema defaults.
 const storedPolicy = {}
-// What every write resolves the entry to (the user layer over the defaults).
+// What every write resolves the entry to (the user layer over the defaults),
+// read back as the RESOLVED policy the command reports on.
 const effectivePolicy = {
-  enabled: resolvedConfig.enabled.get(),
-  maxAgeDays: resolvedConfig.maxAgeDays.get(),
+  enabled: resolvedConfig.autoCleanupEnabled.get(),
+  maxAgeDays: resolvedConfig.autoCleanupMaxAgeDays.get(),
 }
 
 /** Re-resolve the stored policy into the live references, as the Loader does. */
 function applyFakeWrite() {
   const next = Config({ snapshotDir: snapRoot, dshHome: tmpRoot, ...storedPolicy })
-  updateVolatile(resolvedConfig.enabled, createVolatile(next.enabled.get()))
-  updateVolatile(resolvedConfig.maxAgeDays, createVolatile(next.maxAgeDays.get()))
-  effectivePolicy.enabled = resolvedConfig.enabled.get()
-  effectivePolicy.maxAgeDays = resolvedConfig.maxAgeDays.get()
+  updateVolatile(resolvedConfig.autoCleanupEnabled, createVolatile(next.autoCleanupEnabled.get()))
+  updateVolatile(resolvedConfig.autoCleanupMaxAgeDays, createVolatile(next.autoCleanupMaxAgeDays.get()))
+  effectivePolicy.enabled = resolvedConfig.autoCleanupEnabled.get()
+  effectivePolicy.maxAgeDays = resolvedConfig.autoCleanupMaxAgeDays.get()
 }
 
 /** The entry-write port the plugin's cleanup store addresses. */
@@ -916,7 +918,7 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   // Default: disabled, and the entry still carries no user-set field.
   const status0 = await callCleanup('')
   check('cleanup default status is disabled', status0.kind === 'success' && /disabled/.test(status0.text), status0.text)
-  check('cleanup default writes nothing', storedPolicy.enabled === undefined, JSON.stringify(storedPolicy))
+  check('cleanup default writes nothing', storedPolicy.autoCleanupEnabled === undefined, JSON.stringify(storedPolicy))
 
   // Enable persists enabled:true on the entry.
   const onResult = await callCleanup('on')

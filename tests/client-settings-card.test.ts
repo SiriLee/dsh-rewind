@@ -36,7 +36,7 @@ import {
 const t = (key: string): string => key
 
 /** The composition (base) layer the fake host resolves under the user layer. */
-const BASE = { enabled: false, maxAgeDays: 30 } as const
+const BASE = { autoCleanupEnabled: false, autoCleanupMaxAgeDays: 30 } as const
 
 /** One recorded entry write. */
 type Write = { readonly op: 'set' | 'unset'; readonly path: readonly string[]; readonly value?: unknown }
@@ -160,7 +160,7 @@ describe('field specs (what this card adds to the harness form model)', () => {
     expect(view.switch()?.getAttribute('aria-checked')).toBe('true')
     click(view.save())
     await vi.waitFor(() => { expect(view.writes).toHaveLength(1) })
-    expect(view.writes).toEqual([{ op: 'set', path: ['enabled'], value: true }])
+    expect(view.writes).toEqual([{ op: 'set', path: ['autoCleanupEnabled'], value: true }])
   })
 
   it('blocks the whole save on an unparsable day count (the number field spec)', async () => {
@@ -172,7 +172,7 @@ describe('field specs (what this card adds to the harness form model)', () => {
     click(view.save())
     await Promise.resolve()
     expect(view.writes).toEqual([])
-    expect(view.form.field('maxAgeDays').invalid).toBe(true)
+    expect(view.form.field('autoCleanupMaxAgeDays').invalid).toBe(true)
   })
 
   it('passes a zero day count to the host, whose schema is the authority', async () => {
@@ -183,26 +183,26 @@ describe('field specs (what this card adds to the harness form model)', () => {
     click(view.switch())
     typeInto(view.input()!, '0')
     click(view.save())
-    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'set', path: ['maxAgeDays'], value: 0 }) })
+    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'set', path: ['autoCleanupMaxAgeDays'], value: 0 }) })
   })
 
   it('treats an empty draft as a clear', async () => {
-    const view = mount({ user: { maxAgeDays: 7 } })
+    const view = mount({ user: { autoCleanupMaxAgeDays: 7 } })
     click(view.switch())
     typeInto(view.input()!, '')
     click(view.save())
-    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'unset', path: ['maxAgeDays'] }) })
+    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'unset', path: ['autoCleanupMaxAgeDays'] }) })
   })
 
   it('resets an overridden day count to the inherited value', async () => {
     // The official field renders its reset control only while the user layer
     // carries the field; resetting stages a clear so the value re-inherits.
-    const view = mount({ user: { enabled: true, maxAgeDays: 7 } })
+    const view = mount({ user: { autoCleanupEnabled: true, autoCleanupMaxAgeDays: 7 } })
     expect(view.input()?.value).toBe('7')
     click(view.reset())
-    expect(view.input()?.value).toBe(String(BASE.maxAgeDays))
+    expect(view.input()?.value).toBe(String(BASE.autoCleanupMaxAgeDays))
     click(view.save())
-    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'unset', path: ['maxAgeDays'] }) })
+    await vi.waitFor(() => { expect(view.writes).toContainEqual({ op: 'unset', path: ['autoCleanupMaxAgeDays'] }) })
   })
 
   it('drops every staged edit on discard', () => {
@@ -229,25 +229,25 @@ describe('SettingsCleanupCard', () => {
   })
 
   it('shows the day field only while the toggle reads on', () => {
-    const off = mount({ user: { enabled: false } })
+    const off = mount({ user: { autoCleanupEnabled: false } })
     expect(off.switch()?.getAttribute('aria-checked')).toBe('false')
     expect(off.input()).toBeNull()
     off.unmount()
 
-    const on = mount({ user: { enabled: true } })
+    const on = mount({ user: { autoCleanupEnabled: true } })
     expect(on.switch()?.getAttribute('aria-checked')).toBe('true')
     expect(on.input()).not.toBeNull()
   })
 
   it('disables every control on a read-only document', () => {
-    const view = mount({ writable: false, user: { enabled: true } })
+    const view = mount({ writable: false, user: { autoCleanupEnabled: true } })
     expect(view.switch()?.disabled).toBe(true)
     expect(view.input()?.disabled).toBe(true)
     expect(view.root.textContent).toContain('cleanup.readonly')
   })
 
   it('keeps the drafts and reports the failure when a write does not land', async () => {
-    const view = mount({ rejectPath: 'enabled' })
+    const view = mount({ rejectPath: 'autoCleanupEnabled' })
     click(view.switch())
     click(view.save())
     await vi.waitFor(() => { expect(view.root.textContent).toContain('cleanup.saveFailed') })

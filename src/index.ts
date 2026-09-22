@@ -79,6 +79,11 @@ export interface RewindConfig {
  * user-editable cleanup policy. The two policy fields are `.volatile()`, so the
  * host resolves them into live references before `apply` and the Plugins page
  * exposes exactly them.
+ *
+ * The policy fields are named for WHAT they gate (the automatic sweep; the
+ * `/snapshot-auto-cleanup` command's manual `run` ignores the switch), because
+ * this entry's own `disabled:` flag sits beside them in the same document and a
+ * bare `enabled` reads like the plugin switch.
  */
 export interface Config extends RewindConfig, CleanupSettings {}
 
@@ -87,8 +92,8 @@ export const Config = z.object({
   snapshotDir: z.string().required(false),
   dshHome: z.string().required(false),
   dedup: z.boolean().default(true),
-  enabled: z.boolean().default(DEFAULT_CLEANUP_CONFIG.enabled).volatile(),
-  maxAgeDays: z.number().step(1).min(1).default(DEFAULT_CLEANUP_CONFIG.maxAgeDays).volatile(),
+  autoCleanupEnabled: z.boolean().default(DEFAULT_CLEANUP_CONFIG.enabled).volatile(),
+  autoCleanupMaxAgeDays: z.number().step(1).min(1).default(DEFAULT_CLEANUP_CONFIG.maxAgeDays).volatile(),
 })
 
 /**

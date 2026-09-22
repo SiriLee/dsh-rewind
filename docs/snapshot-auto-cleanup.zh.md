@@ -35,8 +35,8 @@
 
 <img src="../assets/screenshots/cleanup-setting.png" alt="快照清理设置：自动清理与失活天数" width="600">
 
-- `enabled` — 是否运行自动清理（默认 `false`）。
-- `maxAgeDays` — 会话失活多少天后移除其快照（默认 `30`）。只接受正整数，因此一个损坏的设置永远不可能"删掉一切"。
+- `autoCleanupEnabled` — 是否运行自动清理（默认 `false`）。插件自身的 `disabled` 才是插件开关；这个只控制后台自动清扫，因此它关闭时 `/snapshot-auto-cleanup run` 依然可用。
+- `autoCleanupMaxAgeDays` — 会话失活多少天后移除其快照（默认 `30`）。只接受正整数，因此一个损坏的设置永远不可能"删掉一切"。
 
 ## 自动清理何时运行
 

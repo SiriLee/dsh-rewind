@@ -128,9 +128,9 @@ transcript.
   bounded by the cap plus the number of unresolved journals (the exact cap is
   pinned in `docs/format.md`). Across sessions, the opt-in `pruneStale` sweep
   removes whole **long-inactive** session directories (measured by the newest
-  member being idle past `maxAgeDays`); it uses `lstat` (no symlink following),
-  skips dot-prefixed temp files, and never targets the active session
-  (`keepActiveId`).
+  member being idle past the configured `autoCleanupMaxAgeDays`); it uses
+  `lstat` (no symlink following), skips dot-prefixed temp files, and never
+  targets the active session (`keepActiveId`).
 
 ## Crash safety
 

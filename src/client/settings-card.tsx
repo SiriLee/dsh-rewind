@@ -43,10 +43,10 @@ export const CLEANUP_ENTRY_ID = 'dsh-rewind-plugin'
 /** The default max age; an empty numeric draft means "use this". */
 export const DEFAULT_MAX_AGE_DAYS = 30
 
-/** The two editable knobs, exactly as the host policy exposes them. */
+/** The two editable knobs, exactly as the entry's configuration document names them. */
 export interface CleanupPolicy {
-  readonly enabled: boolean
-  readonly maxAgeDays: number
+  readonly autoCleanupEnabled: boolean
+  readonly autoCleanupMaxAgeDays: number
 }
 
 /** The staged-write shape the model's field spec returns. */
@@ -60,13 +60,13 @@ interface FieldSpec {
 }
 
 /**
- * The `enabled` field: a two-state control, so every edit is a set and never a
- * clear (the schema default already means "off").
+ * The `autoCleanupEnabled` field: a two-state control, so every edit is a set
+ * and never a clear (the schema default already means "off").
  * @returns the field's conversion spec.
  */
-function enabledField(): FieldSpec {
+function autoCleanupEnabledField(): FieldSpec {
   return {
-    field: 'enabled',
+    field: 'autoCleanupEnabled',
     format: value => String(value === true),
     parse: text => ({ kind: 'set', value: text === 'true' }),
   }
@@ -162,15 +162,15 @@ export function formLabels(t: (key: CleanupLabelKey) => string): SettingsFormLab
  */
 export function cleanupForm(scope: CleanupFormScope<CleanupPolicy>) {
   const form = new SettingsFormModel<CleanupPolicy>(scope, [
-    enabledField(),
-    settingsNumberField('maxAgeDays'),
+    autoCleanupEnabledField(),
+    settingsNumberField('autoCleanupMaxAgeDays'),
   ])
   return {
     form,
     store: form.bind((): CleanupCardSnapshot => ({
       ...form.shell(),
-      enabled: form.field('enabled'),
-      maxAgeDays: form.field('maxAgeDays'),
+      enabled: form.field('autoCleanupEnabled'),
+      maxAgeDays: form.field('autoCleanupMaxAgeDays'),
     })),
   }
 }
@@ -203,7 +203,7 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
             checked={enabled}
             label={t('cleanup.auto')}
             disabled={disabled}
-            onChange={(next) => { props.edit('enabled', String(next)) }}
+            onChange={(next) => { props.edit('autoCleanupEnabled', String(next)) }}
           />
         </div>
         <p className="dsh-rewind-cleanup-hint">{t(enabled ? 'cleanup.auto.on' : 'cleanup.auto.off')}</p>
@@ -220,8 +220,8 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
           numeric
           disabled={disabled}
           {...state.maxAgeDays}
-          onEdit={(text) => { props.edit('maxAgeDays', text) }}
-          onReset={() => { props.resetField('maxAgeDays') }}
+          onEdit={(text) => { props.edit('autoCleanupMaxAgeDays', text) }}
+          onReset={() => { props.resetField('autoCleanupMaxAgeDays') }}
         />
       ) : null}
     </SettingsForm>

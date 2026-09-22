@@ -11,9 +11,11 @@
  *   member stamp is older than this many days of idle is removed by a sweep.
  *   `0`/negative/non-integer are rejected, so a broken value can never steer
  *   the sweep into deleting everything.
- * - The policy is this plugin entry's live configuration (`enabled` /
- *   `maxAgeDays`); an absent value is the safe default (off), and an invalid
- *   one fail-closes a sweep (deletes nothing) instead of guessing.
+ * - The policy is this plugin entry's live configuration (`autoCleanupEnabled` /
+ *   `autoCleanupMaxAgeDays` — named for what they gate, because the entry's own
+ *   `disabled:` flag sits beside them in the same document); an absent value is
+ *   the safe default (off), and an invalid one fail-closes a sweep (deletes
+ *   nothing) instead of guessing.
  *
  * @module dsh-rewind/snapshot-cleanup
  */
@@ -40,11 +42,13 @@ export const DEFAULT_CLEANUP_CONFIG: CleanupConfig = { enabled: false, maxAgeDay
  * the host resolves into stable references before `apply` runs. The host's
  * `Config` schema (see `src/index.ts`) declares both as `.volatile()`, which is
  * what makes them user-editable in the Plugins page and live-updated without a
- * restart.
+ * restart. These are the DOCUMENT's field names; the resolved policy keeps its
+ * own ({@link CleanupConfig}), and the adapter below is the one place that maps
+ * between the two.
  */
 export interface CleanupSettings {
-  readonly enabled: Volatile<boolean>
-  readonly maxAgeDays: Volatile<number>
+  readonly autoCleanupEnabled: Volatile<boolean>
+  readonly autoCleanupMaxAgeDays: Volatile<number>
 }
 
 /**
@@ -56,7 +60,7 @@ export interface CleanupConfigWriter {
   /** Entry id the write addresses (this plugin's profile entry). */
   readonly entryId: string
   /** Merge field values into the entry's user layer. */
-  update(entryId: string, patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
+  update(entryId: string, patch: { autoCleanupEnabled?: boolean; autoCleanupMaxAgeDays?: number }): Promise<void>
   /** Remove fields from the entry's user layer, restoring the inherited value. */
   clear(entryId: string, fields: readonly string[]): Promise<void>
 }
@@ -71,10 +75,11 @@ export interface CleanupConfigStore {
 
 /**
  * Adapter over the live {@link CleanupSettings} references and the host's entry
- * write port. Reads re-read the references, so a settings write is visible
- * without a remount; writes validate via `parseCleanupConfig` first, so a bad
- * value can never reach the document (defense-in-depth below the schema), and a
- * defaulted field is cleared rather than pinned.
+ * write port, mapping the document's field names onto the resolved policy's own.
+ * Reads re-read the references, so a settings write is visible without a
+ * remount; writes validate via `parseCleanupConfig` first, so a bad value can
+ * never reach the document (defense-in-depth below the schema), and a defaulted
+ * field is cleared rather than pinned.
  */
 export function volatileCleanupStore(
   settings: CleanupSettings,
@@ -82,18 +87,19 @@ export function volatileCleanupStore(
 ): CleanupConfigStore {
   return {
     load: () => ({
-      enabled: settings.enabled.get() ?? DEFAULT_CLEANUP_CONFIG.enabled,
-      maxAgeDays: settings.maxAgeDays.get() ?? DEFAULT_CLEANUP_CONFIG.maxAgeDays,
+      enabled: settings.autoCleanupEnabled.get() ?? DEFAULT_CLEANUP_CONFIG.enabled,
+      maxAgeDays: settings.autoCleanupMaxAgeDays.get() ?? DEFAULT_CLEANUP_CONFIG.maxAgeDays,
     }),
     save: async (next) => {
       const parsed = parseCleanupConfig({ enabled: next.enabled, maxAgeDays: next.maxAgeDays })
       if (!parsed.ok) throw new RangeError(parsed.error)
-      const clears = (['enabled', 'maxAgeDays'] as const)
-        .filter(field => parsed.config[field] === DEFAULT_CLEANUP_CONFIG[field])
-      if (clears.length > 0) await writer.clear(writer.entryId, clears)
-      const patch: { enabled?: boolean; maxAgeDays?: number } = {}
-      if (!clears.includes('enabled')) patch.enabled = parsed.config.enabled
-      if (!clears.includes('maxAgeDays')) patch.maxAgeDays = parsed.config.maxAgeDays
+      const clear: string[] = []
+      const patch: { autoCleanupEnabled?: boolean; autoCleanupMaxAgeDays?: number } = {}
+      if (parsed.config.enabled === DEFAULT_CLEANUP_CONFIG.enabled) clear.push('autoCleanupEnabled')
+      else patch.autoCleanupEnabled = parsed.config.enabled
+      if (parsed.config.maxAgeDays === DEFAULT_CLEANUP_CONFIG.maxAgeDays) clear.push('autoCleanupMaxAgeDays')
+      else patch.autoCleanupMaxAgeDays = parsed.config.maxAgeDays
+      if (clear.length > 0) await writer.clear(writer.entryId, clear)
       if (Object.keys(patch).length > 0) await writer.update(writer.entryId, patch)
     },
   }

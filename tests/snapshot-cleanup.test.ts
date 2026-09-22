@@ -313,60 +313,66 @@ describe('Config schema + volatileCleanupStore', () => {
 
   it('the Config schema declares both policy fields as live with the shared defaults', () => {
     const resolved = Config({} as never) as {
-      enabled: { get(): unknown }
-      maxAgeDays: { get(): unknown }
+      autoCleanupEnabled: { get(): unknown }
+      autoCleanupMaxAgeDays: { get(): unknown }
     }
-    expect(resolved.enabled.get()).toBe(DEFAULT_CLEANUP_CONFIG.enabled)
-    expect(resolved.maxAgeDays.get()).toBe(DEFAULT_CLEANUP_CONFIG.maxAgeDays)
+    expect(resolved.autoCleanupEnabled.get()).toBe(DEFAULT_CLEANUP_CONFIG.enabled)
+    expect(resolved.autoCleanupMaxAgeDays.get()).toBe(DEFAULT_CLEANUP_CONFIG.maxAgeDays)
     expect(DEFAULT_MAX_AGE_DAYS).toBe(DEFAULT_CLEANUP_CONFIG.maxAgeDays)
   })
 
-  it('the Config schema rejects a non-positive or non-integer maxAgeDays', () => {
+  it('the Config schema rejects a non-positive or non-integer autoCleanupMaxAgeDays', () => {
     for (const value of [0, -1, 2.5, Number.NaN]) {
-      expect(() => Config({ maxAgeDays: value } as never)).toThrow()
+      expect(() => Config({ autoCleanupMaxAgeDays: value } as never)).toThrow()
     }
   })
 
-  it('the Config schema rejects a non-boolean enabled', () => {
-    expect(() => Config({ enabled: 'yes' } as never)).toThrow()
+  it('the Config schema rejects a non-boolean autoCleanupEnabled', () => {
+    expect(() => Config({ autoCleanupEnabled: 'yes' } as never)).toThrow()
   })
 
   it('load() reads the live references, defaulting an absent value', () => {
-    const enabled = createVolatile(true)
-    const maxAgeDays = createVolatile(9)
-    const store = volatileCleanupStore({ enabled, maxAgeDays }, fakeWriter())
+    const autoCleanupEnabled = createVolatile(true)
+    const autoCleanupMaxAgeDays = createVolatile(9)
+    const store = volatileCleanupStore({ autoCleanupEnabled, autoCleanupMaxAgeDays }, fakeWriter())
     expect(store.load()).toEqual({ enabled: true, maxAgeDays: 9 })
     // A settings write updates the reference in place; the next read sees it.
-    updateVolatile(enabled, createVolatile(false))
+    updateVolatile(autoCleanupEnabled, createVolatile(false))
     expect(store.load()).toEqual({ enabled: false, maxAgeDays: 9 })
   })
 
-  it('save() validates, writes a non-default value, and clears a defaulted field', async () => {
+  it('save() writes under the document field names and clears a defaulted field', async () => {
     const writer = fakeWriter()
     const store = volatileCleanupStore(
-      { enabled: createVolatile(false), maxAgeDays: createVolatile(DEFAULT_MAX_AGE_DAYS) },
+      { autoCleanupEnabled: createVolatile(false), autoCleanupMaxAgeDays: createVolatile(DEFAULT_MAX_AGE_DAYS) },
       writer,
     )
     await store.save({ enabled: true, maxAgeDays: 12 })
-    expect(writer.updates).toEqual([{ entryId: 'dsh-rewind-plugin', patch: { enabled: true, maxAgeDays: 12 } }])
+    expect(writer.updates).toEqual([{
+      entryId: 'dsh-rewind-plugin',
+      patch: { autoCleanupEnabled: true, autoCleanupMaxAgeDays: 12 },
+    }])
     expect(writer.clears).toEqual([])
   })
 
   it('save() clears a field set to its default instead of pinning it', async () => {
     const writer = fakeWriter()
     const store = volatileCleanupStore(
-      { enabled: createVolatile(true), maxAgeDays: createVolatile(5) },
+      { autoCleanupEnabled: createVolatile(true), autoCleanupMaxAgeDays: createVolatile(5) },
       writer,
     )
     await store.save({ ...DEFAULT_CLEANUP_CONFIG })
-    expect(writer.clears).toEqual([{ entryId: 'dsh-rewind-plugin', fields: ['enabled', 'maxAgeDays'] }])
+    expect(writer.clears).toEqual([{
+      entryId: 'dsh-rewind-plugin',
+      fields: ['autoCleanupEnabled', 'autoCleanupMaxAgeDays'],
+    }])
     expect(writer.updates).toEqual([])
   })
 
   it('save() refuses an invalid policy before it reaches the entry', async () => {
     const writer = fakeWriter()
     const store = volatileCleanupStore(
-      { enabled: createVolatile(false), maxAgeDays: createVolatile(30) },
+      { autoCleanupEnabled: createVolatile(false), autoCleanupMaxAgeDays: createVolatile(30) },
       writer,
     )
     await expect(store.save({ enabled: false, maxAgeDays: 0 })).rejects.toThrow()

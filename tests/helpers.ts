@@ -64,15 +64,15 @@ export function testConfig(overrides: {
   readonly snapshotDir?: string
   readonly dshHome?: string
   readonly dedup?: boolean
-  readonly enabled?: boolean
-  readonly maxAgeDays?: number
+  readonly autoCleanupEnabled?: boolean
+  readonly autoCleanupMaxAgeDays?: number
 } = {}): RewindConfig & CleanupSettings {
   return {
     snapshotDir: overrides.snapshotDir,
     dshHome: overrides.dshHome,
     dedup: overrides.dedup,
-    enabled: createVolatile(overrides.enabled ?? false),
-    maxAgeDays: createVolatile(overrides.maxAgeDays ?? 30),
+    autoCleanupEnabled: createVolatile(overrides.autoCleanupEnabled ?? false),
+    autoCleanupMaxAgeDays: createVolatile(overrides.autoCleanupMaxAgeDays ?? 30),
   }
 }
 

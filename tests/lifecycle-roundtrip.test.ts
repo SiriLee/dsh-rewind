@@ -266,8 +266,8 @@ describe('live disable → enable round trip', () => {
   it('reads the live config on every call instead of a stale snapshot', async () => {
     const mounted = mount()
     mounted.setEntryId('include:dsh-rewind-plugin')
-    const enabled = createVolatile(false)
-    apply(mounted.ctx, { ...testConfig({ snapshotDir: snapRoot }), enabled })
+    const autoCleanupEnabled = createVolatile(false)
+    apply(mounted.ctx, { ...testConfig({ snapshotDir: snapRoot }), autoCleanupEnabled })
     const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
     const [session] = userMessage()
     const status = { rawInput: 'status', agent: { session } } as never
@@ -276,7 +276,7 @@ describe('live disable → enable round trip', () => {
 
     // A settings write updates the reference in place; the next call must see
     // the new value without a remount.
-    updateVolatile(enabled, createVolatile(true))
+    updateVolatile(autoCleanupEnabled, createVolatile(true))
     expect(((await cleanup.handler(status)) as { text: string }).text)
       .toContain(enLocale['cleanup.status'].replace('{state}', enLocale['cleanup.enabled']).replace('{days}', '30'))
     await mounted.dispose()
@@ -290,7 +290,7 @@ describe('live disable → enable round trip', () => {
     await rm(stateFile, { force: true })
     const first = mount()
     first.setEntryId('include:dsh-rewind-plugin')
-    apply(first.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, enabled: true }))
+    apply(first.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, autoCleanupEnabled: true }))
     const [firstSession] = userMessage()
     first.handlers.get('session/event')!(firstSession as never, { type: 'user/message', seq: 2 } as never)
     expect(await waitUntil(() => existsSync(stateFile))).toBe(true)
@@ -301,7 +301,7 @@ describe('live disable → enable round trip', () => {
     await rm(stateFile, { force: true })
     const second = mount()
     second.setEntryId('include:dsh-rewind-plugin')
-    apply(second.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, enabled: true }))
+    apply(second.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, autoCleanupEnabled: true }))
     const [secondSession] = userMessage()
     second.handlers.get('session/event')!(secondSession as never, { type: 'user/message', seq: 2 } as never)
     expect(await waitUntil(() => existsSync(stateFile))).toBe(true)
