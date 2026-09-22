@@ -126,12 +126,17 @@ function applyFakeWrite() {
 const fakeSettings = {
   /** Entry ids every write addressed: the profile row id, never the fiber id. */
   writes: [],
+  /** Descriptors the plugin's language read answers with; empty means English. */
+  localeRows: [],
+  /** Arguments every descriptor read received, in order. */
+  describeCalls: [],
   update: async (entryId, patch) => { fakeSettings.writes.push(entryId); Object.assign(storedPolicy, patch); applyFakeWrite() },
   mutate: async (entryId, ops) => {
     fakeSettings.writes.push(entryId)
     for (const op of ops) if (op.op === 'unset') delete storedPolicy[op.path[0]]
     applyFakeWrite()
   },
+  describe: options => { fakeSettings.describeCalls.push(options); return fakeSettings.localeRows },
 }
 
 const user = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -948,6 +953,20 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('cleanup off succeeds', offResult.kind === 'success', offResult.text)
   const statusOff = await callCleanup('')
   check('cleanup status reflects disabled', statusOff.kind === 'success' && /disabled/.test(statusOff.text), statusOff.text)
+
+  // The host renders its own copy in the language picked in Settings → General:
+  // 0.1.7 keeps that preference in the `locale` entry's Config, read through the
+  // settings service's descriptor read (never a section, and never host prose).
+  fakeSettings.localeRows = [{ ns: 'locale', value: { preference: 'zh' } }]
+  const zhStatus = await callCleanup('')
+  check('cleanup status follows the picked language', zhStatus.kind === 'success' && /自动清理/.test(zhStatus.text), zhStatus.text)
+  check('the language read asks for redacted descriptors',
+    fakeSettings.describeCalls.length > 0 && fakeSettings.describeCalls.every(call => call?.redactSecrets === true),
+    JSON.stringify(fakeSettings.describeCalls))
+  fakeSettings.localeRows = []
+  const defaultStatus = await callCleanup('')
+  check('cleanup status returns to the neutral default without a preference',
+    defaultStatus.kind === 'success' && /Auto-cleanup/.test(defaultStatus.text), defaultStatus.text)
 
   // A manual `run --current` clears the ACTIVE session's snapshots (dry then
   // apply). Config-independent (uses the resolved policy via the settings doc).

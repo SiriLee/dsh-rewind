@@ -41,7 +41,7 @@ import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deep
 import { copyFile, rm, stat, unlink } from 'node:fs/promises'
 import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
-import { translate, type HostKey, type HostLocaleId } from './locales.ts'
+import { preferredLocale, translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
@@ -119,12 +119,42 @@ function isSubagentSession(session: Session): boolean {
 }
 
 /**
- * Host-side locale the command output renders in. DSH 0.1.7 has no host-side
- * read of the user's language preference (the settings service exposes schemas,
- * not sections), so this holds the neutral default; the client keeps its own
- * localized copy.
+ * Host-side locale the command output renders in. Refreshed from the durable
+ * preference at mount — the command descriptions register once — and again
+ * before each command renders (see `readHostLocale`); the neutral default holds
+ * until a read succeeds.
  */
 let activeLocale: HostLocaleId = 'en'
+
+/** The profile entry dsh-client-locale keeps the browser preference in. */
+const LOCALE_ENTRY = 'locale'
+
+/** The preference field inside that entry's form. */
+const LOCALE_FIELD = 'preference'
+
+/**
+ * Read the user's language preference through the settings service's descriptor
+ * read. 0.1.7 keeps that preference in the `locale` entry's own Config rather
+ * than in a registered section, and has no host-side locale service, so the
+ * descriptor read is the same public route the settings UI and the client's own
+ * locale runtime take.
+ *
+ * `redactSecrets` is requested because the descriptors span every entry. Every
+ * failure — a settings service without `describe`, a mount without the locale
+ * entry, a throwing read — degrades to the neutral default instead of erroring.
+ *
+ * @param ctx - context carrying the settings service.
+ * @returns the locale this plugin's host copy renders in.
+ */
+function readHostLocale(ctx: Context): HostLocaleId {
+  try {
+    const row = ctx.settings.describe({ redactSecrets: true })
+      .find(entry => entry.ns === LOCALE_ENTRY)
+    return preferredLocale((row?.value as Record<string, unknown> | undefined)?.[LOCALE_FIELD])
+  } catch {
+    return 'en'
+  }
+}
 
 /**
  * The cleanup-policy store, mounted from this plugin's resolved config plus the
@@ -1051,8 +1081,9 @@ export function apply(ctx: Context, config?: Config): void {
   // Fresh per-mount host state: these live at module scope because module-level
   // helpers read them without a ctx thread, and a fired one-shot sweep gate or
   // the previous mount's policy store would otherwise survive a live
-  // disable → enable round trip.
-  activeLocale = 'en'
+  // disable → enable round trip. The locale is re-read here rather than reset,
+  // so the command descriptions registered below carry the user's language.
+  activeLocale = readHostLocale(ctx)
   cleanupStore = undefined
   autoSweepChecked = false
   // Cancels this mount's in-flight background work when the fiber disposes: the
@@ -1108,9 +1139,21 @@ export function apply(ctx: Context, config?: Config): void {
   let fsService: FileSystem | undefined
 
   ctx.effect(function* () {
+    /**
+     * Refresh the host language, then run the handler: a command result is the
+     * surface the user reads, and the preference can change without a remount.
+     */
+    const withHostLocale = (
+      handler: (invocation: CommandInvocation) => Promise<CommandResult>,
+    ): ((invocation: CommandInvocation) => Promise<CommandResult>) =>
+      (invocation) => {
+        activeLocale = readHostLocale(ctx)
+        return handler(invocation)
+      }
     // One handler serves both `/rewind` and its alias `/undo`.
-    const rewindHandler = (invocation: CommandInvocation): Promise<CommandResult> =>
-      handleRewind(ctx, store, fsService, invocation, inflight)
+    const rewindHandler = withHostLocale(
+      (invocation: CommandInvocation) => handleRewind(ctx, store, fsService, invocation, inflight),
+    )
     yield ctx.commands.register({
       name: 'rewind',
       description: t('command.description'),
@@ -1125,7 +1168,7 @@ export function apply(ctx: Context, config?: Config): void {
       name: 'snapshot-auto-cleanup',
       description: t('cleanup.description'),
       input: { hint: t('cleanup.inputHint') },
-      handler: invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession),
+      handler: withHostLocale(invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession)),
     })
   }, 'dsh-rewind command')
 

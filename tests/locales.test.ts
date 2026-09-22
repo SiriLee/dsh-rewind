@@ -3,7 +3,7 @@
  * set parity, template interpolation, and the default-language behavior.
  */
 import { describe, expect, it } from 'vitest'
-import { en, translate, zh } from '../src/locales.ts'
+import { en, preferredLocale, translate, zh } from '../src/locales.ts'
 
 describe('host locale dictionaries', () => {
   it('zh carries exactly the en key set (bilingual balance)', () => {
@@ -28,5 +28,29 @@ describe('host locale dictionaries', () => {
     // An unknown param name is ignored; an unprovided placeholder stays.
     const restored = translate('en', 'success', { targetSeq: 9, restore: '' })
     expect(restored).toContain('Withdrawn seq 9')
+  })
+})
+
+describe('preferredLocale', () => {
+  it('selects zh for a Chinese preference, region and script tags included', () => {
+    expect(preferredLocale('zh')).toBe('zh')
+    expect(preferredLocale('zh-CN')).toBe('zh')
+    expect(preferredLocale('ZH-Hans')).toBe('zh')
+  })
+
+  it('falls back to English for every language this plugin does not ship', () => {
+    expect(preferredLocale('en')).toBe('en')
+    expect(preferredLocale('en-US')).toBe('en')
+    expect(preferredLocale('ja')).toBe('en')
+    expect(preferredLocale('')).toBe('en')
+  })
+
+  it('falls back to English for a missing or non-string preference', () => {
+    // An unset preference, and the redacted-descriptor shapes a settings read
+    // can hand back, must never reach the dictionary lookup as a locale id.
+    expect(preferredLocale(undefined)).toBe('en')
+    expect(preferredLocale(null)).toBe('en')
+    expect(preferredLocale(42)).toBe('en')
+    expect(preferredLocale({ preference: 'zh' })).toBe('en')
   })
 })

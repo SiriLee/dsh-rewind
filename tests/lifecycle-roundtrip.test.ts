@@ -17,7 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
-import { en as enLocale } from '../src/locales.ts'
+import { en as enLocale, zh as zhLocale } from '../src/locales.ts'
 import { apply, cleanupConfigKey, inject } from '../src/index.ts'
 import { resolveCleanupStatePath } from '../src/snapshot-cleanup.ts'
 import { testConfig, textMessage } from './helpers.ts'
@@ -41,6 +41,16 @@ interface Mounted {
    * prefix; tests that exercise the cleanup policy set it before `apply`.
    */
   setEntryId(id: string): void
+  /**
+   * Replace the descriptors the settings double answers `describe()` with. The
+   * real service describes every active entry; the host read filters for the
+   * `locale` row, and an empty list is the English default.
+   */
+  setLocaleRows(rows: readonly { readonly ns: string; readonly value: unknown }[]): void
+  /** Every `describe()` argument the mount passed, in order. */
+  describeCalls(): readonly unknown[]
+  /** Break the settings read: `absent` removes `describe`, `throws` faults it. */
+  breakDescribe(mode: 'absent' | 'throws'): void
   /** Entry ids the settings double was written through, in order. */
   settingsWrites(): readonly string[]
   /** Run every disposer (depth-first) and await the async ones. */
@@ -87,9 +97,14 @@ function mount(options: { fs?: boolean } = {}): Mounted {
   const fiber: { entry?: { id: string } } = {}
   // The settings entry-write port, recording which id each write addressed.
   const settingsWrites: string[] = []
-  const settings = {
+  // The descriptors `describe()` answers with — the settings read the host uses
+  // for the user's language. Empty until a test stages a `locale` row.
+  const localeRows: { ns: string; value: unknown }[] = []
+  const describeCalls: unknown[] = []
+  const settings: Record<string, unknown> = {
     update: vi.fn(async (id: string) => { settingsWrites.push(id) }),
     mutate: vi.fn(async (id: string) => { settingsWrites.push(id) }),
+    describe: (options?: unknown) => { describeCalls.push(options); return localeRows },
   }
 
   const ctx = {
@@ -122,6 +137,12 @@ function mount(options: { fs?: boolean } = {}): Mounted {
     toolHandlers,
     settingsWrites: () => [...settingsWrites],
     setEntryId: (id: string) => { fiber.entry = { id } },
+    setLocaleRows: (rows) => { localeRows.splice(0, localeRows.length, ...rows) },
+    describeCalls: () => [...describeCalls],
+    breakDescribe: (mode) => {
+      if (mode === 'absent') delete settings.describe
+      else settings.describe = () => { throw new Error('settings service unavailable') }
+    },
     dispose: async () => {
       // Reverse order, like a real fiber teardown; await async disposers so the
       // assertions can rely on their effects having landed.
@@ -337,4 +358,96 @@ describe('live disable → enable round trip', () => {
     const on = { rawInput: 'on', agent: { session } } as never
     expect((await cleanup.handler(on) as { kind: string }).kind).toBe('error')
   })
+})
+
+/**
+ * The host renders its own copy from the user's durable language preference,
+ * which DSH 0.1.7 keeps in the `locale` entry's Config rather than in a
+ * registered settings section: the mount reads it through the settings
+ * service's descriptor read.
+ */
+describe('host language preference', () => {
+  // The default policy (disabled, 30 days) as each dictionary renders it.
+  const rendered = (dict: Record<string, string>): string => dict['cleanup.status']!
+    .replace('{state}', dict['cleanup.disabled']!)
+    .replace('{days}', '30')
+  const enStatus = rendered(enLocale)
+  const zhStatus = rendered(zhLocale)
+  const zhRow = { ns: 'locale', value: { preference: 'zh' } }
+
+  /** Run the status path of `/snapshot-auto-cleanup` on a mounted plugin. */
+  async function cleanupStatus(mounted: Mounted): Promise<{ kind: string; text: string }> {
+    const session = Session.create(SessionId('locale-session'))
+    const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
+    return await cleanup.handler({ rawInput: 'status', agent: { session } } as never) as { kind: string; text: string }
+  }
+
+  it('renders command descriptions and results in the picked language', async () => {
+    const mounted = mount()
+    mounted.setLocaleRows([zhRow])
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+
+    // The mount-time read covers the descriptions, which register once.
+    expect(mounted.commands.get('rewind')!.description).toBe(zhLocale['command.description'])
+    expect(mounted.commands.get('undo')!.description).toBe(zhLocale['command.description'])
+    expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(zhLocale['cleanup.description'])
+    // A command result renders in the same language.
+    expect((await cleanupStatus(mounted)).text).toContain(zhStatus)
+    await mounted.dispose()
+  })
+
+  it('ignores a `preference` carried by an entry that is not the locale one', async () => {
+    // `ui-theme` really does carry a `preference` field (`system`/`dark`/`light`),
+    // so the read must select the `locale` entry instead of the first row that
+    // happens to name the field.
+    const mounted = mount()
+    mounted.setLocaleRows([{ ns: 'ui-theme', value: { preference: 'system' } }])
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+
+    expect(mounted.commands.get('rewind')!.description).toBe(enLocale['command.description'])
+    expect((await cleanupStatus(mounted)).text).toContain(enStatus)
+    await mounted.dispose()
+  })
+
+  it('re-reads the preference before every command, so a switch needs no remount', async () => {
+    const mounted = mount()
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    // No preference staged: the neutral default.
+    expect((await cleanupStatus(mounted)).text).toContain(enStatus)
+
+    mounted.setLocaleRows([zhRow])
+    expect((await cleanupStatus(mounted)).text).toContain(zhStatus)
+    await mounted.dispose()
+  })
+
+  it('reads descriptors with secrets redacted, like every other wire reader', async () => {
+    const mounted = mount()
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    await cleanupStatus(mounted)
+
+    const calls = mounted.describeCalls()
+    expect(calls.length).toBeGreaterThan(0)
+    // The descriptors span every plugin entry, so the read never asks for
+    // secret values it does not need.
+    expect(calls.every(call => (call as { redactSecrets?: boolean }).redactSecrets === true)).toBe(true)
+    await mounted.dispose()
+  })
+
+  it.each(['absent', 'throws'] as const)(
+    'degrades to the neutral default when the settings read is %s',
+    async (mode) => {
+      const mounted = mount()
+      mounted.breakDescribe(mode)
+      mounted.setEntryId('include:dsh-rewind-plugin')
+      apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+
+      expect(mounted.commands.get('rewind')!.description).toBe(enLocale['command.description'])
+      expect((await cleanupStatus(mounted)).text).toContain(enStatus)
+      await mounted.dispose()
+    },
+  )
 })

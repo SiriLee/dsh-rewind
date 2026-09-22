@@ -1,14 +1,18 @@
 /**
- * Host-side localization for dsh-rewind's `/rewind` command output and command
+ * Host-side localization for dsh-rewind's command output and command
  * description.
  *
  * Architecture (matches the dsh ecosystem): the HOST half of a dual-face
  * plugin has no locale service — only the browser client carries one. The host
- * therefore renders its command-adjacent copy from a durable user preference
- * (`ctx.settings` → `locale.preference`, registered by dsh-client-locale),
- * defaulting to English — the ecosystem's neutral default language (the harness
- * `FALLBACK_LOCALE` and the language dsh's own host commands use, e.g.
- * dsh-plan-mode). See packages/client/locale in deepseek-harness.
+ * therefore renders its command-adjacent copy from the durable user preference
+ * dsh-client-locale persists, defaulting to English — the ecosystem's neutral
+ * default language (the harness `FALLBACK_LOCALE`). See packages/client/locale
+ * in deepseek-harness.
+ *
+ * DSH 0.1.7 moved that preference out of a registered settings section into the
+ * `locale` entry's own Config, so the host reads it through the settings
+ * service's descriptor read (`readHostLocale` in `src/index.ts`) — the same
+ * public read the settings UI and the client's own locale runtime perform.
  *
  * The client half (`src/client/locales.ts`) owns all interactive UI copy via
  * `ctx.locale` + `t()`; the host's human text is a machine channel the client
@@ -17,8 +21,8 @@
  *
  * DSH localizes only its OWN command descriptions via the client locale — a
  * closed `HOST_FACES` allowlist; third-party plugin descriptions are
- * not in that channel (see docs/compat/audit.md, RU-I18N), so this plugin's host
- * command copy stays in the host's tongue (English by default).
+ * not in that channel (see docs/compat/audit.md, RU-I18N), and no host command
+ * OUTPUT is localized for anyone, so this dictionary is what carries it.
  *
  * English is the key-set source of truth; zh is checked complete against it.
  *
@@ -27,6 +31,22 @@
 
 /** Host-side supported locale ids, mirroring the harness's shipped locales. */
 export type HostLocaleId = 'zh' | 'en'
+
+/**
+ * The locale a durable preference selects from this plugin's dictionaries.
+ *
+ * The harness accepts any BCP 47-style id while this plugin ships only `zh` and
+ * `en`, so the PRIMARY subtag decides (`zh-CN` → zh) and everything else — an
+ * unset preference, an unsupported language, a non-string value — is English.
+ * Mirrors the client's own matching, full tag first and primary subtag second.
+ *
+ * @param preference - the raw `locale.preference` value.
+ * @returns the dictionary this plugin renders its host copy in.
+ */
+export function preferredLocale(preference: unknown): HostLocaleId {
+  if (typeof preference !== 'string') return 'en'
+  return preference.toLowerCase().split('-')[0] === 'zh' ? 'zh' : 'en'
+}
 
 /** English dictionary — the key-set source of truth (neutral default). */
 export const en = {
