@@ -95,39 +95,30 @@ legacy branch).
 
 The plugin treats these as harness-side defects it does not compensate for. Each entry records the harness issue, its current status, and the plugin's stance, so a future maintainer does not "fix the wrong direction."
 
-### RU-I18N: host-side locale preference is not reliably readable at command registration (harness-side structural timing defect; plugin reads once, never retries)
+### RU-I18N (resolved on the 0.1.7 line): host command copy follows the user's language
 
-- **Root cause (harness-side)**: the plugin resolves `activeLocale` in an
-  `ctx.inject(['settings'])` callback that reads `settings.get('locale').preference`
-  **once, with no retry** (`src/index.ts`). `dsh-client-locale`'s host half
-  registers that `locale` settings section **through its own `ctx.inject(['settings'])`**
+- **History (0.1.2–0.1.6 lines)**: the plugin resolved `activeLocale` in an
+  `ctx.inject(['settings'])` callback that read `settings.get('locale').preference`
+  **once, with no retry** (`src/index.ts`), while `dsh-client-locale`'s host half registered that
+  `locale` settings section through its own `ctx.inject(['settings'])`
   (`packages/client/locale/src/index.ts`). Both callbacks wait only on `settings` and are
-  independent of each other, so cordis makes **no ordering guarantee** between the
-  section registration and the plugin's read.
-- **Observed failure**: a probe confirmed that when the plugin's read runs, `settings.get('locale')`
-  returns `undefined` (the section is not yet registered), so `activeLocale` stays at the
-  default `'en'` and — because the read is one-shot — is never corrected. The result is that
-  **all host-side `t()` output (runtime messages and command descriptions alike) renders in
-  English**, regardless of the user's language preference.
-- **Not a user-config problem**: `settings.yaml` correctly carries `locale.preference: zh`;
-  reading it directly works. The defect is purely the host-side read racing the section
-  registration.
-- **Plugin stance**: no compensation. The plugin does not add a lazy re-read, a retry loop, or a
-  post-locale description re-registration as a workaround, because the guarantee belongs to the
-  harness (make the locale preference available before plugin registration, or support per-locale
-  command descriptions). The plugin's `t()` design is retained; localized host output is treated
-  as an upstream capability to be restored when the harness provides it. (This is still not a
-  plugin deviation: the client localizes only the six first-party descriptions in
-  `HOST_FACES` — compact, export, feedback, goal, permission, plan — while every
-  third-party description, this plugin's included, passes through verbatim.)
-- **Client-side command-description i18n is first-party-only**: DSH also localizes host command
+  independent of each other, so cordis made **no ordering guarantee** between the section
+  registration and the plugin's read; a probe confirmed the read could see `undefined`, leaving
+  every host-side `t()` string (runtime messages and command descriptions alike) in English.
+- **Resolution (0.1.7)**: the section is gone — the locale host half now only calls
+  `settings.configure({ auto: false })`, and the preference lives in the `locale` entry's own
+  Config. The plugin reads that same value through the settings service's descriptor read
+  (`settings.describe({ redactSecrets: true })`, the route the settings UI and the client's own
+  locale runtime take) at mount, which covers the once-registered command descriptions, and again
+  before each command renders, so a language switch needs no remount. The read is best-effort: a
+  missing method, a missing entry, or a throwing read stays on the neutral English default.
+- **Client-side command-description i18n is still first-party-only**: DSH localizes host command
   descriptions through the client `locale` binding (`ui-commands`), but the description keys come
   from a **closed allowlist** (`HOST_FACES`: compact, export, feedback, goal,
   permission, plan). A command outside that set — every third-party plugin — is passed through
   verbatim, never translated (`builtinRowFace` only rewrites a description that equals the
-  first-party English copy). So the plugin's own `/rewind` command description can never ride this
-  channel either; it is authored in the host's tongue (English by default), same as the host
-  runtime copy above.
+  first-party English copy), and no host command *output* is localized by the harness for anyone.
+  This plugin's host dictionary is what carries both, in the language read above.
 
 ### R-OPENSTEP (rewind part resolved): an unclosed `step` in the log breaks token-meter replay; the rewind no longer compounds it
 
@@ -213,7 +204,8 @@ new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover
 | client ordering | — | — | ✓ | — | — | — | ✓ | — |
 | plan-mode | ✓ | — | ✓ | — | — | — | — | ✓ (static) |
 
-✓ = probe passes; — = not applicable. RU-I18N, R-OPENSTEP and R-PROMPTCARD are upstream issues the
+✓ = probe passes; — = not applicable. RU-I18N is resolved on the 0.1.7 line (see above);
+R-OPENSTEP and R-PROMPTCARD are upstream issues the
 plugin does not compensate for (see above); G3 is a confirmed-non-defect behavior pinned in
 `compat-gaps.test.ts` (G1 surface classification via `foldSurface` and G2 projection checkpoint
 both pass).
