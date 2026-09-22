@@ -35,7 +35,9 @@ dsh-chat-timeline#6).
 ## DOM attribute
 
 Each withdrawn row carries `data-dsh-rewind-hidden="true"` while hidden,
-removed on un-hide. Contract:
+removed on un-hide. The same attribute also lands on a step/process GROUP shell
+— the view container around a turn's process rows, which is not itself a message
+— when every member it holds is withdrawn. Contract:
 
 - The **attribute name** is stable; treat the value as opaque.
 - It is **observational only** — rewind hides via `style.display`; the
