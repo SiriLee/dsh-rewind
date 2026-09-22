@@ -117,7 +117,12 @@ function isSubagentSession(session: Session): boolean {
   return header.origin === 'subagent' || (header.delegationDepth ?? 0) > 0
 }
 
-/** Host-side locale the command output renders in; updated from settings at apply time. */
+/**
+ * Host-side locale the command output renders in. DSH 0.1.7 has no host-side
+ * read of the user's language preference (the settings service exposes schemas,
+ * not sections), so this holds the neutral default; the client keeps its own
+ * localized copy.
+ */
 let activeLocale: HostLocaleId = 'en'
 
 /**
@@ -1019,10 +1024,10 @@ async function handleClearCurrent(
  *  `dshHome`, `dedup`) plus the live cleanup policy (`enabled`, `maxAgeDays`).
  */
 export function apply(ctx: Context, config?: Config): void {
-  // Fresh per-mount host state: these three live at module scope because
-  // module-level helpers read them without a ctx thread, and a stale locale, a
-  // fired one-shot sweep gate or the previous mount's policy store would
-  // otherwise survive a live disable → enable round trip.
+  // Fresh per-mount host state: these live at module scope because module-level
+  // helpers read them without a ctx thread, and a fired one-shot sweep gate or
+  // the previous mount's policy store would otherwise survive a live
+  // disable → enable round trip.
   activeLocale = 'en'
   cleanupStore = undefined
   autoSweepChecked = false
