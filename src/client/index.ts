@@ -60,7 +60,6 @@ import {
   CLEANUP_ENTRY_ID,
   type CleanupFormScope,
   type CleanupPolicy,
-  type CardTranslate,
 } from './settings-card.tsx'
 
 export const name = 'dsh-rewind'
@@ -263,9 +262,8 @@ export function apply(ctx: ClientContext): void {
     // its edits over the entry's shared configuration form (`ctx.configForms`),
     // exactly like the official settings pages.
     try {
-      const { store, form, labels } = cleanupForm(
+      const { store, form } = cleanupForm(
         ctx.configForms.get<CleanupPolicy>(CLEANUP_ENTRY_ID) as unknown as CleanupFormScope<CleanupPolicy>,
-        t as unknown as CardTranslate,
       )
       // The model subscribes to the entry's form on construction, so the fiber
       // must release it on unload (the official settings pages do the same).
@@ -275,7 +273,7 @@ export function apply(ctx: ClientContext): void {
           name: 'plugins.bundle.config',
           key: PLUGIN_PACKAGE,
           locale: NS,
-          inject: () => ({ hooks: { cleanupCard: store }, labels, ...form.actions() }),
+          inject: () => ({ hooks: { cleanupCard: store }, ...form.actions() }),
         },
         SettingsCleanupCard,
       ))

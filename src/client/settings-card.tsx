@@ -14,6 +14,25 @@
 
 import { SettingsFormModel, settingsNumberField, SettingsForm, SettingsValueField, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsFieldState, SettingsFormActions, SettingsFormLabels } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { InjectFace, LocaleNamespaceMap, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { RewindKey } from './locales.ts'
+// Type-only: supplies the `plugins.bundle.config` slot declaration this card's
+// props are composed from (the same import the official bundle pages use).
+import type {} from '@deepseek-ai/dsh-client-ui-plugin-manager/client'
+
+declare module '@deepseek-ai/dsh-client-ui-slots' {
+  interface LocaleNamespaceMap {
+    /** The card reads the plugin's own `rewind` dictionary (see `./locales.ts`). */
+    rewind: RewindKey
+  }
+}
+
+/**
+ * The dictionary namespace the card's copy comes from: the `rewind` namespace
+ * the rest of the client plugin registers, which the slot registration declares
+ * as its `locale`.
+ */
+export const CARD_LOCALE_NS = 'rewind'
 
 /**
  * The plugin entry whose form this is: the bundle's package name, which is the
@@ -29,9 +48,6 @@ export interface CleanupPolicy {
   readonly enabled: boolean
   readonly maxAgeDays: number
 }
-
-/** Translate one client dictionary key. */
-export type CardTranslate = (key: string, params?: Record<string, string | number>) => string
 
 /** The staged-write shape the model's field spec returns. */
 type FieldWrite = { readonly kind: 'set'; readonly value: unknown } | { readonly kind: 'clear' }
@@ -58,7 +74,7 @@ function enabledField(): FieldSpec {
 
 /** One form snapshot as this card reads it (the shared store's `getSnapshot`). */
 /** One form snapshot as this card reads it (the shared store's `getSnapshot`). */
-interface SnapshotLike {
+export interface CleanupCardSnapshot {
   readonly status: 'loading' | 'ready' | 'unavailable'
   readonly available: boolean
   readonly writable: boolean
@@ -70,9 +86,12 @@ interface SnapshotLike {
   readonly maxAgeDays: SettingsFieldState
 }
 
-/** The bound card store the slot renderer reads through. */
-interface CardStore {
-  getSnapshot(): SnapshotLike
+/**
+ * The bound snapshot store the slot renderer rebinds as the card's
+ * `useCleanupCard` selector hook.
+ */
+export interface SettingsCleanupStore {
+  getSnapshot(): CleanupCardSnapshot
   subscribe(listener: () => void): () => void
 }
 
@@ -100,19 +119,37 @@ export interface CleanupFormScope<T> {
   ): Promise<boolean>
 }
 
-/** Props the Plugins page binds for this bundle's configuration form. */
-export interface SettingsCleanupCardProps {
-  readonly view?: 'summary' | 'page'
-  readonly t?: CardTranslate
-  readonly hooks?: { readonly cleanupCard: CardStore }
-  readonly save?: () => void
-  readonly discard?: () => void
-  readonly edit?: (field: string, text: string) => void
-  readonly resetField?: (field: string) => void
-}
+/**
+ * Props the Plugins page binds for this bundle's configuration form: the slot's
+ * runtime owner share (`view`), the locale `t` seat, and the injected face with
+ * its `hooks` compartment rebound as a `use<Name>` selector hook.
+ */
+export type SettingsCleanupCardProps =
+  PropsRuntime<'plugins.bundle.config'>
+  & PropsLocale<typeof CARD_LOCALE_NS>
+  & InjectFace<SettingsCleanupFace>
+
+/**
+ * Every dictionary key this card reads: the switch row, the day field, and the
+ * five labels the shared form frame renders.
+ */
+export type CleanupLabelKey =
+  | 'cleanup.auto'
+  | 'cleanup.auto.on'
+  | 'cleanup.auto.off'
+  | 'cleanup.maxAge'
+  | 'cleanup.maxAge.hint'
+  | 'cleanup.overridden'
+  | 'cleanup.reset'
+  | 'cleanup.invalid'
+  | 'cleanup.unavailable'
+  | 'cleanup.readonly'
+  | 'cleanup.saveFailed'
+  | 'cleanup.save'
+  | 'cleanup.saving'
 
 /** The form frame's copy, read from this plugin's dictionary. */
-export function formLabels(t: CardTranslate): SettingsFormLabels {
+export function formLabels(t: (key: CleanupLabelKey) => string): SettingsFormLabels {
   return {
     unavailable: t('cleanup.unavailable'),
     readOnly: t('cleanup.readonly'),
@@ -125,17 +162,16 @@ export function formLabels(t: CardTranslate): SettingsFormLabels {
 /**
  * Build the staged form over one entry's configuration.
  * @param scope - the shared per-entry configuration form.
- * @param t - the card's dictionary translator.
  * @returns the model plus the card's bound read hook.
  */
-export function cleanupForm(scope: CleanupFormScope<CleanupPolicy>, t: CardTranslate) {
+export function cleanupForm(scope: CleanupFormScope<CleanupPolicy>) {
   const form = new SettingsFormModel<CleanupPolicy>(scope, [
     enabledField(),
     settingsNumberField('maxAgeDays'),
   ])
   return {
     form,
-    store: form.bind((): SnapshotLike => {
+    store: form.bind((): CleanupCardSnapshot => {
       const shell = form.shell()
       return {
         ...shell,
@@ -144,7 +180,6 @@ export function cleanupForm(scope: CleanupFormScope<CleanupPolicy>, t: CardTrans
         maxAgeDays: form.field('maxAgeDays'),
       }
     }),
-    labels: formLabels(t),
   }
 }
 
@@ -155,10 +190,9 @@ export function cleanupForm(scope: CleanupFormScope<CleanupPolicy>, t: CardTrans
  * @returns the form element, or null for the summary view.
  */
 export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
-  const t = props.t ?? ((key: string) => key)
-  const store = props.hooks?.cleanupCard
-  const state = store?.getSnapshot()
-  if (props.view === 'summary' || state === undefined) return null
+  const { t, useCleanupCard } = props
+  const state = useCleanupCard(snapshot => snapshot)
+  if (props.view === 'summary') return null
   if (state.status !== 'ready') {
     return <p className="dsh-rewind-cleanup-unavailable" role="status">{t('cleanup.unavailable')}</p>
   }
@@ -168,8 +202,8 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
     <SettingsForm
       labels={formLabels(t)}
       state={state}
-      onSave={() => { props.save?.() }}
-      onDiscard={() => { props.discard?.() }}
+      onSave={props.save}
+      onDiscard={props.discard}
     >
       <div className="dsh-rewind-cleanup-permission">
         <div className="dsh-rewind-cleanup-toggle-row">
@@ -178,7 +212,7 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
             checked={enabled}
             label={t('cleanup.auto')}
             disabled={disabled}
-            onChange={(next) => { props.edit?.('enabled', String(next)) }}
+            onChange={(next) => { props.edit('enabled', String(next)) }}
           />
         </div>
         <p className="dsh-rewind-cleanup-hint">{t(enabled ? 'cleanup.auto.on' : 'cleanup.auto.off')}</p>
@@ -195,8 +229,8 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
           numeric
           disabled={disabled}
           {...state.maxAgeDays}
-          onEdit={(text) => { props.edit?.('maxAgeDays', text) }}
-          onReset={() => { props.resetField?.('maxAgeDays') }}
+          onEdit={(text) => { props.edit('maxAgeDays', text) }}
+          onReset={() => { props.resetField('maxAgeDays') }}
         />
       ) : null}
     </SettingsForm>
@@ -205,8 +239,6 @@ export function SettingsCleanupCard(props: SettingsCleanupCardProps) {
 
 /** The face the slot registration injects into the card. */
 export interface SettingsCleanupFace extends SettingsFormActions {
-  readonly hooks: { readonly cleanupCard: CardStore }
+  readonly hooks: { readonly cleanupCard: SettingsCleanupStore }
 }
 
-/** The card's snapshot store type (the registration's injected hook). */
-export type SettingsCleanupStore = SettingsCleanupFace['hooks']['cleanupCard']

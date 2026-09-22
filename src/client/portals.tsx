@@ -123,14 +123,21 @@ export interface RewindBridgeDeps {
 /** Structural face of the runtime slot service (see the module doc). */
 export interface SlotsLike {
   inject(key: string, install: () => () => void): () => void
-  register<P>(
+  /**
+   * One slot registration. `Face` is the injected business face the renderer
+   * decomposes (its `hooks` compartment is rebound as a `use<Name>` selector
+   * hook); `Props` is the COMPOSED props a component receives — the slot's
+   * runtime owner share, the locale seat, and that face — which is what the
+   * component is typed against, never the face alone.
+   */
+  register<P, Face = P>(
     entry: {
       readonly name: string
       readonly id?: string
       readonly order?: number
       readonly key?: string
       readonly locale?: string
-      readonly inject?: () => P
+      readonly inject?: () => Face
     },
     component: (props: P) => ReactNode,
   ): () => void

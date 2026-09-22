@@ -29,6 +29,8 @@ import {
   formLabels,
   type CleanupFormScope,
   type CleanupPolicy,
+  type CleanupCardSnapshot,
+  type SettingsCleanupCardProps,
 } from '../src/client/settings-card.tsx'
 
 const t = (key: string): string => key
@@ -95,20 +97,25 @@ afterEach(() => { unmount() })
 /** Mount the card through its form bundle, exactly as the slot registration does. */
 function mount(options: Parameters<typeof fakeForm>[0] = {}, view: 'summary' | 'page' = 'page') {
   const { scope, writes } = fakeForm(options)
-  const { form, store, labels } = cleanupForm(scope, t)
+  const { form, store } = cleanupForm(scope)
   const el = document.createElement('div')
   document.body.appendChild(el)
   host = createRoot(el)
-  // Bridge the store's subscription to a re-render, the way the slot
-  // renderer's selector hook does on a real Plugins page.
+  // The slot renderer rebinds the injected `hooks` compartment as the card's
+  // `useCleanupCard` selector hook, so this stand-in renders exactly the
+  // component props a real page binds.
+  const state = (): CleanupCardSnapshot => store.getSnapshot()
+  const useCleanupCard = <S,>(select: (snapshot: CleanupCardSnapshot) => S): S => select(state())
   const render = () => {
     act(() => {
       host!.render(createElement(SettingsCleanupCard, {
         view,
         t,
-        hooks: { cleanupCard: store },
+        useCleanupCard,
         ...form.actions(),
-      }))
+        // The renderer also seats the session standard props (the global kit),
+        // which this card never reads; the probe binds only what it renders.
+      } as unknown as SettingsCleanupCardProps))
     })
   }
   const off = store.subscribe(render)
@@ -117,7 +124,6 @@ function mount(options: Parameters<typeof fakeForm>[0] = {}, view: 'summary' | '
     root: el,
     writes,
     form,
-    labels,
     unmount: () => { off(); unmount() },
     switch: () => el.querySelector<HTMLButtonElement>('[role="switch"]'),
     input: () => el.querySelector<HTMLInputElement>('input'),

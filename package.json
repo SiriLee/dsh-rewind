@@ -1,7 +1,7 @@
 {
   "name": "dsh-rewind-plugin",
   "version": "0.13.0-alpha.2",
-  "description": "In-window conversation rewind with workspace file restore · 同窗口内对话回退并可还原工作区文件",
+  "description": "In-window conversation rewind with workspace file restore \u00b7 \u540c\u7a97\u53e3\u5185\u5bf9\u8bdd\u56de\u9000\u5e76\u53ef\u8fd8\u539f\u5de5\u4f5c\u533a\u6587\u4ef6",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -77,6 +77,7 @@
     "@deepseek-ai/cordis": "^4.0.1",
     "@deepseek-ai/dsh-client-locale": "^0.1.7-alpha.1",
     "@deepseek-ai/dsh-client-ui-commands": "^0.1.7-alpha.1",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.1.7-alpha.1",
     "@deepseek-ai/dsh-client-ui-primitives": "^0.1.7-alpha.1",
     "@deepseek-ai/dsh-client-ui-settings": "^0.1.7-alpha.1",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.7-alpha.1",
@@ -94,13 +95,13 @@
     "@deepseek-ai/cordis": {
       "optional": true
     },
-    "@deepseek-ai/schemastery": {
-      "optional": true
-    },
     "@deepseek-ai/dsh-client-locale": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-commands": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-client-ui-plugin-manager": {
       "optional": true
     },
     "@deepseek-ai/dsh-client-ui-primitives": {
@@ -134,6 +135,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
       "optional": true
     }
   },
