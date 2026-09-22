@@ -103,15 +103,20 @@ The plugin treats these as harness-side defects it does not compensate for. Each
   `locale` settings section through its own `ctx.inject(['settings'])`
   (`packages/client/locale/src/index.ts`). Both callbacks wait only on `settings` and are
   independent of each other, so cordis made **no ordering guarantee** between the section
-  registration and the plugin's read; a probe confirmed the read could see `undefined`, leaving
-  every host-side `t()` string (runtime messages and command descriptions alike) in English.
+  registration and the plugin's read. The plugin's own command descriptors were registered
+  **synchronously** in the same `apply`, i.e. before that microtask ran, so their `description`
+  strings were baked in the neutral English default — the defect reported as #28 — while the
+  runtime output, evaluated later at command execution from the then-updated `activeLocale`, did
+  follow the stored preference. A preference changed *after* the mount reached the output only on
+  the next mount, because the read was one-shot.
 - **Resolution (0.1.7)**: the section is gone — the locale host half now only calls
   `settings.configure({ auto: false })`, and the preference lives in the `locale` entry's own
   Config. The plugin reads that same value through the settings service's descriptor read
   (`readHostLocale` in `src/index.ts` calls `settings.describe({ redactSecrets: true })`, the route
-  the settings UI and the client's own locale runtime take) at mount, which covers the
-  once-registered command descriptions, and again before each command renders, so a language
-  switch needs no remount. The read is best-effort: a missing method, a missing entry, or a
+  the settings UI and the client's own locale runtime take): at mount, which is what the
+  once-registered command descriptions carry, and again before each command renders, so the output
+  follows a language switch without a remount (the descriptors keep the mount-time language until
+  the plugin remounts). The read is best-effort: a missing method, a missing entry, or a
   throwing read stays on the neutral English default.
 - **Client-side command-description i18n is still first-party-only**: DSH localizes host command
   descriptions through the client `locale` binding (`ui-commands`), but the description keys come
