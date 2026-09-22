@@ -7,7 +7,7 @@
  * undefined degradation when no view is registered.
  */
 import { describe, expect, it } from 'vitest'
-import { chatSnapshotOf, hiddenSeqsOf, type HiddenChat } from '../src/client/hidden.ts'
+import { chatSnapshotOf, hiddenSeqsOf, type ChatConversationViewNode, type HiddenChat } from '../src/client/hidden.ts'
 
 /** The 0.1.2 EMPTY_CHAT_SNAPSHOT shape (dsh-client-ui-chat): Map-like nodes. */
 const EMPTY_CHAT_SNAPSHOT_012 = {
@@ -63,5 +63,69 @@ describe('chatSnapshotOf (0.1.2 uiConversation "chat" view)', () => {
     const snapshot = chatSnapshotOf(viewOf(chat012(order, nodes)))!
     // Message anchors 5..7 sit inside the rewind's [target, marker] span.
     expect(hiddenSeqsOf(snapshot)).toEqual(new Set([5, 6, 7]))
+  })
+})
+
+describe('hiddenSeqsOf cut spans', () => {
+  /**
+   * A snapshot holding one user node per seq plus one executed rewind per cut.
+   * Each command's `sourceEventSeq` is the cut's marker seq.
+   */
+  function rewindChat(cuts: ReadonlyArray<{ target: number; marker: number }>, seqs: readonly number[]): HiddenChat {
+    const nodes = new Map<string, unknown>()
+    for (const seq of seqs) {
+      nodes.set(`m${seq}`, { kind: 'user', anchorSeq: seq, data: { seq, time: 0, content: [] } })
+    }
+    for (const cut of cuts) {
+      nodes.set(`c${cut.marker}`, {
+        kind: 'command',
+        anchorSeq: cut.marker,
+        data: { seq: cut.marker, name: 'rewind', args: `@${cut.target} chat`, outcome: { kind: 'success', sourceEventSeq: cut.marker } },
+      })
+    }
+    return {
+      order: [...nodes.keys()],
+      nodes: { get: key => nodes.get(key) as ChatConversationViewNode | undefined },
+    }
+  }
+
+  const range = (from: number, to: number): number[] =>
+    Array.from({ length: to - from + 1 }, (_, index) => from + index)
+
+  it('merges overlapping cuts into one range', () => {
+    // A later rewind to a point inside the first cut: [1,30] and [20,40] are
+    // one continuous withdrawal.
+    const chat = rewindChat([{ target: 1, marker: 30 }, { target: 20, marker: 40 }], range(1, 45))
+    expect(hiddenSeqsOf(chat)).toEqual(new Set(range(1, 40)))
+  })
+
+  it('hides an unbroken run cut by two adjacent rewinds', () => {
+    // [1,5] and [6,9] leave no visible seq between them. They stay separate
+    // ranges (only strict overlap merges), so this pins the union, not the
+    // range count.
+    const chat = rewindChat([{ target: 1, marker: 5 }, { target: 6, marker: 9 }], range(1, 12))
+    const hidden = hiddenSeqsOf(chat)
+    expect(hidden).toEqual(new Set(range(1, 9)))
+  })
+
+  it('keeps a gap between cuts visible', () => {
+    // The doc's stated reason spans are not collapsed to [min target, max
+    // marker]: the seqs between two cuts are still on the surface.
+    const chat = rewindChat([{ target: 1, marker: 3 }, { target: 10, marker: 12 }], range(1, 15))
+    expect(hiddenSeqsOf(chat)).toEqual(new Set([...range(1, 3), ...range(10, 12)]))
+  })
+
+  it('matches the per-seq scan it replaced across many cuts', () => {
+    // Equivalence pin for the coalesce + binary search: the same answer the
+    // naive "any span contains this seq" scan produced, over 40 cuts.
+    const cuts = Array.from({ length: 40 }, (_, index) => ({ target: 1 + index * 7, marker: 1 + index * 7 + 11 + (index % 5) }))
+    const seqs = range(1, 400)
+    const chat = rewindChat(cuts, seqs)
+    const expected = new Set<number>()
+    for (const cut of cuts) expected.add(cut.marker)
+    for (const seq of seqs) {
+      if (cuts.some(cut => seq >= cut.target && seq <= cut.marker)) expected.add(seq)
+    }
+    expect(hiddenSeqsOf(chat)).toEqual(expected)
   })
 })

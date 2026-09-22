@@ -158,6 +158,61 @@ export function isCandidateCommand(command: CommandNode): boolean {
 }
 
 /**
+ * One executed rewind's cut: the target seq through the marker's seq, inclusive.
+ */
+interface CutSpan {
+  readonly start: number
+  end: number
+}
+
+/**
+ * Coalesce rewind cut spans into disjoint, ascending ranges.
+ *
+ * A span covers an inclusive range of anchor seqs, so two spans that overlap
+ * describe one continuous cut and merge. Only strict overlap merges: adjacent
+ * ranges stay separate, which keeps the union exact without assuming seqs are
+ * integers. Membership then costs one binary search per node instead of a scan
+ * of every span, which is what keeps `hiddenSeqsOf` linear in the nodes rather
+ * than nodes × rewinds.
+ *
+ * @param spans - one `[target, marker]` range per executed rewind.
+ * @returns the merged ranges, ascending by start.
+ */
+function coalesceCuts(spans: readonly CutSpan[]): readonly CutSpan[] {
+  if (spans.length < 2) return spans
+  const sorted = [...spans].sort((left, right) => left.start - right.start || left.end - right.end)
+  const merged: CutSpan[] = []
+  for (const span of sorted) {
+    const last = merged[merged.length - 1]
+    if (last !== undefined && span.start <= last.end) {
+      if (span.end > last.end) last.end = span.end
+      continue
+    }
+    merged.push({ start: span.start, end: span.end })
+  }
+  return merged
+}
+
+/**
+ * Whether an anchor seq falls inside any coalesced cut range.
+ * @param cuts - coalesced ranges, ascending by start (see `coalesceCuts`).
+ * @param seq - the anchor seq to test.
+ * @returns true when a rewind withdrew that seq.
+ */
+function cutsContain(cuts: readonly CutSpan[], seq: number): boolean {
+  let low = 0
+  let high = cuts.length - 1
+  while (low <= high) {
+    const middle = (low + high) >> 1
+    const cut = cuts[middle]!
+    if (seq < cut.start) high = middle - 1
+    else if (seq > cut.end) low = middle + 1
+    else return true
+  }
+  return false
+}
+
+/**
  * Anchor seqs that must be hidden from the rendered transcript so the user
  * sees the conversation as the agent sees it: every impact-preview flow node
  * (pending, succeeded, or errored — it only exists to feed the popover) and
@@ -173,10 +228,15 @@ export function isCandidateCommand(command: CommandNode): boolean {
  * hide that still-on-surface gap. Endpoints come from the command nodes:
  * `sourceEventSeq` is the marker's log seq, and the outcome text carries the
  * target seq.
+ *
+ * The spans are coalesced into disjoint ascending ranges before the membership
+ * test, so a node costs one binary search instead of a scan of every rewind's
+ * range: that keeps the walk linear in the nodes rather than in nodes ×
+ * rewinds, on a pass that runs for every chat mutation.
  */
 export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
   const hidden = new Set<number>()
-  const spans: Array<{ start: number; end: number }> = []
+  const spans: CutSpan[] = []
   for (const key of snap.order) {
     const node = snap.nodes.get(key)
     if (node === undefined || node.kind !== 'command') continue
@@ -205,13 +265,11 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
       spans.push({ start: target, end: marker })
     }
   }
+  const cuts = coalesceCuts(spans)
   for (const key of snap.order) {
     const node = snap.nodes.get(key)
     if (node === undefined) continue
-    const anchor = node.anchorSeq
-    if (spans.some(span => anchor >= span.start && anchor <= span.end)) {
-      hidden.add(anchor)
-    }
+    if (cutsContain(cuts, node.anchorSeq)) hidden.add(node.anchorSeq)
   }
   return hidden
 }
