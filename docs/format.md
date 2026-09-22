@@ -262,9 +262,10 @@ migration tool. Old-format data is never silently re-interpreted.
 ## Cleanup policy persistence
 
 The snapshot auto-cleanup policy (the `enabled` switch and the `maxAgeDays`
-idle cutoff) is no longer a file: it lives in the **dsh-settings document** under
-the `dsh-rewind-snapshot-cleanup` namespace (validated by a schemastery schema;
-defaults are the `base` layer). The policy was previously persisted in a legacy
-`<dsh home>/snapshot-cleanup.json` file; that file store and its one-time
-startup migration have been removed. The last-sweep clock stays in its own
-`<dsh home>/snapshot-cleanup-last-sweep.json` state file, which is unchanged.
+idle cutoff) is no longer a file: it is this plugin entry's own live
+configuration (both fields declared `.volatile()`, validated by the entry's
+schemastery `Config` schema, defaults on the schema). The policy was previously
+persisted in a legacy `<dsh home>/snapshot-cleanup.json` file; that file store
+and its one-time startup migration have been removed. The last-sweep clock stays
+in its own `<dsh home>/snapshot-cleanup-last-sweep.json` state file, which is
+unchanged.

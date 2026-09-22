@@ -1,5 +1,7 @@
 # Snapshot cleanup
 
+<!-- docs-scope: applies to DSH <= 0.1.6, where the policy is a dsh-settings document namespace. DSH 0.1.7 stores it as the plugin entry's own live configuration; the 0.1.7 seam is recorded in docs/compat/audit.md and docs/format.md. -->
+
 The plugin saves a backup of each file before it's edited, so you can rewind your
 code to an earlier point. These backups are called **snapshots**, and they're
 grouped by message and stored per session.

@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.6-alpha.2` (the range the peers and `dsh.engines.dsh` declare).
+> Targeted version: npm `@deepseek-ai/*@0.1.7-alpha.1` (the range the peers and `dsh.engines.dsh` declare).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
@@ -16,8 +16,11 @@
 > replaces the peer tuple (single-line model). The range is conservative — it
 > declares only what was verified, so a release already inside it changes
 > nothing — unless it changes interfaces inside the tuple: `0.1.6-alpha.2`
-> removed the client session-ownership and queue-mirror APIs, so the peer floor
-> moved to it. Signal: `npm view @deepseek-ai/dsh dist-tags`;
+> removed the client session-ownership and queue-mirror APIs, and
+> `0.1.7-alpha.1` moved the session writer to format v4 (producer-owned message
+> sources, tool-role results, `developer/message`) and replaced the settings
+> namespace registry with each entry's volatile `Config`, so the peer floor and
+> both plugin seams moved with them. Signal: `npm view @deepseek-ai/dsh dist-tags`;
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
 > prerelease published under another tag is a manual pre-release check).
 >
@@ -35,7 +38,7 @@ legacy branch).
 | Host session log | `session.snapshotEvents()` |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
 | Client composer refill | `conversation.input.setDraft` facade |
-| Client settings card | nested `ctx.inject(['settingsScope'])` |
+| Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
 | Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
 
 ## Definition of "fully compatible" (invariants)
@@ -62,10 +65,11 @@ legacy branch).
 - **rewind across a compact checkpoint**: `RewindError('not-on-surface')` refuses cleanly, no crash.
 - **plan-mode**: the marker is a turn-less `user/message` (no phantom turn); a rewind never touches the log-only `plan/mode` state (plan mode stays active; the user leaves it with `/plan off`) and the log stays replayable (`compat-invariants` I1/I3 marker + `plan/mode` probe, `verify-host`).
 - **agent-loop cancellation**: `finally` guarantees step/turn closure; the rewind force-stop path leaves no dangling frame.
-- **settings-card registration**: the Snapshot cleanup card must be registered through a **nested** `ctx.inject(['settingsScope'], …)` — naming `settingsScope` in the module-level inject would keep the whole client plugin unmounted on a host without that service (card and rewind button would disappear). It reads `getSnapshot().value` + `set`, never the `mutate` write API.
+- **settings-card registration (`0.1.7-alpha.1`)**: `settingsScope` is gone with the namespace registry. The card declares `configForms` as a module-level inject (the web profile always composes `ui-settings`), stages through the harness's own `SettingsFormModel` + `SettingsForm`, and registers into `plugins.bundle.config` keyed by the bundle package name; it reads the entry's form snapshot and writes through its revision-fenced `mutate`, and disposes the model's subscription with the fiber.
 - **client session ownership (`0.1.6-alpha.2`)**: `SessionListState.current` / `currentAddress` are gone; main-view ownership is read from the row's `retainedBy.mainView` label — what `ui-workspace` retains the open session with. Pin: `tests/client-refill.test.ts`.
 - **client pending input (`0.1.6-alpha.2`)**: `SessionSnapshot.queue` and the host `queue-mirror` are gone; pending steering rows come from the session's own `inbox` projection, and only USER-sourced `next-step` rows are retractable (the removed mapping was `source.kind === 'user' ? 'steering' : 'context'`). Pins: `tests/pending.test.ts`, `tests/client-retract.test.ts`.
 - **client settings slot (`0.1.6-alpha.2`)**: `settings.plugin.item` is gone; the configuration form registers into `plugins.bundle.config`, keyed by the bundle package name. Pin: `tests/client-contract.test.ts`.
+- **client settings form (`0.1.7-alpha.1`)**: the same release retired the `settingsScope` bind (namespace registry) in favour of the shared per-entry form; the card now reads that form's snapshot and stages edits through `mutate`. Pin: `tests/client-settings-card.test.ts` (staged plan, refusal, and the fiber releasing the model's subscription), `tests/client-lifecycle.test.ts`.
 
 - **`agent/created` lifecycle guard**: the session-format reconcile runs on the alpha line's `agent/created` (fire-and-forget); pin: `verify-host` 4e dispatches it.
 - **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
@@ -76,14 +80,14 @@ legacy branch).
 
 - **session-stats / session-telemetry fold the full log**: post-rewind stats do **not** rewind — `turns`/`steps`/`llmMs` still include withdrawn content; the `user/message` marker is folded as a present user turn (it adds no step). This is the intended "fold the full log" semantics, pinned by probe.
 - **token-meter usage anchor stays stable** (G3): the `user/message` marker carries no usage, but because it is not an `assistant/message`, the baseline anchor does not drop to a heuristic estimate — it stays `usage` across a rewind. Pinned by `compat-gaps` G3.
-- **marker content is the constant `(empty message)` placeholder**: never empty, because the session log is immutable but the model serving a session may change later — a strict OpenAI-compatible gateway rejects an empty user message (HTTP 400, Issue #21). The marker is a small visible user turn in derived history. Pin: `verify-host` (`marker is a user/message with the dsh-rewind plugin source and the (empty message) placeholder`).
-- **marker shape (v3)**: the replace `surfaceOp` is `{ op: 'replace', startSeq, endSeq }` (renamed from `start`/`end` in session-format v3); the dsh-rewind source is the plain CLOSED third-party plugin shape `{ kind: 'plugin', plugin: 'dsh-rewind' }` (no private field — the released-format source validator rejects any member outside `kind`/`plugin` + the context-injection `form`/`sections`/`summary`, and a plugin extends the source map by adding a `kind`, not fields); the `user/message` + `sourceEventSeqs` shape and the `(empty message)` content are unchanged.
+- **marker content is the constant `(empty message)` placeholder**: never empty, because the session log is immutable but the model serving a session may change later — a strict OpenAI-compatible gateway rejects an empty user message (HTTP 400, Issue #21). The marker is a small visible user turn in derived history. Pin: `verify-host` (`marker is a user/message with the dsh-rewind producer source and the (empty message) placeholder`).
+- **marker shape (v4)**: the replace `surfaceOp` is `{ op: 'replace', startSeq, endSeq }` (renamed from `start`/`end` in session-format v3); the dsh-rewind source is the single producer-owned kind `{ kind: 'dsh-rewind' }`, declared by merging `MessageSourceMap` (v4 removed the catch-all `plugin` kind and rejects it on write). Two older shapes stay readable, because a stored marker is immutable: the released v3 wrapper `{ kind: 'plugin', plugin: 'dsh-rewind' }`, and the `plugin:dsh-rewind` form the v3→v4 conversion gives a producer its rename table does not know. The `user/message` + `sourceEventSeqs` shape and the `(empty message)` content are unchanged.
 - **Withdrawn content stays searchable/exportable**: session-query full-text and `/export` read the raw log; a rewind cuts only the surface, so withdrawn messages remain (declared in the README).
 - **Session title auto-regeneration**: the title derives from the surface, so an automatically-derived title may change after a rewind.
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).
 - **Attachment files left after a message is shadowed**: attachment storage is not cleaned with the surface (`dsh-attachment-local` not installed, not automatically verified).
 - **Rewind leaves plan mode untouched**: `/plan text` is two independent actions (enter plan mode + steer the message). Rewinding the message undoes only the message — the log-only `plan/mode` state stays active, and the user leaves plan mode with `/plan off`, which still commits after a rewind (the marker creates no open turn). Pin: `verify-host` plan checks (`plan rewind leaves plan mode active`, `/plan off after rewind turns plan mode off`), `tests/hidden.test.ts` `messageTextAt`.
-- **Bundle card metadata is not localizable (`0.1.6-alpha.2`)**: the manager titles a bundle with `shortName(pkg.name)` (`dsh-rewind-plugin` → `rewind-plugin`) and shows the raw `package.json` description; only its private `BUILTIN_COPY` (three official bundles) is translated, and `DshManifest` carries no title/description field. Its rows section renders for every bundle, official included. Only the description is the plugin's to set; nothing is compensated.
+- **Bundle card metadata is declared by the plugin, not by the manager (`0.1.7-alpha.1`)**: the manager still titles a bundle with `shortName(pkg.name)` and its raw `package.json` description when nothing else is declared, but it now reads plugin-owned resources first — `locale/<lang>.json` (`meta.title`/`meta.description`) through the package exports map, and an `icon` file relative to the manifest. This plugin declares both, so its card shows an icon and copy that follows the active language; only the fallback description remains mixed-language. Pin: `tests/package-layout.test.ts` (icon path/media/size and both dictionaries).
 
 - **Synchronous Session history reads are deprecated** on this line (`snapshotEvents` / `eventAt` / `ownEvents`): existing calls may remain, new calls are prohibited. The plugin keeps its existing reads (turn anchor + candidate listing); the migration path is a `ctx.sessionProjections` projection unit or the async paged history read this line has not shipped yet — not a plugin-side index. Not migrated in this release.
 
