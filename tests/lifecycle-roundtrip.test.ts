@@ -18,7 +18,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { en as enLocale } from '../src/locales.ts'
-import { apply } from '../src/index.ts'
+import { apply, cleanupConfigKey, inject } from '../src/index.ts'
 import { resolveCleanupStatePath } from '../src/snapshot-cleanup.ts'
 import { testConfig, textMessage } from './helpers.ts'
 
@@ -37,10 +37,12 @@ interface Mounted {
   readonly toolHandlers: ReadonlyMap<string, (...args: never[]) => unknown>
   /**
    * Set the Loader entry id the host reads (`ctx.fiber.entry.id`). A real mount
-   * always has one; a test that exercises the cleanup policy sets it before
-   * `apply`, exactly as a profile entry does.
+   * always has one, and a bundled row's id carries the loader's `include:`
+   * prefix; tests that exercise the cleanup policy set it before `apply`.
    */
   setEntryId(id: string): void
+  /** Entry ids the settings double was written through, in order. */
+  settingsWrites(): readonly string[]
   /** Run every disposer (depth-first) and await the async ones. */
   dispose(): Promise<void>
 }
@@ -83,9 +85,16 @@ function mount(options: { fs?: boolean } = {}): Mounted {
   // The Loader entry id the cleanup policy is addressed by; absent until a test
   // sets it (an entry-less mount has nowhere to write).
   const fiber: { entry?: { id: string } } = {}
+  // The settings entry-write port, recording which id each write addressed.
+  const settingsWrites: string[] = []
+  const settings = {
+    update: vi.fn(async (id: string) => { settingsWrites.push(id) }),
+    mutate: vi.fn(async (id: string) => { settingsWrites.push(id) }),
+  }
 
   const ctx = {
     fiber,
+    settings,
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
     on: (event: string, handler: (...args: never[]) => unknown) => { handlers.set(event, handler); return () => {} },
     logger,
@@ -111,6 +120,7 @@ function mount(options: { fs?: boolean } = {}): Mounted {
     commands,
     handlers,
     toolHandlers,
+    settingsWrites: () => [...settingsWrites],
     setEntryId: (id: string) => { fiber.entry = { id } },
     dispose: async () => {
       // Reverse order, like a real fiber teardown; await async disposers so the
@@ -208,6 +218,14 @@ describe('host mount lifecycle', () => {
 })
 
 describe('live disable → enable round trip', () => {
+  it('declares every service the mount reaches, so cordis can inject it', () => {
+    // The cleanup policy writes through the settings service, and cordis refuses
+    // an undeclared service access ("cannot get property … without inject") — a
+    // runtime-only failure a direct `apply(ctx)` probe cannot see, because the
+    // fake context hands over every service. The declared list is the pin.
+    expect([...inject].sort()).toEqual(['commands', 'settings', 'tools'])
+  })
+
   /** One `user/message` event, the practical auto-cleanup trigger. */
   const userMessage = (): [Session, { type: string; seq: number }] => {
     const session = Session.create(SessionId('lifecycle-session'))
@@ -226,7 +244,7 @@ describe('live disable → enable round trip', () => {
 
   it('reads the live config on every call instead of a stale snapshot', async () => {
     const mounted = mount()
-    mounted.setEntryId('dsh-rewind-plugin')
+    mounted.setEntryId('include:dsh-rewind-plugin')
     const enabled = createVolatile(false)
     apply(mounted.ctx, { ...testConfig({ snapshotDir: snapRoot }), enabled })
     const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
@@ -250,7 +268,7 @@ describe('live disable → enable round trip', () => {
     const stateFile = resolveCleanupStatePath(root)
     await rm(stateFile, { force: true })
     const first = mount()
-    first.setEntryId('dsh-rewind-plugin')
+    first.setEntryId('include:dsh-rewind-plugin')
     apply(first.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, enabled: true }))
     const [firstSession] = userMessage()
     first.handlers.get('session/event')!(firstSession as never, { type: 'user/message', seq: 2 } as never)
@@ -261,7 +279,7 @@ describe('live disable → enable round trip', () => {
     // again (the flag is per mount, the 24h throttle itself is on disk).
     await rm(stateFile, { force: true })
     const second = mount()
-    second.setEntryId('dsh-rewind-plugin')
+    second.setEntryId('include:dsh-rewind-plugin')
     apply(second.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, enabled: true }))
     const [secondSession] = userMessage()
     second.handlers.get('session/event')!(secondSession as never, { type: 'user/message', seq: 2 } as never)
@@ -280,6 +298,30 @@ describe('live disable → enable round trip', () => {
     const result = await cleanup.handler(invocation) as { kind: string; text: string }
     expect(result.kind).toBe('error')
     expect(result.text).toContain('cleanup policy unavailable')
+  })
+
+  it('addresses the PROFILE ROW id, not the fiber\'s nested include id', () => {
+    // The loader mounts a bundle's rows under an `include:` scope, while the
+    // settings service keys entries and profile patches by the bare row id; a
+    // write addressed by the fiber id is refused at runtime.
+    expect(cleanupConfigKey('include:dsh-rewind-plugin')).toBe('dsh-rewind-plugin')
+    expect(cleanupConfigKey('dsh-rewind-plugin')).toBe('dsh-rewind-plugin')
+    expect(cleanupConfigKey(undefined)).toBeUndefined()
+  })
+
+  it('writes the policy through the bare row id a real command resolves', async () => {
+    const mounted = mount()
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const cleanup = mounted.commands.get('snapshot-auto-cleanup')!
+    const [session] = userMessage()
+    const on = { rawInput: 'on', agent: { session } } as never
+    expect((await cleanup.handler(on) as { kind: string }).kind).toBe('success')
+    // Both writes (the defaulted cutoff is cleared, `enabled` is set) address the
+    // bare row id.
+    const writes = mounted.settingsWrites()
+    expect(writes.length).toBeGreaterThan(0)
+    expect(writes.every(id => id === 'dsh-rewind-plugin')).toBe(true)
   })
 
   it('fails closed when a config resolved but the Loader entry did not', async () => {

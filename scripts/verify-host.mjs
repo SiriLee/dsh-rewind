@@ -124,8 +124,11 @@ function applyFakeWrite() {
 
 /** The entry-write port the plugin's cleanup store addresses. */
 const fakeSettings = {
-  update: async (_entryId, patch) => { Object.assign(storedPolicy, patch); applyFakeWrite() },
-  mutate: async (_entryId, ops) => {
+  /** Entry ids every write addressed: the profile row id, never the fiber id. */
+  writes: [],
+  update: async (entryId, patch) => { fakeSettings.writes.push(entryId); Object.assign(storedPolicy, patch); applyFakeWrite() },
+  mutate: async (entryId, ops) => {
+    fakeSettings.writes.push(entryId)
     for (const op of ops) if (op.op === 'unset') delete storedPolicy[op.path[0]]
     applyFakeWrite()
   },
@@ -214,9 +217,10 @@ const session = buildSession('verify-host')
 const agent = makeAgent(session.id, session)
 
 const ctx = new Context()
-// The Loader entry id the cleanup policy is addressed by: a real mount always
-// carries one, and `ctx.fiber.entry.id` is where the plugin reads it.
-ctx.fiber.entry = { id: 'dsh-rewind-plugin' }
+// The Loader entry id the plugin reads. A bundled row is mounted under an
+// `include:` scope, so the real id carries that prefix — the configuration key
+// the settings service addresses is the bare profile row id.
+ctx.fiber.entry = { id: 'include:dsh-rewind-plugin' }
 const commands = new Map()
 ctx.provide('commands', {
   register: definition => {
@@ -920,6 +924,8 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   const maxAgeResult = await callCleanup('max-age 5')
   check('cleanup max-age set', maxAgeResult.kind === 'success', maxAgeResult.text)
   check('cleanup config persisted (maxAgeDays)', effectivePolicy.maxAgeDays === 5, JSON.stringify(storedPolicy))
+  check('cleanup writes address the profile row id, not the fiber id',
+    fakeSettings.writes.length > 0 && fakeSettings.writes.every(id => id === 'dsh-rewind-plugin'), JSON.stringify([...new Set(fakeSettings.writes)]))
   const badAge = await callCleanup('max-age 0')
   check('cleanup rejects max-age 0', badAge.kind === 'error', badAge.text)
 

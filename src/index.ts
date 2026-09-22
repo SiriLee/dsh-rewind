@@ -39,6 +39,7 @@ import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { copyFile, rm, stat, unlink } from 'node:fs/promises'
+import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
@@ -61,7 +62,7 @@ export { SnapshotStore } from './snapshot.ts'
 export type { CheckpointEntry, FileImpact, PruneStaleReport, RestoreOutcome, RestoreJournal, RestoreJournalState, RestoreReconcileReport } from './snapshot.ts'
 
 export const name = 'dsh-rewind'
-export const inject = ['commands', 'tools']
+export const inject = ['commands', 'tools', 'settings']
 
 /** Plugin config. */
 export interface RewindConfig {
@@ -1001,6 +1002,29 @@ async function handleClearCurrent(
 }
 
 
+/** The Loader's nested-include id prefix, between this fiber and its profile row. */
+const INCLUDE_ENTRY_PREFIX = 'include:'
+
+/** This fiber's own Loader entry id, when the mount has one (a bare `apply` does not). */
+function rewindConfigKey(ctx: Context): string | undefined {
+  return (ctx as { fiber?: { entry?: { id?: string } } }).fiber?.entry?.id
+}
+
+/**
+ * The settings entry id this plugin's configuration is addressed by: the PROFILE
+ * ROW id from the bundle's patch, not this fiber's nested include id. The loader
+ * mounts a bundle's rows under an `include:` scope, so the fiber id carries that
+ * prefix while the configuration editor keys entries and profile patches by the
+ * bare row id.
+ * @param entryId - this fiber's Loader entry id, when it has one.
+ * @returns the configuration key, or undefined without an entry.
+ */
+export function cleanupConfigKey(entryId: string | undefined): string | undefined {
+  if (entryId === undefined) return undefined
+  return entryId.startsWith(INCLUDE_ENTRY_PREFIX) ? entryId.slice(INCLUDE_ENTRY_PREFIX.length) : entryId
+}
+
+
 /**
  * Register the `/rewind` command and the checkpoint pipeline (before-capture
  * at `tools/execute`, disk commit at `tools/post-execute`).
@@ -1041,21 +1065,18 @@ export function apply(ctx: Context, config?: Config): void {
   const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup, dshHome })
   // The cleanup policy reads the config's live references, so a settings write
   // is visible here without a remount; writes go through the settings service's
-  // entry API, which is the only owner of the document. An entry-less mount
-  // (mounted without the Loader) has nowhere to write, so the policy stays
-  // fail-closed: reads report "unavailable" and a sweep deletes nothing.
-  const entryId = (ctx as unknown as { fiber?: { entry?: { id?: string } } }).fiber?.entry?.id
-  if (config !== undefined && entryId !== undefined) {
-    const settingsCtx = ctx as unknown as {
-      settings: {
-        update(entryId: string, patch: { enabled?: boolean; maxAgeDays?: number }): Promise<void>
-        mutate(entryId: string, ops: readonly { op: 'unset'; path: readonly string[] }[]): Promise<void>
-      }
-    }
+  // entry API, which is the only owner of the document and addresses entries by
+  // their PROFILE ROW id (`dsh-rewind-plugin`), not by this fiber's nested
+  // include id (`include:dsh-rewind-plugin`). `settings` is a declared inject,
+  // so the service is reachable as `ctx.settings`; without a resolved config or
+  // a Loader entry there is nowhere to write, and the policy stays fail-closed
+  // (reads report "unavailable", a sweep deletes nothing).
+  const configKey = cleanupConfigKey(rewindConfigKey(ctx))
+  if (config !== undefined && configKey !== undefined) {
     const writer: CleanupConfigWriter = {
-      entryId,
-      update: (id, patch) => settingsCtx.settings.update(id, patch),
-      clear: (id, fields) => settingsCtx.settings.mutate(id, fields.map(field => ({ op: 'unset' as const, path: [field] }))),
+      entryId: configKey,
+      update: (id, patch) => ctx.settings.update(id, patch),
+      clear: (id, fields) => ctx.settings.mutate(id, fields.map(field => ({ op: 'unset' as const, path: [field] }))),
     }
     cleanupStore = volatileCleanupStore(config, writer)
   }
