@@ -108,10 +108,11 @@ The plugin treats these as harness-side defects it does not compensate for. Each
 - **Resolution (0.1.7)**: the section is gone — the locale host half now only calls
   `settings.configure({ auto: false })`, and the preference lives in the `locale` entry's own
   Config. The plugin reads that same value through the settings service's descriptor read
-  (`settings.describe({ redactSecrets: true })`, the route the settings UI and the client's own
-  locale runtime take) at mount, which covers the once-registered command descriptions, and again
-  before each command renders, so a language switch needs no remount. The read is best-effort: a
-  missing method, a missing entry, or a throwing read stays on the neutral English default.
+  (`readHostLocale` in `src/index.ts` calls `settings.describe({ redactSecrets: true })`, the route
+  the settings UI and the client's own locale runtime take) at mount, which covers the
+  once-registered command descriptions, and again before each command renders, so a language
+  switch needs no remount. The read is best-effort: a missing method, a missing entry, or a
+  throwing read stays on the neutral English default.
 - **Client-side command-description i18n is still first-party-only**: DSH localizes host command
   descriptions through the client `locale` binding (`ui-commands`), but the description keys come
   from a **closed allowlist** (`HOST_FACES`: compact, export, feedback, goal,

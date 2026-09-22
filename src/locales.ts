@@ -38,7 +38,8 @@ export type HostLocaleId = 'zh' | 'en'
  * The harness accepts any BCP 47-style id while this plugin ships only `zh` and
  * `en`, so the PRIMARY subtag decides (`zh-CN` → zh) and everything else — an
  * unset preference, an unsupported language, a non-string value — is English.
- * Mirrors the client's own matching, full tag first and primary subtag second.
+ * The client's own selection tries the full tag before the primary subtag; over
+ * these two dictionaries the outcome is the same.
  *
  * @param preference - the raw `locale.preference` value.
  * @returns the dictionary this plugin renders its host copy in.
