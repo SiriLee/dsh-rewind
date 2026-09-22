@@ -162,9 +162,9 @@ new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover
 - **Automatic compaction silently stays disabled** (the `agent/pre-step` hook catches and warns; the conversation continues).
 - **rewind's role (resolved)**: the v2 `user/message` rewind marker appends no `step/start`, so a rewind no longer introduces the first trip-wire and the R-OPENSTEP rewind amplifier is closed. The harness-side root cause (an unclosed step after a crash, tripped by continuing the conversation) remains.
 
-### R-PROMPTCARD (not compensated): the `System prompt` card repeats at every new request series
+### R-PROMPTCARD (resolved on the 0.1.7 line): the repeated `System prompt` card is filtered out of chat
 
-> **Root cause (harness-side, by design since 0.1.2)**: Chat renders a collapsed `System prompt`
+> **History (0.1.2–0.1.6 lines)**: Chat rendered a collapsed `System prompt`
 > card at every request-series start. Any surface mutation bumps `contentGeneration` (a positional
 > `replace` — rewind, `/compact` — or a `SessionMessageProjection`, e.g. image offload), so the next
 > request logs `request/header { reason: 'series' }`; a process restart logs `'resume'`. The client
@@ -178,12 +178,17 @@ new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover
 > restored it — a resume/series header starts a visible request series. Locked by the `ui-chat` test
 > `repeats an unchanged system prompt after a surface rewrite…`.
 >
-> **Plugin stance**: no compensation (README known issue #4). Display-layer hiding was analysed and
-> rejected: the card node carries `data.text` but not its `reason`, and boundaries can coincide
-> (rewind then restart/`/compact`), so exact attribution is impossible client-side. The only clean
-> fixes are upstream (decouple boundary annotation from prompt display, or expose `reason`/visibility
-> to third-party clients). The existing DOM row-hiding seam (`hiddenSeqsOf`) covers withdrawn
-> messages, where hiding is essential, not cosmetic.
+> **Resolution (0.1.7)**: upstream stopped rendering the card in chat at all. `isVisibleChatNode`
+> (`packages/client/ui-chat/src/client/contract/chat-visibility.ts`, added by `b6f99fad55`
+> "feat(ui-chat): filter system prompts and permission commands") drops `system-prompt` nodes — and
+> the `permission` command — from the visible chat rows, while the durable events and the trajectory
+> inspection keep them. The `showsPrompt` computation is unchanged and no longer matters: the node is
+> filtered before the row is built, so a rewind on this line adds no prompt row at all. #22, #31 and
+> README known issue #4 no longer reproduce.
+>
+> **Plugin stance**: still no compensation. The DOM row-hiding seam (`hiddenSeqsOf`) covers withdrawn
+> messages, where hiding is essential, not cosmetic; nothing was added for the card, and the
+> display-layer workup above stays valid history.
 
 ## Uncovered boundaries (need an additional e2e layer; non-blocking)
 
@@ -210,8 +215,8 @@ new turn at `phase.turn + 1` (`agent.ts:277-283`) **without closing the leftover
 | client ordering | — | — | ✓ | — | — | — | ✓ | — |
 | plan-mode | ✓ | — | ✓ | — | — | — | — | ✓ (static) |
 
-✓ = probe passes; — = not applicable. RU-I18N is resolved on the 0.1.7 line (see above);
-R-OPENSTEP and R-PROMPTCARD are upstream issues the
+✓ = probe passes; — = not applicable. RU-I18N and R-PROMPTCARD are resolved on the 0.1.7 line (see
+above); R-OPENSTEP is an upstream issue the
 plugin does not compensate for (see above); G3 is a confirmed-non-defect behavior pinned in
 `compat-gaps.test.ts` (G1 surface classification via `foldSurface` and G2 projection checkpoint
 both pass).
