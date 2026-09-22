@@ -17,8 +17,10 @@
  */
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode } from '../src/client/hidden.ts'
-import { actionsContainerOf, collectDurableTargets, collectTargets, isRewindInertSession } from '../src/client/portals.tsx'
-import type { HiddenChat } from '../src/client/hidden.ts'
+import {
+  actionsContainerOf, collectDurableTargets, collectTargets, isRewindInertSession, resolveSeatAnchorSeq,
+} from '../src/client/portals.tsx'
+import { hiddenSeqsOf, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A durable user node in the HiddenChat shape the collector reads. */
 function userNode(seq: number) {
@@ -222,5 +224,66 @@ describe('actionsContainerOf (structural finder)', () => {
     const row = document.createElement('div')
     document.body.appendChild(row)
     expect(actionsContainerOf(row)).toBeUndefined()
+  })
+})
+
+describe('resolveSeatAnchorSeq (withdrawn-seat hiding)', () => {
+  /** One assistant-message node (the seat the reasoning itself renders as). */
+  const assistantNode = (seq: number) => ({
+    kind: 'assistant',
+    anchorSeq: seq,
+    data: { turn: 1, step: 1, seq, content: [{ type: 'reasoning', text: 'thinking' }] },
+  })
+
+  /** A rewind marker node: the command carrying the cut, as the host logs it. */
+  const markerCommand = (seq: number, target: number) => ({
+    kind: 'command',
+    anchorSeq: seq,
+    data: { name: 'rewind', seq, args: `@${target} chat`, outcome: { kind: 'success', sourceEventSeq: seq } },
+  })
+
+  it('resolves a process seat through its composite anchor key', () => {
+    // A step/process row renders with `data-chat-anchor-key` = ["<key>","<part>"]
+    // and `data-chat-node-key` = the plain key. Reading only the flow key left
+    // every such row unresolvable, so a withdrawn one survived the rewind.
+    const chat = chatWith([['n1', assistantNode(7)]])
+    const processed = document.createElement('div')
+    processed.dataset.chatAnchorKey = JSON.stringify(['n1', 'process'])
+    processed.dataset.chatNodeKey = 'n1'
+    document.body.appendChild(processed)
+
+    expect(chat.nodes.get(processed.dataset.chatAnchorKey)).toBeUndefined()
+    expect(resolveSeatAnchorSeq(processed, chat)).toBe(7)
+  })
+
+  it('hides the withdrawn reasoning rows a rewind cut', () => {
+    // End-to-end over the two pure pieces the DOM scan combines: the hidden set
+    // the marker produces, and the seat → anchorSeq resolution above.
+    const chat = chatWith([
+      ['u1', userNode(5)],
+      ['a1', assistantNode(6)],
+      ['m1', markerCommand(9, 5)],
+    ])
+    const hiddenSeqs = hiddenSeqsOf(chat)
+    expect(hiddenSeqs).toEqual(new Set([5, 6, 9]))
+
+    const seats = [
+      { key: '5', nodeKey: 'u1', anchorKey: 'u1' },
+      { key: '6', nodeKey: 'a1', anchorKey: JSON.stringify(['a1', 'process']) },
+    ].map(spec => {
+      const seat = document.createElement('div')
+      seat.dataset.chatAnchorKey = spec.anchorKey
+      seat.dataset.chatNodeKey = spec.nodeKey
+      // The hide branch from the client scan, applied to this seat.
+      const anchor = resolveSeatAnchorSeq(seat, chat)
+      if (anchor !== undefined && hiddenSeqs.has(anchor)) seat.style.display = 'none'
+      document.body.appendChild(seat)
+      return seat
+    })
+
+    expect(seats[0]!.style.display).toBe('none')
+    // The pre-fix behaviour: a composite-key seat resolved to undefined and
+    // stayed visible even though its node was withdrawn.
+    expect(seats[1]!.style.display).toBe('none')
   })
 })

@@ -361,6 +361,33 @@ const USER_SEAT_SELECTOR = '[data-chat-flow-kind="user"][data-chat-anchor-key], 
 /** Every conversation seat row (hidden rows included). */
 const CHAT_SEAT_SELECTOR = '[data-chat-anchor-key]'
 
+/**
+ * The snapshot seq a rendered seat stands for.
+ *
+ * A seat carries two keys: `data-chat-anchor-key` (the FLOW key, which for a
+ * step/process part is the composite `["<nodeKey>", "<part>"]`) and
+ * `data-chat-node-key` (always the plain node key). Resolving only the flow key
+ * made every grouped process row — the "正在分析/已完成分析" step rows, tool
+ * groups — unresolvable, so a withdrawn one could never be hidden and stayed on
+ * screen after a rewind. This mirrors the official viewport's own identity read
+ * (`anchorKey === key || nodeKey === key`).
+ *
+ * @param element - one rendered seat.
+ * @param chat - the live chat snapshot the seat belongs to.
+ * @returns the node's `anchorSeq`, or undefined when the seat has no resolvable node.
+ */
+export function resolveSeatAnchorSeq(
+  element: HTMLElement,
+  chat: HiddenChat | undefined,
+): number | undefined {
+  if (chat === undefined) return undefined
+  const flowKey = element.dataset.chatAnchorKey
+  const nodeKey = element.dataset.chatNodeKey
+  const node = (flowKey !== undefined ? chat.nodes.get(flowKey) : undefined)
+    ?? (nodeKey !== undefined ? chat.nodes.get(nodeKey) : undefined)
+  return node?.anchorSeq
+}
+
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
 const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
 
@@ -610,9 +637,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       // kept in sync with the hide/show state on both branches (a recreated
       // row has no marker and is re-marked when it re-enters a hidden span).
       for (const seat of chat === undefined ? [] : document.querySelectorAll<HTMLElement>(CHAT_SEAT_SELECTOR)) {
-        const key = seat.dataset.chatAnchorKey
-        // `chat` is defined whenever the loop body runs (see the loop guard).
-        const anchor = key !== undefined ? chat?.nodes.get(key)?.anchorSeq : undefined
+        const anchor = resolveSeatAnchorSeq(seat, chat)
         if (anchor !== undefined && hiddenSeqs.has(anchor)) {
           seat.style.display = 'none'
           seat.dataset.dshRewindHidden = 'true'
