@@ -2,6 +2,7 @@
   "name": "dsh-rewind-plugin",
   "version": "0.13.0-alpha.2",
   "description": "In-window conversation rewind with workspace file restore \u00b7 \u540c\u7a97\u53e3\u5185\u5bf9\u8bdd\u56de\u9000\u5e76\u53ef\u8fd8\u539f\u5de5\u4f5c\u533a\u6587\u4ef6",
+  "icon": "./assets/icon.svg",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -32,6 +33,7 @@
       "types": "./lib/types/client/index.d.ts",
       "default": "./lib/client.js"
     },
+    "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
@@ -43,7 +45,8 @@
     "CONTRIBUTING.md",
     "docs",
     "assets",
-    "LICENSE"
+    "LICENSE",
+    "locale/*.json"
   ],
   "dsh": {
     "bundle": {

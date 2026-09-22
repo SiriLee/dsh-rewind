@@ -28,6 +28,7 @@ const pkg: {
   main?: string
   types?: string
   type?: string
+  icon?: string
   files?: string[]
   exports?: Record<string, unknown>
   scripts?: Record<string, string>
@@ -63,6 +64,9 @@ describe('package layout', () => {
       'docs',
       'assets',
       'LICENSE',
+      // The localized title/description dictionaries the harness reads as
+      // package resources, so they must ride the tarball.
+      'locale/*.json',
     ]) {
       expect(pkg.files, `files must include ${entry}`).toContain(entry)
     }
@@ -71,7 +75,25 @@ describe('package layout', () => {
   it('exposes only declared entry points', () => {
     expect(pkg.main).toBe('lib/index.js')
     expect(pkg.types).toBe('lib/types/index.d.ts')
-    expect(Object.keys(pkg.exports ?? {}).sort()).toEqual(['.', './client', './package.json'])
+    expect(Object.keys(pkg.exports ?? {}).sort())
+      .toEqual(['.', './client', './locale/*.json', './package.json'])
+  })
+
+  it('declares the display metadata the Plugins page reads', async () => {
+    // The harness reads `icon` (a manifest-relative file, at most 256 KiB, one
+    // of SVG/PNG/JPEG/WebP) and, through the exports map, `locale/<lang>.json`
+    // carrying `meta.title` / `meta.description`.
+    const icon = pkg.icon
+    expect(icon).toMatch(/^\.\/(?!.*\.\.).*\.(svg|png|jpe?g|webp)$/)
+    const bytes = await readFile(join(root, icon!.slice(2)))
+    expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024)
+    for (const language of ['en', 'zh']) {
+      const locale = JSON.parse(await readFile(join(root, 'locale', `${language}.json`), 'utf8')) as {
+        meta?: { title?: string; description?: string }
+      }
+      expect(locale.meta?.title, `${language} title`).toBeTruthy()
+      expect(locale.meta?.description, `${language} description`).toBeTruthy()
+    }
   })
 
   it('declares the DSH bundle patch and client injection', () => {
