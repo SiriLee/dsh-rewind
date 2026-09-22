@@ -1,22 +1,24 @@
 <svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- The rewind mark is the in-app back-arrow glyph (src/client/styles.ts, 16-unit
-       grid: arrow M6.5 2.5 2.5 6.5l4 4, stem+arc M2.5 6.5h7a4 4 0 0 1 4 4v1.5,
-       stroke 1.5), scaled 1.75x and offset by (-0.5, +3.85).
-       The offset places the mark's measured INK bounding box (including the
-       2.625 stroke) on the 36-unit tile centre: rendered at 10x, the box is
-       x 4.5..26.6, y 3.9..23.9, so it is shifted by (+2.45, +4.1) to land at
-       x 6.95..29.1, y 8.0..28.0 — centred (18, 18).
-         arrow  M15.15 9.05 8.15 16.05l7 7
-         stem   M8.15 16.05h12.6a7 7 0 0 1 7 7v3.5 -->
-  <rect width="36" height="36" rx="8" fill="url(#rewind_blue)" />
-  <g stroke="#FFFFFF" stroke-width="2.625" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M15.15 9.05 8.15 16.05l7 7" />
-    <path d="M8.15 16.05h12.6a7 7 0 0 1 7 7v3.5" />
+  <!-- Layout follows the terminal card glyph (packages/client/ui-sidebar-terminal):
+       a rounded tile inset from the canvas (28/36 here, 22/28 there) with a
+       white round-capped prompt. The fill follows the Subagent plugin artwork
+       (packages/client/ui-primitives/src/plugin-artwork.tsx), whose blue square
+       carries the same vertical light-to-dark gradient: #69B9FF at the top,
+       #324DE2 at the bottom.
+       The rewind mark is the in-app back-arrow (src/client/styles.ts, 16-unit
+       grid) scaled 1.4x. Its ink box including the 0.75 stroke reaches
+       (1.75,1.75)-(14.25,12.75) on that grid, so the translate lands its centre
+       on the tile centre (18,18), and the ink spans 62.5% of the tile width —
+       the terminal glyph's own ratio. -->
+  <rect x="4" y="4" width="28" height="28" rx="8" fill="url(#rewind_blue)" />
+  <g transform="translate(6.8 7.85) scale(1.4)" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6.5 2.5 2.5 6.5l4 4" />
+    <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" />
   </g>
   <defs>
-    <linearGradient id="rewind_blue" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#67C7FE" />
-      <stop offset="1" stop-color="#3F77D8" />
+    <linearGradient id="rewind_blue" x1="18" y1="4" x2="18" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#69B9FF" />
+      <stop offset="1" stop-color="#324DE2" />
     </linearGradient>
   </defs>
 </svg>
