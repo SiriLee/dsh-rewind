@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.7-alpha.1` (the range the peers and `dsh.engines.dsh` declare).
+> Targeted version: npm `@deepseek-ai/*@0.1.7-rc.1` (the peers declare `^0.1.7-alpha.1`, a range that already covers it).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
@@ -75,6 +75,7 @@ legacy branch).
 - **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
 - **`image/offload` projection**: the alpha line's first `SessionMessageProjection` changes derived content without touching surface node membership; candidate listing and target resolution tolerate it. Pin: `tests/image-offload-projection.test.ts`.
 - **session-cwd**: the fs tools no longer canonicalize a parent-traversing cwd, so `src/session-cwd.ts` returns `header.cwd` verbatim. Pin: `tests/session-cwd.test.ts`.
+- **startup admission (`0.1.7-rc.1`)**: the new gate reads the manifest's own `@deepseek-ai/dsh-*` peers and requires each to satisfy the runtime with `includePrerelease`; it runs for a profile bundle and again for every row its patch inserts, and a denial skips the bundle or disables the row. This plugin's declarations all satisfy `0.1.7-rc.1`, so it is admitted with no exemption — a skipped bundle on a later line is a peer mismatch, not a load failure.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 
