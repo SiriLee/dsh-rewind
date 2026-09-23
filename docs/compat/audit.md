@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.7-rc.1` (already inside the declared `^0.1.7-alpha.1` range).
+> Targeted version: npm `@deepseek-ai/*@0.1.7-rc.1`, declared by the peers as `^0.1.7-rc.1` — the verified range, deliberately past the internal `alpha` series rather than allowing it implicitly.
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line
@@ -20,7 +20,10 @@
 > `0.1.7-alpha.1` moved the session writer to format v4 (producer-owned message
 > sources, tool-role results, `developer/message`) and replaced the settings
 > namespace registry with each entry's volatile `Config`, so the peer floor and
-> both plugin seams moved with them. Signal: `npm view @deepseek-ai/dsh dist-tags`;
+> both plugin seams moved with them. The floor is also the statement of what is
+> allowed: raising it to `rc.1` closes the range to the earlier `alpha` builds of
+> the same line instead of admitting prereleases nobody verified against.
+> Signal: `npm view @deepseek-ai/dsh dist-tags`;
 > flow: `scripts/check-dsh-version.mjs` (it reads the `latest` dist-tag only; a
 > prerelease published under another tag is a manual pre-release check).
 >
