@@ -1,4 +1,4 @@
-<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="32" height="32" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!-- Layout follows the terminal card glyph (packages/client/ui-sidebar-terminal):
        a rounded tile inset from the canvas (28/36 here, 22/28 there) with a
        white round-capped prompt. The fill follows the Subagent plugin artwork
@@ -9,7 +9,10 @@
        grid) scaled 1.4x. Its ink box including the 0.75 stroke reaches
        (1.75,1.75)-(14.25,12.75) on that grid, so the translate lands its centre
        on the tile centre (18,18), and the ink spans 62.5% of the tile width —
-       the terminal glyph's own ratio. -->
+       the terminal glyph's own ratio.
+       The drawing is 36 viewBox units but renders at 32 px, i.e. a uniform
+       shrink inside the card's and row's fixed frames; no inner coordinate
+       changes, so the mark cannot shift. -->
   <rect x="4" y="4" width="28" height="28" rx="8" fill="url(#rewind_blue)" />
   <g transform="translate(6.8 7.85) scale(1.4)" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
     <path d="M6.5 2.5 2.5 6.5l4 4" />

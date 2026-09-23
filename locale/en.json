@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Conversation rewind",
-    "description": "Rewind the conversation in place to an earlier message, optionally restoring the workspace files it changed."
+    "description": "Rewind to an earlier message, optionally restoring workspace files."
   }
 }
