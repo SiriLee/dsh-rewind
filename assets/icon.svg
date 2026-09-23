@@ -1,7 +1,7 @@
-<svg width="32" height="32" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!-- Layout follows the terminal card glyph (packages/client/ui-sidebar-terminal):
-       a rounded tile inset from the canvas (28/36 here, 22/28 there) with a
-       white round-capped prompt. The fill follows the Subagent plugin artwork
+       a rounded tile inset from the canvas with a white round-capped prompt. The
+       fill follows the Subagent plugin artwork
        (packages/client/ui-primitives/src/plugin-artwork.tsx), whose blue square
        carries the same vertical light-to-dark gradient: #69B9FF at the top,
        #324DE2 at the bottom.
@@ -10,13 +10,17 @@
        (1.75,1.75)-(14.25,12.75) on that grid, so the translate lands its centre
        on the tile centre (18,18), and the ink spans 62.5% of the tile width —
        the terminal glyph's own ratio.
-       The drawing is 36 viewBox units but renders at 32 px, i.e. a uniform
-       shrink inside the card's and row's fixed frames; no inner coordinate
-       changes, so the mark cannot shift. -->
-  <rect x="4" y="4" width="28" height="28" rx="8" fill="url(#rewind_blue)" />
-  <g transform="translate(6.8 7.85) scale(1.4)" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M6.5 2.5 2.5 6.5l4 4" />
-    <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" />
+       The canvas stays 36x36, the size the harness and the official artwork use,
+       so the consumer's `size` attribute keeps the authority over display size;
+       the inner group shrinks the finished drawing to 26/28 of the canvas around
+       its centre — one uniform scale over coordinates that are already correct,
+       so the tile, its radius, the mark and the stroke ratio stay in proportion. -->
+  <g transform="translate(18 18) scale(0.9286) translate(-18 -18)">
+    <rect x="4" y="4" width="28" height="28" rx="8" fill="url(#rewind_blue)" />
+    <g transform="translate(6.8 7.85) scale(1.4)" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6.5 2.5 2.5 6.5l4 4" />
+      <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" />
+    </g>
   </g>
   <defs>
     <linearGradient id="rewind_blue" x1="18" y1="4" x2="18" y2="32" gradientUnits="userSpaceOnUse">
