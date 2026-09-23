@@ -10,10 +10,9 @@ Conversation rewind for DeepSeek Harness: **rewind the conversation to any earli
 
 A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 
-- **Rewinding is time-travel** — the target message and everything after it (agent replies, tool calls) are withdrawn from the model context *and* the rendered transcript at once, with no new session and no window switch; the target's text is offered back in the composer so you can edit and re-send it — **truly seamless and convenient by design**.
-- **Lightweight workspace backup** — Claude Code-aligned behavior: tracks files edited by the write-class tools, and external changes to **already-tracked** files are restorable too. Selective tracking, before-write backup, store only on change. One lightweight plugin gives you a **complete** agentic rewind capability.
-- **Privacy-first** — the plugin never deletes or rewrites the session log (append-only) and never actually deletes any of your conversation; backups live in the plugin's own snapshot directory; restores draw only from those backups. Full security model: [SECURITY.md](SECURITY.md).
-- **A complete test system** — unit, probe, and end-to-end host verification, covering compatibility probing, log replay, resume, cross-restart and other scenarios; maintained continuously as the harness evolves to ensure feature stability.
+- **In-place rewind, no new session** — the target message and everything after it (replies, tool calls) are withdrawn from the model context *and* the rendered transcript, and the target's text is filled back into the composer for editing and re-sending. It all happens inside the original session: no new branch, no leftover copy.
+- **Conversation and code rewind together** — Claude Code-aligned behavior: files edited by the write tools are tracked and restored by the same rewind, and external changes to already-tracked files are restorable too. **Partial tracking, before-write backup, store only on change**, with no git dependency.
+- **Safety guarantees** — the session log only ever appends rewind markers and is never deleted or rewritten; file backup and restore are hardened; tests are comprehensive, and maintenance continues across DSH upgrades. Security model: [SECURITY.md](SECURITY.md).
 
 ## Preview
 
@@ -30,16 +29,24 @@ Every user message carries a **↶ rewind** button in its action row. Clicking i
   </tr>
 </table>
 
-## Install
+## Install and update
 
 Check your local DSH version, then find the matching plugin version in
 [Releases](https://github.com/SiriLee/dsh-rewind/releases).
+
+**Command line**:
 
 ```sh
 dsh plugin --profile web add dsh-rewind-plugin@<version>
 ```
 
+**Graphical interface**: the **Plugins** page in the sidebar → **Add plugin** → enter `dsh-rewind-plugin@<version>` → install → restart DSH and refresh the browser.
+
 > ⚠️ The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
+
+**Updating**: the command line overwrites the installed version directly; the
+graphical interface rejects a re-install, so uninstall the old version first,
+then install the new one.
 
 ## Usage
 
@@ -69,12 +76,12 @@ unaffected) and the plugin rebuilds them automatically.
 
 A **global auto-cleanup** (off by default) removes the snapshot directories of
 long-inactive sessions, leaving the active session and chat log untouched. Configure
-and review it in the **Settings &gt; Plugins &gt; Plugin configuration &gt; Snapshot
-cleanup** panel (the auto-cleanup switch and the idle-day cutoff), or use the
+and review it on the **Plugins** page, in this plugin's configuration card (the
+auto-cleanup switch and the idle-day cutoff), or use the
 `/snapshot-auto-cleanup` command to **view, configure, and run** it. See:
 [Snapshot cleanup](docs/snapshot-auto-cleanup.md).
 
-<img src="assets/screenshots/cleanup-setting.png" alt="Snapshot cleanup settings: auto-cleanup and idle days" width="600">
+<img src="assets/screenshots/cleanup-setting.png" alt="Plugin configuration card: auto cleanup and idle time (days)" width="600">
 
 ## Uninstall
 
@@ -87,8 +94,8 @@ rm -rf <dsh home>/rewind-snapshots
 rm <dsh home>/snapshot-cleanup-last-sweep.json
 ```
 
-The plugin's auto-cleanup settings live in the settings document
-(`<dsh home>/settings.yaml`). To remove them completely, delete the key manually.
+The plugin's auto-cleanup settings live in the current Profile's plugin
+configuration. To remove them completely, delete this plugin entry's configuration.
 
 ## Why it stands out
 
@@ -158,8 +165,7 @@ withdrew should consume the stable, locale-independent helpers exported from
 1. **Exported logs are complete** — a rewind only removes messages from the model context and the view; the exported session log (`/export`) still contains **withdrawn messages**. This plugin cannot alter exports.
 2. **Lightweight file rewind has a cost** — in specific cases not all changes can be rewound. Consistent with Claude Code. See: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
 3. **The turn-rail shows rewound turns** — the right-side rail added in DSH `v0.1.2` keeps ticks for withdrawn messages, and hovering shows the withdrawn text. Only a display difference; no functional impact.
-4. **The system prompt is re-displayed after a rewind** — in DSH `v0.1.2`, rewinding and resending a message shows the "System prompt" component again, just like `/compact`. Only a display difference; no functional impact.
-5. **Old rewind markers are no longer compatible** — DSH `v0.1.3` rejects the rewind markers from the old plugin (≤ 0.8.0). The new version resolves this and provides an in-session update. See the [update guide](docs/rewind-fix.md).
+4. **Old rewind markers are no longer compatible** — DSH `v0.1.3` rejects the rewind markers from the old plugin (≤ 0.8.0). Later versions resolve this and provide an in-session update. See the [update guide](docs/rewind-fix.md).
 
 > [!NOTE]
 > Browser diagnostics are available; see [Browser diagnostics](docs/compat/diagnostics.md).
