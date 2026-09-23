@@ -53,7 +53,7 @@ src/index.ts            host plugin: /rewind|/undo|/snapshot-auto-cleanup
                         + checkpoint pipeline (tools/execute|post-execute)
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
 src/snapshot.ts         checkpoint store (disk before-backups, restore/preview, bounded prune)
-src/snapshot-cleanup.ts cleanup policy + dsh-settings persistence + auto-sweep throttle
+src/snapshot-cleanup.ts cleanup policy + plugin-entry config persistence + auto-sweep throttle
 src/session-cwd.ts      session-cwd resolution (fs-tools rule)
 src/locales.ts          host i18n (t() renderer, HostKey)
 src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals;

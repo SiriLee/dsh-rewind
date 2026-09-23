@@ -7,7 +7,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.7-rc.1` (the peers declare `^0.1.7-alpha.1`, a range that already covers it).
+> Targeted version: npm `@deepseek-ai/*@0.1.7-rc.1` (already inside the declared `^0.1.7-alpha.1` range).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: `peerDependencies` use one tuple per DSH line

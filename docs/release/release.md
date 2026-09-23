@@ -99,6 +99,11 @@ outside it.
   forward-looking declaration rather than an enforced guard. Bump it in
   the same release that changes the peer range; never leave code raised while
   the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is used.
+- **The peers are enforced at startup (`0.1.7-rc.1`)**: DSH checks a profile
+  bundle's own `@deepseek-ai/dsh-*` peers against the running version and skips
+  the whole bundle when one does not satisfy it, so a peer range that is merely
+  stale now costs the plugin its load instead of a warning. See
+  `docs/compat/audit.md`.
 
 ## Versioned-line release model
 
