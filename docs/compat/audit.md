@@ -1,7 +1,8 @@
 # Compatibility audit (compat-audit)
 
 > Method: **the tests are the audit**. The probes in `tests/compat-invariants.test.ts`,
-> `tests/compat-interop.test.ts`, `tests/compat-gaps.test.ts` and
+> `tests/compat-interop.test.ts`, `tests/compat-gaps.test.ts`,
+> `tests/compat-tool-updates.test.ts` and
 > `scripts/verify-host.mjs` drive the plugin's real execution paths through the DSH
 > subsystems' **real consumer paths** (real `@deepseek-ai/*` packages) and assert
 > compatibility invariants. A probe failure is a finding; it enters the
@@ -53,12 +54,14 @@ legacy branch).
 | I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8) for the tracked tools `write` / `edit` — `str_replace_editor` is an optional DSH package that stopped being a default tool in DSH 0.1.3, so it is not tracked; cancellation timing never hangs | `verify-host` 4–9 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
 | I8 runtime safety | `rewind`/`compact` combinations never leave a dangling step/turn frame | `verify-host` 13 |
+| I9 tool-update projection | rc.2 folds mid-conversation tool additions from the whole log while a rewind cuts only the surface: after a withdrawal no `tool-addition`/`tool-removal` block reaches the provider and the current declarations stay complete | `compat-tool-updates` I9 |
 
 ## Verified-compatible surfaces (probes pass)
 
 - **token-meter replay** (the `user/message` marker + multiple rewinds + interleaved real turns + compact stacking).
 - **compaction transactions**: `toolPairingBalancedBefore/After` stays balanced after a marker cut; the real `/compact` command (`command-compact` + `compaction-basic`, stub summarizer) can land `compaction/start…end` on top of a rewind marker and stay replayable; `/compact` is a legal no-op on a small surface.
 - **resume replay**: `Session.create(id, events)` replays a rewind/compact-bearing log.
+- **tool-update history (`0.1.7-rc.2`)**: `Session.toolHistory()` folds the full append-only log, so a withdrawn `tool-addition` stays recorded after a rewind; `projectToolUpdates` drops every update whose message left the request and falls back to the complete current declarations. Pin: `tests/compat-tool-updates.test.ts` (on-surface projection, then the post-rewind fallback).
 - **session-stats**: the `user/message` marker adds no step (the step count stays at the real turns' steps), no phantom turn.
 - **session-title / goal fold**: a marker does not disturb `foldSessionTitle` / `foldGoal`.
 - **client ordering**: turn-tail ordering + `step/start` uniqueness hold for tool turns + marker logs.
