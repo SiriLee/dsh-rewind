@@ -29,7 +29,7 @@ Every user message carries a **↶ rewind** button in its action row. Clicking i
   </tr>
 </table>
 
-## Install and update
+## Install
 
 Check your local DSH version, then find the matching plugin version in
 [Releases](https://github.com/SiriLee/dsh-rewind/releases).
@@ -42,11 +42,15 @@ dsh plugin --profile web add dsh-rewind-plugin@<version>
 
 **Graphical interface**: the **Plugins** page in the sidebar → **Add plugin** → enter `dsh-rewind-plugin@<version>` → install → restart DSH and refresh the browser.
 
-> ⚠️ The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
+<img src="assets/screenshots/add-plugin.png" width="600" alt="Add plugin dialog: enter dsh-rewind-plugin@version in the field"><br>
+<sub>The screenshot is an example only — use the version that matches your DSH version.</sub>
 
 **Updating**: the command line overwrites the installed version directly; the
 graphical interface rejects a re-install, so uninstall the old version first,
 then install the new one.
+
+> [!WARNING]
+> The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
 
 ## Usage
 
