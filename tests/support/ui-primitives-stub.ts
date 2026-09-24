@@ -11,7 +11,7 @@
  *
  * @module tests/support/ui-primitives-stub
  */
-import { createElement, useEffect, useState, type ReactNode } from 'react'
+import { createElement, useState, type ReactNode } from 'react'
 
 /** The real `Switch` contract: a controlled `role="switch"` button with a label. */
 export function Switch({ checked, onChange, label, disabled = false, title, className }: {
@@ -321,32 +321,3 @@ export function SettingsValueField(props: {
   )
 }
 
-/**
- * Stand-in for the real anchored `Menu`. Only the parts this plugin's suites
- * observe are mirrored: the trigger wrapper, the open card carrying the
- * caller's `listClassName` and `role="menu"`, and Escape closing through
- * `onClose`. The keyboard walk, positioning, and modal scoping belong to the
- * published primitive and are exercised in a real Shell instead.
- */
-export function Menu({ open, anchor, children, onClose, listClassName }: {
-  readonly open: boolean
-  readonly anchor?: ReactNode
-  readonly children?: ReactNode
-  readonly onClose?: () => void
-  readonly listClassName?: string
-  readonly autoFocus?: boolean
-  readonly portal?: boolean
-  readonly items?: readonly unknown[]
-  readonly footer?: readonly unknown[]
-  readonly getAnchorRect?: () => DOMRect | null
-}): ReactNode {
-  useEffect(() => {
-    if (!open || onClose === undefined) return
-    const onKeyDown = (event: { key: string }): void => { if (event.key === 'Escape') onClose() }
-    document.addEventListener('keydown', onKeyDown)
-    return () => { document.removeEventListener('keydown', onKeyDown) }
-  }, [open, onClose])
-  return createElement('span', { className: 'dsh-ui-menu-root' },
-    anchor,
-    open ? createElement('div', { className: listClassName, role: 'menu' }, children) : null)
-}

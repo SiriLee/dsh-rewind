@@ -86,7 +86,7 @@ await build({
   // whose styles the shell has already injected. `dsh.client.external` needs no
   // declaration for a baseline module: it only lists requests BEYOND that
   // baseline.
-  external: ['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
+  external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
   jsx: 'automatic',
   sourcemap: false,
   define: {

@@ -1,24 +1,27 @@
 /**
- * The rewind popover's public entry: open and close the panel, plus the
- * composer focus channel the panel's close uses. The panel itself lives in
- * `panel.tsx`, rendered by React through the harness's own `Menu` primitive —
- * this module owns no keyboard handling at all.
+ * The rewind mode-selection popover (plain DOM, no React). Step two of the
+ * interaction: the target is already fixed (the clicked message); the popover
+ * offers the two modes. Choosing "both" first fetches the impact list through
+ * the `/rewind preview @seq both` command and shows it before confirming.
  *
- * `knownCommandSeqs` / `waitForCommand` are re-exported from the panel so the
- * long-standing `./popover.ts` import path keeps working.
+ * Keyboard: ↑/↓ move focus across the step's ACTION buttons only (the two
+ * modes, or the confirm button on the impact step), Enter activates the
+ * focused button (native), Esc is the keyboard twin of the ghost back/cancel
+ * buttons — cancel on the modes step, back on the impact step; the ghosts are
+ * never in the arrow cycle. The listener runs in the document capture phase
+ * so the keys are stolen from the composer while the popover is open.
  *
  * @module dsh-rewind/client/popover
  */
 
-import { createElement } from 'react'
-import { flushSync } from 'react-dom'
-import { createRoot, type Root } from 'react-dom/client'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChatOf, ChatWatch } from './hidden.ts'
-import { RewindPanel, type Translate } from './panel.tsx'
+import { hasFileImpact, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
+import { rewindLog } from './log.ts'
+import type { RewindKey } from './locales.ts'
+import { CLASS } from './styles.ts'
 
-export { knownCommandSeqs, waitForCommand } from './panel.tsx'
+type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
 
 export interface PopoverOptions {
   readonly session: SessionFace
@@ -43,22 +46,21 @@ export interface PopoverOptions {
    * straight through to `waitForCommand`.
    */
   readonly watchChat: ChatWatch
-  /** The button that opened the popover (positioning anchor). */
+  /** The button that opened the popover (outside-click ignore target). */
   readonly anchor: HTMLElement
   readonly t: Translate
   /**
    * Execute one rewind in the given mode. The popover closes itself first;
    * the callback owns the command + composer-refill lifecycle (see
-   * `runRewindAndFill` in index.ts).
+   * runRewindAndFill in index.ts).
    */
   readonly onRewind?: (mode: 'chat' | 'both') => void
 }
 
-/** The mounted panel's host element, or null when closed. */
-let container: HTMLElement | null = null
+/** The single live popover element, or null when closed. */
+let popoverEl: HTMLElement | null = null
 
-/** The mounted panel's React root, or null when closed. */
-let root: Root | null = null
+let disposeOutside: (() => void) | null = null
 
 /** The session whose popover currently holds the keyboard, or null. */
 let liveSessionId: string | null = null
@@ -74,25 +76,16 @@ export function registerComposerFocuser(focus: (sessionId: string) => void): voi
   composerFocuser = focus
 }
 
-/**
- * Close the current popover, if any, handing the keyboard back to its composer.
- * Unmounting first leaves focus on the body; the composer claim then wins over
- * the `Menu`'s own post-close trigger refocus (a no-op here, since the anchor is
- * an empty span).
- */
+/** Close the current popover, if any, handing the keyboard back to its composer. */
 export function closePopover(): void {
-  const mounted = root
-  const host = container
-  root = null
-  container = null
-  if (mounted !== null) {
-    try {
-      mounted.unmount()
-    } catch {
-      // A root already torn down with the page; the host removal below still runs.
-    }
+  if (popoverEl !== null) {
+    popoverEl.remove()
+    popoverEl = null
   }
-  host?.remove()
+  if (disposeOutside !== null) {
+    disposeOutside()
+    disposeOutside = null
+  }
   const sessionId = liveSessionId
   liveSessionId = null
   if (sessionId !== null) {
@@ -104,32 +97,523 @@ export function closePopover(): void {
   }
 }
 
+/** Format the target line (seq · HH:MM · preview). */
+function formatTarget(t: Translate, seq: number, time: number, preview: string): string {
+  const d = new Date(time)
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  const previewText = preview.length > 0 ? preview : t('popover.noText')
+  return `seq ${seq} · ${hh}:${mm} · ${previewText}`
+}
+
+/**
+ * Parse the host's machine-readable impact trailer from a preview outcome text
+ * (the trailing lines of formatPlan in src/index.ts): `impact=<n>` plus one
+ * `restore:<path>` / `delete:<path>` line per file. Locale-independent — the
+ * human copy above the trailer is ignored; the popover renders its own
+ * localized list from these tokens.
+ */
+function parseImpactList(text: string): { restores: string[]; deletes: string[] } {
+  const restores: string[] = []
+  const deletes: string[] = []
+  for (const line of text.split('\n')) {
+    if (line.startsWith('restore:')) restores.push(line.slice('restore:'.length))
+    else if (line.startsWith('delete:')) deletes.push(line.slice('delete:'.length))
+  }
+  return { restores, deletes }
+}
+
+/** Find the newest rewind command node matching a predicate. */
+function findCommand(chat: HiddenChat | undefined, match: (node: CommandNode) => boolean): CommandNode | undefined {
+  if (chat === undefined) return undefined
+  let found: CommandNode | undefined
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
+    if (node !== undefined && node.kind === 'command') {
+      const command = node.data as CommandNode
+      if (match(command)) found = command
+    }
+  }
+  return found
+}
+
+/**
+ * Seqs of the command nodes currently matching `match`. Sample BEFORE issuing
+ * a new command of the same shape so the subsequent wait can exclude them: a
+ * repeated preview/rewind of the same target must not settle on the previous
+ * command's stale outcome (e.g. an older preview that found file changes,
+ * after those changes were already restored).
+ */
+export function knownCommandSeqs(session: SessionFace, chatOf: ChatOf, match: (node: CommandNode) => boolean): Set<number> {
+  const known = new Set<number>()
+  const chat = chatOf(session)
+  if (chat === undefined) return known
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
+    if (node !== undefined && node.kind === 'command') {
+      const command = node.data as CommandNode
+      if (match(command)) known.add(command.seq)
+    }
+  }
+  return known
+}
+
+/**
+ * Resolve the outcome of the newest matching rewind command by watching the
+ * session snapshot (command/run + command/done land as one CommandNode).
+ * @returns the outcome text-bearing node, or null on timeout.
+ */
+export function waitForCommand(
+  session: SessionFace,
+  chatOf: ChatOf,
+  match: (node: CommandNode) => boolean,
+  timeoutMs = 8000,
+  watch: (cb: () => void) => () => void,
+): Promise<{ kind: 'success' | 'error'; text?: string } | null> {
+  return new Promise(resolve => {
+    let settled = false
+    const settle = (value: { kind: 'success' | 'error'; text?: string } | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(value)
+    }
+    const check = (): void => {
+      const node = findCommand(chatOf(session), match)
+      if (node?.outcome !== null && node?.outcome !== undefined) {
+        settle({ kind: node.outcome.kind, text: node.outcome.text })
+      }
+    }
+    // The chat-update signal: the session face's `subscribe` does
+    // not fire when the chat snapshot changes (the chat moved to the
+    // `uiConversation` view), so the waiting caller passes a watch bound to
+    // that view.
+    const unsubscribe = watch(check)
+    const timer = setTimeout(() => settle(null), timeoutMs)
+    check()
+  })
+}
+
+/** Outcome of a `/rewind preview` command, or null when it never settled. */
+type PreviewOutcome = { kind: 'success' | 'error'; text?: string } | null
+
+/** True for the `/rewind preview @<seq> both` command node of one target. */
+function isPreviewFor(node: CommandNode, seq: number): boolean {
+  const args = node.args ?? ''
+  return node.name === 'rewind' && args.includes('preview') && new RegExp(`(?:^|\\s)@${seq}(?=\\s|$)`).test(args)
+}
+
+/**
+ * Run `/rewind preview @seq both` and await its outcome.
+ *
+ * `null` means ONLY "admitted but never settled" (the outcome wait timed out).
+ * An ADMISSION failure is a settled error outcome carrying the reason: the call
+ * was rejected before any handler ran (e.g. `session/agent-busy` for a
+ * subagent-owned identity) or no handler matched the line. Reporting those as
+ * `null` left the modes step stuck on "checking file changes…" with a
+ * permanently disabled code-restore entry and the cause invisible
+ * (SiriLee/dsh-rewind#26).
+ */
+async function previewImpact(
+  session: SessionFace,
+  chatOf: ChatOf,
+  seq: number,
+  watch: (cb: () => void) => () => void,
+): Promise<PreviewOutcome> {
+  // Exclude preview nodes that already exist: a second popover on the same
+  // message must wait for THIS command's node, not settle on the previous
+  // preview's outcome (which may predate a restore).
+  const known = knownCommandSeqs(session, chatOf, node => isPreviewFor(node, seq))
+  let result: Awaited<ReturnType<SessionFace['command']>>
+  try {
+    result = await session.command(`/rewind preview @${seq} both`)
+  } catch (error) {
+    rewindLog.warn('preview', `preview command threw for @${seq}`, error)
+    return { kind: 'error', text: error instanceof Error ? error.message : String(error) }
+  }
+  if (!result.ok) {
+    rewindLog.warn('preview', `preview command rejected for @${seq}`, result.error)
+    return { kind: 'error', text: `${result.error.code}: ${result.error.message}` }
+  }
+  if (result.value?.matched !== true) {
+    rewindLog.warn('preview', `preview command was not matched for @${seq}`)
+    return { kind: 'error', text: 'the rewind command is not registered on this host' }
+  }
+  return waitForCommand(session, chatOf, node => isPreviewFor(node, seq) && !known.has(node.seq), 8000, watch)
+}
+
+/** Element factory helpers (kept local so no framework is involved). */
+function el(tag: string, className: string, text?: string): HTMLElement {
+  const node = document.createElement(tag)
+  node.className = className
+  if (text !== undefined) node.textContent = text
+  return node
+}
+
+function modeOption(label: string, hint: string, onClick: () => void): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = CLASS.popoverOption
+  const labelEl = el('span', CLASS.popoverOptionLabel, label)
+  const hintEl = el('span', CLASS.popoverOptionHint, hint)
+  button.append(labelEl, hintEl)
+  button.addEventListener('click', onClick)
+  return button
+}
+
+/**
+ * The enabled, focusable buttons of the current popover step, in DOM order.
+ * The ghost back/cancel buttons are deliberately excluded: they are Esc-only
+ * (never in the ↑/↓ cycle).
+ */
+function focusableButtons(root: HTMLElement): HTMLButtonElement[] {
+  return Array.from(root.querySelectorAll<HTMLButtonElement>('button'))
+    .filter(button => !button.disabled && !button.classList.contains(CLASS.popoverGhost))
+}
+
+/** Focus the first enabled button of the current step (no-op when none). */
+function focusFirst(root: HTMLElement): void {
+  focusableButtons(root)[0]?.focus()
+}
+
+/** Move focus across the step's buttons, wrapping around at the ends. */
+function moveFocus(root: HTMLElement, dir: 1 | -1): void {
+  const buttons = focusableButtons(root)
+  if (buttons.length === 0) return
+  const active = document.activeElement
+  const index = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1
+  const next = index === -1 ? (dir === 1 ? 0 : buttons.length - 1) : (index + dir + buttons.length) % buttons.length
+  buttons[next]?.focus()
+}
+
+/** The durable variant's narrowed identity (guarded before the mode flow). */
+interface DurablePopoverOptions {
+  readonly session: SessionFace
+  readonly seq: number
+  readonly time: number
+  readonly preview: string
+  readonly anchor: HTMLElement
+  readonly t: Translate
+  readonly chatOf: ChatOf
+  readonly watchChat: ChatWatch
+  readonly onRewind: (mode: 'chat' | 'both') => void
+}
+
+/**
+ * Render the impact step: show the impact outcome, then confirm/back.
+ * Reuses the outcome already fetched when the popover opened (the "both"
+ * option is only clickable after that fetch settles) — running a second
+ * preview command here would re-run the probe and emit a second (now-hidden)
+ * command row; a fresh preview is only fetched when the popover-open probe
+ * never resolved.
+ */
+function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: () => void, cached?: PreviewOutcome): void {
+  const { session, seq, t } = opts
+  const impact = el('div', CLASS.popoverImpact, t('popover.impact.loading'))
+  const actions = el('div', CLASS.popoverActions)
+  const backButton = document.createElement('button')
+  backButton.type = 'button'
+  backButton.className = CLASS.popoverGhost
+  backButton.textContent = t('popover.back')
+  backButton.addEventListener('click', back)
+  actions.append(backButton)
+
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = CLASS.popoverPrimary
+  confirm.textContent = t('popover.confirm')
+  confirm.disabled = true
+  actions.append(confirm)
+  root.replaceChildren(impact, actions)
+  focusFirst(root)
+
+  void (async () => {
+    const outcome = cached ?? await previewImpact(session, opts.chatOf, seq, cb => opts.watchChat(session.sessionId, cb))
+    if (outcome === null) {
+      impact.textContent = t('popover.impact.failed', { message: 'preview command failed or timed out' })
+      return
+    }
+    if (outcome.kind === 'error') {
+      impact.textContent = t('popover.impact.failed', { message: outcome.text ?? 'unknown error' })
+      return
+    }
+    if (outcome.text === undefined) {
+      impact.textContent = t('popover.impact.none')
+    } else {
+      // Render the localized file list from the host's machine trailer
+      // (restore:/delete: lines), never from the host's human copy.
+      const { restores, deletes } = parseImpactList(outcome.text)
+      if (restores.length === 0 && deletes.length === 0) {
+        impact.textContent = t('popover.impact.none')
+      } else {
+        const lines = [
+          ...restores.map(path => t('popover.impact.restore', { path })),
+          ...deletes.map(path => t('popover.impact.delete', { path })),
+        ]
+        impact.textContent = lines.join('\n')
+      }
+    }
+    confirm.disabled = false
+    // The confirm is the step's only action; focus it as it becomes enabled
+    // so a direct Enter confirms (native button activation).
+    confirm.focus()
+    confirm.addEventListener('click', () => {
+      closePopover()
+      opts.onRewind('both')
+    })
+  })().catch(() => {
+    impact.textContent = t('popover.impact.failed', { message: 'unexpected error' })
+  })
+}
+
+/**
+ * One mounted popover shell: append, position, outside-click close, and the
+ * capture-phase ↑/↓/Esc keys (Esc is delegated to the caller's handler so the
+ * durable flow keeps its step-aware back/cancel behavior).
+ */
+interface PopoverShell {
+  /** Re-run positioning after the content re-renders. */
+  readonly position: () => void
+  /** Remove the popover and its listeners (closePopover also does this). */
+  readonly dispose: () => void
+}
+
+/** Mount the shared popover chrome around `root` (durable and pending variants). */
+function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: KeyboardEvent) => void): PopoverShell {
+  /** Position below the anchor (right-aligned), flipping above near the edge. */
+  const position = (): void => {
+    const rect = anchor.getBoundingClientRect()
+    const gap = 4
+    const height = root.offsetHeight
+    const top = rect.bottom + gap + height <= window.innerHeight - 8
+      ? rect.bottom + gap
+      : Math.max(8, rect.top - gap - height)
+    root.style.top = `${Math.round(top)}px`
+    root.style.left = `${Math.round(Math.min(rect.right, window.innerWidth - 8 - root.offsetWidth))}px`
+  }
+
+  const onPointerDown = (event: PointerEvent): void => {
+    const target = event.target as Node | null
+    if (root.contains(target) || anchor.contains(target)) return
+    closePopover()
+  }
+  // Capture phase on document: fires before the harness's React handlers, so
+  // ↑/↓/Esc are stolen from the composer while the popover is open (ArrowUp
+  // is input-history recall). Enter needs no handling: a focused button
+  // activates natively.
+  const deferred = setTimeout(() => {
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown, true)
+  }, 0)
+  const dispose = (): void => {
+    clearTimeout(deferred)
+    document.removeEventListener('pointerdown', onPointerDown)
+    document.removeEventListener('keydown', onKeyDown, true)
+  }
+
+  document.body.append(root)
+  position()
+  return { position, dispose }
+}
+
+/**
+ * Open the pending-retract popover: a single-confirm dialog for one pre-sent
+ * steering message. No mode selection and no impact preview — the message has
+ * never been processed, so there are no files to restore and nothing to
+ * choose. Confirm closes the popover and hands off to `onRetract` (the
+ * `updateQueue remove` + composer-refill lifecycle in portals.tsx).
+ */
+function openRetractPopover(opts: PopoverOptions): void {
+  closePopover()
+  const { preview, anchor, t, retract, onRetract } = opts
+  if (retract === undefined || onRetract === undefined) return
+
+  const root = el('div', CLASS.popover)
+  root.setAttribute('role', 'dialog')
+  root.setAttribute('aria-label', t('popover.retract.title'))
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, -1)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closePopover()
+    }
+  }
+
+  const previewText = preview.length > 0 ? preview : t('popover.noText')
+  const actions = el('div', CLASS.popoverActions)
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = CLASS.popoverPrimary
+  confirm.textContent = t('popover.retract.confirm')
+  confirm.addEventListener('click', () => {
+    closePopover()
+    onRetract()
+  })
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = CLASS.popoverGhost
+  cancel.textContent = t('popover.cancel')
+  cancel.addEventListener('click', closePopover)
+  actions.append(confirm, cancel)
+  root.replaceChildren(
+    el('div', CLASS.popoverTitle, t('popover.retract.title')),
+    el('div', CLASS.popoverTarget, t('popover.retract.target', { preview: previewText })),
+    el('div', CLASS.popoverImpact, t('popover.retract.hint')),
+    actions,
+  )
+
+  const shell = mountShell(root, anchor, onKeyDown)
+  popoverEl = root
+  disposeOutside = shell.dispose
+  focusFirst(root)
+}
+
 /** Open the mode-selection popover anchored near the given button. */
 export function openPopover(opts: PopoverOptions): void {
   closePopover()
   liveSessionId = opts.session.sessionId
-  const host = document.createElement('div')
-  container = host
-  document.body.append(host)
-  root = createRoot(host)
-  // The panel is present on the same tick it was requested: the opening click
-  // must not land on a page with no panel (its own outside-click handling
-  // would then see the trigger click as an outside press).
-  flushSync(() => { root?.render(createElement(RewindPanel, {
-    session: opts.session,
-    ...opts.seq === undefined ? {} : { seq: opts.seq },
-    ...opts.time === undefined ? {} : { time: opts.time },
-    ...opts.retract === undefined ? {} : { retract: opts.retract },
-    ...opts.onRetract === undefined ? {} : { onRetract: opts.onRetract },
-    preview: opts.preview,
-    chatOf: opts.chatOf,
-    watchChat: opts.watchChat,
-    anchor: opts.anchor,
-    t: opts.t,
-    ...opts.onRewind === undefined ? {} : { onRewind: opts.onRewind },
-    onClose: closePopover,
-  })) })
-}
+  // Pending retract variant: a single-confirm dialog, no rewind modes.
+  if (opts.retract !== undefined) {
+    openRetractPopover(opts)
+    return
+  }
+  const { session, seq, time, preview, anchor, t, chatOf } = opts
+  const onRewind = opts.onRewind
+  if (seq === undefined || time === undefined || onRewind === undefined) return
+  // Narrowed durable identity: the pending variant never reaches this flow.
+  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, chatOf, watchChat: opts.watchChat, onRewind }
 
-/** The command-node type the wait helpers match on (kept for the public surface). */
-export type { CommandNode }
+  const root = el('div', CLASS.popover)
+  root.setAttribute('role', 'dialog')
+  root.setAttribute('aria-label', t('popover.title'))
+
+  /** Availability of the "rewind conversation and code" mode, resolved from a preview. */
+  type BothState =
+    | { state: 'loading' }
+    | { state: 'hasChanges' }
+    | { state: 'noChanges' }
+    | { state: 'error'; message: string }
+  let bothState: BothState = { state: 'loading' }
+  /** Impact outcome fetched at open; reused by the both-step (no second command row). */
+  let impactOutcome: PreviewOutcome = null
+
+  /** Current step: Esc acts as cancel on the modes step, as back on impact. */
+  let step: 'modes' | 'impact' = 'modes'
+
+  const renderModes = (): void => {
+    step = 'modes'
+    const children: HTMLElement[] = [
+      el('div', CLASS.popoverTitle, t('popover.title')),
+      el('div', CLASS.popoverTarget, formatTarget(t, seq, time, preview)),
+      modeOption(t('popover.chat'), t('popover.chat.hint'), () => {
+        closePopover()
+        durableOpts.onRewind('chat')
+      }),
+    ]
+    if (bothState.state === 'noChanges') {
+      // Claude Code shows the code-restore options only when the checkpoint has
+      // tracked file changes; a muted note keeps the layout stable.
+      children.push(el('div', CLASS.popoverImpact, t('popover.noChanges')))
+    } else if (bothState.state === 'error') {
+      // The preview failed (e.g. the target was shadowed by compaction): show
+      // the host's reason instead of hanging on "checking…" forever, and keep
+      // the both-mode entry hidden — it can never succeed for an unreachable
+      // target.
+      children.push(el('div', CLASS.popoverImpact, t('popover.impact.failed', { message: bothState.message })))
+    } else {
+      const option = modeOption(
+        t('popover.both'),
+        bothState.state === 'loading' ? t('popover.checking') : t('popover.both.hint'),
+        renderImpact,
+      )
+      if (bothState.state === 'loading') option.disabled = true
+      children.push(option)
+    }
+    const actions = el('div', CLASS.popoverActions)
+    const cancel = document.createElement('button')
+    cancel.type = 'button'
+    cancel.className = CLASS.popoverGhost
+    cancel.textContent = t('popover.cancel')
+    cancel.addEventListener('click', closePopover)
+    actions.append(cancel)
+    children.push(actions)
+    root.replaceChildren(...children)
+    focusFirst(root)
+  }
+
+  /** Move to the impact step (its back/Esc returns to the modes step). */
+  const renderImpact = (): void => {
+    step = 'impact'
+    renderImpactStep(root, durableOpts, renderModes, impactOutcome)
+  }
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      event.stopPropagation()
+      moveFocus(root, -1)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      // Esc is the keyboard twin of the step's ghost button: cancel on the
+      // modes step, back on the impact step.
+      if (step === 'impact') renderModes()
+      else closePopover()
+    }
+  }
+
+  renderModes()
+  const shell = mountShell(root, anchor, onKeyDown)
+  popoverEl = root
+  disposeOutside = shell.dispose
+
+  // Resolve the "both" mode's availability up front (Claude Code hides the
+  // code-restore options when the checkpoint has no tracked file changes).
+  // `hasFileImpact` reads only the host's machine-readable `impact=<n>`
+  // trailer (locale-independent). EVERY settled probe resolves the modes step:
+  // a success decides has/no changes, and any failure — a rejected admission,
+  // an unmatched line, or a wait that never settled — becomes the error state,
+  // which shows the reason and hides the code-restore entry. The probe must
+  // never leave the step on "checking file changes…" forever
+  // (SiriLee/dsh-rewind#26).
+  void (async () => {
+    const outcome = await previewImpact(session, chatOf, seq, cb => opts.watchChat(session.sessionId, cb))
+    impactOutcome = outcome
+    if (outcome !== null && outcome.kind === 'success') {
+      bothState = { state: hasFileImpact(outcome.text) ? 'hasChanges' : 'noChanges' }
+    } else {
+      // Surface the reason (host rejection — e.g. "no longer in the model
+      // context (shadowed by compaction)" — or a never-settled wait) instead
+      // of leaving the modes step stuck with a permanently disabled entry.
+      bothState = { state: 'error', message: outcome?.text ?? 'preview command timed out' }
+    }
+    renderModes()
+    shell.position()
+  })().catch(() => {
+    bothState = { state: 'error', message: 'unexpected error' }
+    renderModes()
+    shell.position()
+  })
+}
