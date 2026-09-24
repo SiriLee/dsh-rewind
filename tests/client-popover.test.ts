@@ -74,6 +74,8 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
     })
     open(session)
     await settle()
+    // A probe resolution re-renders through React: wait for its commit.
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
     expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
       .toContain('session/agent-busy: owned by subagent routing')
     // The step resolved: the code-restore entry is hidden, not left "checking…".
@@ -85,6 +87,7 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
     const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
     open(fakeSession({ ok: true, value: { matched: false } }))
     await settle()
+    await new Promise((resolve) => { setTimeout(resolve, 0) })
     expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
       .toContain('the rewind command is not registered on this host')
     expect(optionHints()).not.toContain('popover.checking')
@@ -108,13 +111,16 @@ describe('closePopover (the unload teardown)', () => {
     return event.defaultPrevented
   }
 
-  it('removes the DOM and stops stealing keys', async () => {
+  it('renders the harness menu card and removes it on close', async () => {
     open(fakeSession({ ok: true, value: { matched: true } }))
     await settle()
     await nextTick()
-    // Open: the capture-phase handler owns ↑/↓/Esc away from the composer.
-    expect(document.querySelector(`.${CLASS.popover}`)).not.toBeNull()
-    expect(stealsArrowDown()).toBe(true)
+    // The card is the harness's own menu: the plugin defines no key handling,
+    // so the keyboard belongs to the primitive (and to the shell's modal scope).
+    const card = document.querySelector(`.${CLASS.popover}`)
+    expect(card).not.toBeNull()
+    expect(card?.getAttribute('role')).toBe('menu')
+    expect(stealsArrowDown()).toBe(false)
 
     // The plugin's fiber disposer calls exactly this on unload.
     closePopover()

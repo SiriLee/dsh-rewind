@@ -50,15 +50,13 @@ export const STYLE = `
   color: var(--dsw-alias-label-secondary);
 }
 
+/* The card's material, radius, and elevation come from the harness
+   MenuSurface the panel renders through; only layout and typography are ours. */
 .dsh-rewind-popover {
   position: fixed;
   z-index: 1000;
   width: 288px;
   padding: 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
-  background: var(--dsw-specific-menu, var(--dsw-alias-bg-layer-3));
-  box-shadow: var(--dsw-shadow-lv3);
   font-size: 14px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary);
