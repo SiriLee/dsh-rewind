@@ -132,6 +132,9 @@ const fakeSettings = {
   localeRows: [],
   /** Arguments every descriptor read received, in order. */
   describeCalls: [],
+  /** Page policies registered through `configure()`, with their owner fiber. */
+  presentations: [],
+  configure: (presentation, owner) => { fakeSettings.presentations.push({ presentation, owner }); return () => {} },
   update: async (entryId, patch) => { fakeSettings.writes.push(entryId); Object.assign(storedPolicy, patch); applyFakeWrite() },
   mutate: async (entryId, ops) => {
     fakeSettings.writes.push(entryId)
@@ -933,6 +936,9 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('cleanup config persisted (maxAgeDays)', effectivePolicy.maxAgeDays === 5, JSON.stringify(storedPolicy))
   check('cleanup writes address the profile row id, not the fiber id',
     fakeSettings.writes.length > 0 && fakeSettings.writes.every(id => id === 'dsh-rewind-plugin'), JSON.stringify([...new Set(fakeSettings.writes)]))
+  check('the bundle declares its own config page (auto: false)',
+    fakeSettings.presentations.length === 1 && fakeSettings.presentations[0].presentation?.auto === false
+    && fakeSettings.presentations[0].owner === ctx.fiber, JSON.stringify(fakeSettings.presentations.map(p => p.presentation)))
   const badAge = await callCleanup('max-age 0')
   check('cleanup rejects max-age 0', badAge.kind === 'error', badAge.text)
 

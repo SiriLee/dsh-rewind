@@ -1097,6 +1097,11 @@ export function apply(ctx: Context, config?: Config): void {
   const lifecycle = new AbortController()
   ctx.effect(() => () => { lifecycle.abort() }, 'dsh-rewind lifecycle abort')
 
+  // Own config card, so opt out of the schema-generated page (`autoGenerate`).
+  ctx.inject(['settings'], (child) => {
+    child.effect(() => child.settings.configure({ auto: false }, ctx.fiber), 'dsh-rewind page policy')
+  })
+
   const dshHome = config?.dshHome
   const store = new SnapshotStore(config?.snapshotDir, { dedup: config?.dedup, dshHome })
   // The cleanup policy reads the config's live references, so a settings write
