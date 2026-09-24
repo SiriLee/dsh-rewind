@@ -243,6 +243,13 @@ describe('resolveSeatAnchorSeq (withdrawn-seat hiding)', () => {
     data: { name: 'rewind', seq, args: `@${target} chat`, outcome: { kind: 'success', sourceEventSeq: seq } },
   })
 
+  /** One tool-call node, keyed as the assembler keys it (`<kind.length>:<kind><id>`). */
+  const toolNode = (seq: number, callId: string) => ({
+    kind: 'tool-call',
+    anchorSeq: seq,
+    data: { root: { callId, name: 'bash', argsRaw: '{}', time: seq, phase: 'start', subCalls: [] } },
+  })
+
   it('resolves a process seat through its composite anchor key', () => {
     // A step/process row renders with `data-chat-anchor-key` = ["<key>","<part>"]
     // and `data-chat-node-key` = the plain key. Reading only the flow key left
@@ -313,6 +320,33 @@ describe('resolveSeatAnchorSeq (withdrawn-seat hiding)', () => {
 
     hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), hiddenSeqsOf(chat), new WeakSet())
 
+    expect(shell.style.display).toBe('none')
+    expect(shell.dataset.dshRewindHidden).toBe('true')
+  })
+
+  it('hides a tool group shell whose tool-call seat nests a call row', () => {
+    // `ToolCallTree` renders its own `call:<callId>` anchor row INSIDE the
+    // tool-call seat and writes no `data-chat-node-key`, so that row resolves to
+    // no chat node. Counting it as live content kept a fully withdrawn "command
+    // executed" tool group on screen as an empty expandable row after the member
+    // seat (and everything below it) had been hidden.
+    const chat = chatWith([
+      ['u1', userNode(5)],
+      ['9:tool-callc1', toolNode(6, 'c1')],
+      ['m1', markerCommand(9, 5)],
+    ])
+    const nodeSeat = document.createElement('div')
+    nodeSeat.dataset.chatAnchorKey = '9:tool-callc1'
+    nodeSeat.dataset.chatNodeKey = '9:tool-callc1'
+    const callRow = document.createElement('div')
+    callRow.dataset.chatAnchorKey = 'call:c1'
+    callRow.dataset.chatCallId = 'c1'
+    nodeSeat.appendChild(callRow)
+    const shell = appendShell([nodeSeat])
+
+    hideWithdrawnSeats(chat, document.querySelectorAll('[data-chat-anchor-key]'), hiddenSeqsOf(chat), new WeakSet())
+
+    expect(nodeSeat.style.display).toBe('none')
     expect(shell.style.display).toBe('none')
     expect(shell.dataset.dshRewindHidden).toBe('true')
   })

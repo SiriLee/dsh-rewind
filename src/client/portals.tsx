@@ -447,6 +447,14 @@ export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | 
  * that member is genuinely on the surface, in which case the shell stays; a
  * shell the batch carries no member of is left alone.
  *
+ * A MEMBER is a real chat node seat — `ChatNodeSeat` is the one shape that
+ * writes `data-chat-node-key` beside the anchor key. An anchor-only descendant
+ * (the tool call tree's own `call:<callId>` row, or a third-party anchor) is
+ * nested decoration: it resolves to no chat node, so it does NOT vote on the
+ * shell's emptiness. Counting such a row as "still live" is what left a fully
+ * withdrawn "command executed" tool group on screen as an empty expandable row
+ * after every member below it had been hidden.
+ *
  * Cost stays O(seats) per refresh: the caller queries the batch once, and each
  * shell decision reuses the member outcomes already computed here — no second
  * document scan, and no per-shell subtree walk.
@@ -492,6 +500,14 @@ export function hideWithdrawnSeats(
       delete seat.dataset.dshRewindHidden
       hidden.delete(seat)
     }
+    // Only a real chat node seat is a group member: `ChatNodeSeat` is the one
+    // shape that writes `data-chat-node-key` beside the anchor key. A nested
+    // decoration — the tool call tree's own `call:<callId>` row, or any other
+    // anchor-only element — resolves to no chat node, so it must not vote here:
+    // counting one as "still live" is what left a fully withdrawn "command
+    // executed" shell on screen as an empty expandable row after every member
+    // below it had been hidden.
+    if (seat.dataset.chatNodeKey === undefined) continue
     // The shell is an ancestor of the seat, so its own hide is applied below.
     const shell = seat.parentElement?.closest<HTMLElement>(GROUP_SHELL_SELECTOR)
     if (shell === null || shell === undefined) continue
