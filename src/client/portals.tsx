@@ -151,6 +151,12 @@ export interface SlotsLike {
  */
 interface ComposerDraftWriter {
   setDraft(text: string): void
+  /**
+   * Return the keyboard to the composer with the caret it last held (the
+   * facade's own `focus`). Optional so the DOM fallback and older faces still
+   * restore the text.
+   */
+  focus?(): void
 }
 
 /**
@@ -209,6 +215,12 @@ export function writeComposer(text: string, facade: ComposerDraftWriter | undefi
   if (facade !== undefined) {
     try {
       facade.setDraft(text)
+      try {
+        // The confirm popover held the keyboard; give it back, caret included.
+        facade.focus?.()
+      } catch {
+        // Focus is presentation; the restored draft is what matters.
+      }
       return true
     } catch {
       // Fall through to the DOM channel (the facade must never kill the refill).

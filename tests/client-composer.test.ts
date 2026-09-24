@@ -88,6 +88,20 @@ describe('writeComposer (facade-aware write)', () => {
     expect(ok).toBe(true)
     expect(editable.textContent).toBe('rewound text')
   })
+
+  it('hands the keyboard back after a facade write (the popover held it)', () => {
+    const setDraft = vi.fn()
+    const focus = vi.fn()
+    const ok = writeComposer('rewound text', { setDraft, focus })
+    expect(ok).toBe(true)
+    expect(setDraft).toHaveBeenCalledBefore(focus)
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the restored draft when focus throws', () => {
+    const ok = writeComposer('rewound text', { setDraft: vi.fn(), focus: () => { throw new Error('no editor') } })
+    expect(ok).toBe(true)
+  })
 })
 
 describe('composerText (0.1.2 draft read)', () => {

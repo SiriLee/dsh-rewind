@@ -62,7 +62,21 @@ let popoverEl: HTMLElement | null = null
 
 let disposeOutside: (() => void) | null = null
 
-/** Close the current popover, if any. */
+/** The session whose popover currently holds the keyboard, or null. */
+let liveSessionId: string | null = null
+
+/** The plugin's composer focus channel; the harness's own `focusComposer` shape. */
+let composerFocuser: ((sessionId: string) => void) | null = null
+
+/**
+ * Register the composer focus channel (called once by the client plugin).
+ * @param focus - returns the keyboard to one session's composer, caret included.
+ */
+export function registerComposerFocuser(focus: (sessionId: string) => void): void {
+  composerFocuser = focus
+}
+
+/** Close the current popover, if any, handing the keyboard back to its composer. */
 export function closePopover(): void {
   if (popoverEl !== null) {
     popoverEl.remove()
@@ -71,6 +85,15 @@ export function closePopover(): void {
   if (disposeOutside !== null) {
     disposeOutside()
     disposeOutside = null
+  }
+  const sessionId = liveSessionId
+  liveSessionId = null
+  if (sessionId !== null) {
+    try {
+      composerFocuser?.(sessionId)
+    } catch {
+      // Focus is presentation; the popover is already gone.
+    }
   }
 }
 
@@ -462,6 +485,7 @@ function openRetractPopover(opts: PopoverOptions): void {
 /** Open the mode-selection popover anchored near the given button. */
 export function openPopover(opts: PopoverOptions): void {
   closePopover()
+  liveSessionId = opts.session.sessionId
   // Pending retract variant: a single-confirm dialog, no rewind modes.
   if (opts.retract !== undefined) {
     openRetractPopover(opts)

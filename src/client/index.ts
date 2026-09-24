@@ -47,7 +47,7 @@ import {
   type CandidateChat,
   type RewindCandidate,
 } from './candidates.ts'
-import { closePopover, openPopover, knownCommandSeqs, waitForCommand } from './popover.ts'
+import { closePopover, openPopover, knownCommandSeqs, waitForCommand, registerComposerFocuser } from './popover.ts'
 import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
 import { rewindLog } from './log.ts'
@@ -96,7 +96,7 @@ interface UiConversationLike {
  * package and survives harness version drift.
  */
 interface SessionInputResolverLike {
-  for(actx: unknown): { setDraft(text: string): void }
+  for(actx: unknown): { setDraft(text: string): void; focus(): void }
 }
 
 /**
@@ -201,31 +201,44 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
-     * The composer writer: the `conversation` service's `input`
-     * resolver (`SessionInputResolver`) through which `setDraft` replaces the
-     * whole composer draft (the harness's own Lexical editor — the correct
-     * semantics, not a DOM hack). Resolved lazily through `ctx.get`; `scope` is
-     * reached via `sessions.scope`. Wrapped in `writeComposer` (the facade when
-     * reachable, else the contenteditable DOM fill). Never throws.
+     * The session's composer facade (draft write + focus), resolved lazily
+     * through `ctx.get`; `scope` is reached via `sessions.scope`. Never throws.
+     */
+    const composerFacade = (sessionId: string): { setDraft(text: string): void; focus(): void } | undefined => {
+      const conversation = (ctx as { get(name: string): unknown }).get('conversation') as { input?: SessionInputResolverLike } | undefined
+      const input = conversation?.input
+      const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
+      if (input === undefined || scope === undefined) return undefined
+      return {
+        setDraft: (draft: string) => { input.for(scope).setDraft(draft) },
+        focus: () => { input.for(scope).focus() },
+      }
+    }
+
+    /**
+     * The composer writer: the `conversation` service's `input` resolver
+     * (`SessionInputResolver`), whose `setDraft` replaces the whole composer
+     * draft through the harness's own Lexical editor. Wrapped in `writeComposer`
+     * (the facade when reachable, else the contenteditable DOM fill).
      */
     const setComposerText = (sessionId: string, text: string): boolean => {
       try {
-        const conversation = (ctx as { get(name: string): unknown }).get('conversation') as { input?: SessionInputResolverLike } | undefined
-        const input = conversation?.input
-        const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
-        const facade = input !== undefined && scope !== undefined
-        const ok = writeComposer(
-          text,
-          facade
-            ? { setDraft: (draft: string) => { input.for(scope).setDraft(draft) } }
-            : undefined,
-        )
-        return ok
+        return writeComposer(text, composerFacade(sessionId))
       } catch (error) {
         rewindLog.warn('refill', 'composer write threw', error)
         return false
       }
     }
+
+    // The plugin's own popovers hold the keyboard while they are open; hand it
+    // back on close, the same channel the harness uses for its own dismissals.
+    registerComposerFocuser(sessionId => {
+      try {
+        composerFacade(sessionId)?.focus()
+      } catch (error) {
+        rewindLog.warn('refill', 'composer focus threw', error)
+      }
+    })
 
     /**
      * Subscribe to one session's live chat-update signal (the wait signal for

@@ -15,7 +15,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-import { closePopover, openPopover, type PopoverOptions } from '../src/client/popover.ts'
+import { closePopover, openPopover, registerComposerFocuser, type PopoverOptions } from '../src/client/popover.ts'
 import { CLASS } from '../src/client/styles.ts'
 
 /** A session face whose `command` resolves to `result` (or never, for `null`). */
@@ -120,6 +120,18 @@ describe('closePopover (the unload teardown)', () => {
     closePopover()
     expect(document.querySelector(`.${CLASS.popover}`)).toBeNull()
     expect(stealsArrowDown()).toBe(false)
+  })
+
+  it('hands the keyboard back to the composer it took it from', async () => {
+    const focus = vi.fn()
+    registerComposerFocuser(focus)
+    open(fakeSession({ ok: true, value: { matched: true } }))
+    await settle()
+    await nextTick()
+    expect(focus).not.toHaveBeenCalled()
+    closePopover()
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus).toHaveBeenCalledWith('s1')
   })
 
   it('is safe with nothing open and does not throw on a repeat call', () => {
