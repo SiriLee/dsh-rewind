@@ -98,6 +98,17 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
     open(fakeSession('pending'))
     expect(optionHints()).toContain('popover.checking')
   })
+
+  it('moves the keyboard onto the first row so the menu owns the walk', async () => {
+    open(fakeSession('pending'))
+    await settle()
+    // The anchor is an empty span: the harness Menu intercepts arrows and Tab
+    // only while a row holds focus, so the panel must claim it on open.
+    const active = document.activeElement
+    expect(active).toBeInstanceOf(HTMLButtonElement)
+    expect(active?.getAttribute('role')).toBe('menuitem')
+    expect(active?.hasAttribute('disabled')).toBe(false)
+  })
 })
 
 describe('closePopover (the unload teardown)', () => {

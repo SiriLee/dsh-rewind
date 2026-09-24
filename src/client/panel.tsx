@@ -236,6 +236,24 @@ export function RewindPanel(props: RewindPanelProps): ReactElement {
   const [impactBody, setImpactBody] = useState<string | null>(null)
   const [impactReady, setImpactReady] = useState(false)
   const confirmRef = useRef<HTMLButtonElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+
+  // The anchor is an empty span, so the Menu's keyboard guard (`the menu owns
+  // the keyboard when it holds a row or sits on its anchor region`) passes only
+  // once a row holds focus: without this the arrow walk and Enter do nothing
+  // while Escape still closes. Claim the first enabled row one microtask late —
+  // the caller that opened the panel (the command shell) restores the composer's
+  // focus as it dismisses, and the panel must win.
+  useEffect(() => {
+    const host = contentRef.current
+    if (host === null) return
+    queueMicrotask(() => {
+      if (!host.isConnected) return
+      const active = document.activeElement
+      if (active instanceof HTMLElement && host.contains(active)) return
+      host.querySelector<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')?.focus()
+    })
+  }, [step])
 
   useEffect(() => {
     const p = first.current
@@ -363,7 +381,7 @@ export function RewindPanel(props: RewindPanelProps): ReactElement {
       getAnchorRect={() => anchor.isConnected ? anchor.getBoundingClientRect() : null}
       onClose={onClose}
     >
-      {body}
+      {<div ref={contentRef}>{body}</div>}
     </Menu>
   )
 }
