@@ -36,7 +36,7 @@ DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消�
 **命令行**：
 
 ```sh
-dsh plugin --profile web add dsh-rewind-plugin@<版本>
+dsh plugin --profile <name> add dsh-rewind-plugin@<版本>
 ```
 
 **图形界面**：侧栏「插件」页 →「添加插件」→ 填 `dsh-rewind-plugin@<版本>` → 安装 → 重启 DSH 并刷新浏览器。
@@ -79,7 +79,7 @@ dsh plugin --profile web add dsh-rewind-plugin@<版本>
 
 ```sh
 # 卸载插件
-dsh plugin --profile web remove dsh-rewind-plugin
+dsh plugin --profile <name> remove dsh-rewind-plugin
 
 # 如需同时删除本地数据
 rm -rf <dsh home>/rewind-snapshots

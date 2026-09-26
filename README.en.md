@@ -37,7 +37,7 @@ Check your local DSH version, then find the matching plugin version in
 **Command line**:
 
 ```sh
-dsh plugin --profile web add dsh-rewind-plugin@<version>
+dsh plugin --profile <name> add dsh-rewind-plugin@<version>
 ```
 
 **Graphical interface**: the **Plugins** page in the sidebar → **Add plugin** → enter `dsh-rewind-plugin@<version>` → install → restart DSH and refresh the browser.
@@ -91,7 +91,7 @@ auto-cleanup switch and the idle-day cutoff), or use the
 
 ```sh
 # Uninstall the plugin
-dsh plugin --profile web remove dsh-rewind-plugin
+dsh plugin --profile <name> remove dsh-rewind-plugin
 
 # To also delete local data
 rm -rf <dsh home>/rewind-snapshots
