@@ -626,8 +626,11 @@ export function collectDurableTargets(
  * data), so it is narrowed structurally here.
  */
 function inboxOf(session: SessionFace): InboxLike | undefined {
-  return session.projections.faceOf('inbox').getSnapshot() as InboxLike | undefined
+  return session.projections.faceOf(INBOX_PROJECTION).getSnapshot() as InboxLike | undefined
 }
+
+/** The projection key the pending-target read and its subscription address. */
+const INBOX_PROJECTION = 'inbox'
 
 /**
  * The pending bubble row's message text EXCLUDING its trailing actions
@@ -713,6 +716,10 @@ interface RewindPortalsProps extends RewindBridgeDeps {
  * (one pass per mutation batch via queueMicrotask) and diffed (setState is
  * skipped when the target set is unchanged), so the plugin never runs a
  * synchronous full-transcript scan inside a commit microtask.
+ *
+ * The scan is driven by both channels its targets are made of: the DOM (rows and
+ * their actions containers) and the session's `inbox` projection (the pending
+ * occurrences — see `syncInboxSubscription`).
  */
 export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession, watchChat, t, subscribeLocale, setComposerText }: RewindPortalsProps): ReactNode {
   const [targets, setTargets] = useState<readonly PortalTarget[]>([])
@@ -727,10 +734,14 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
   useLayoutEffect(() => {
     let active = true
     let queued = false
+    // The pending path's out-of-DOM data channel (`syncInboxSubscription`).
+    let unsubscribeInbox: (() => void) | undefined
+    let inboxOwner: SessionFace | undefined
 
     const refresh = (): void => {
       if (!active) return
       const session = sessionOf(sessionId)
+      syncInboxSubscription(session)
       if (session === undefined) {
         // Session binding gone (teardown window): drop every portal.
         setTargets([])
@@ -785,6 +796,31 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       })
     }
 
+    /**
+     * (Re)bind the inbox-projection subscription to the session being read. The
+     * pending target cannot come from the DOM alone: the bubble is the harness's
+     * local submission echo, which keeps rendering unchanged when the Host
+     * occurrence lands (ChatView merges it by `rpcId`; the QueueDock only mirrors
+     * `next-turn`), so that frame mutates nothing and a mutation-only refresh
+     * would not mount the ↶ button until some later mutation re-ran the scan.
+     *
+     * The face is identity-stable per key, so tracking the session is enough to
+     * notice a re-bind. A face that refuses subscription only costs this channel;
+     * the DOM observer stays the catch-up one.
+     */
+    const syncInboxSubscription = (session: SessionFace | undefined): void => {
+      if (session === inboxOwner) return
+      unsubscribeInbox?.()
+      unsubscribeInbox = undefined
+      inboxOwner = session
+      if (session === undefined) return
+      try {
+        unsubscribeInbox = session.projections.faceOf(INBOX_PROJECTION).subscribe(queueRefresh)
+      } catch (error) {
+        rewindLog.warn('portals', 'inbox projection subscribe failed', error)
+      }
+    }
+
     refresh()
     const observer = new MutationObserver(queueRefresh)
     // attributes: watch style so a harness re-render that resets display is
@@ -793,6 +829,9 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
     return () => {
       active = false
       observer.disconnect()
+      unsubscribeInbox?.()
+      unsubscribeInbox = undefined
+      inboxOwner = undefined
     }
   }, [sessionId, sessionOf])
 

@@ -9,5 +9,5 @@
     // node types, so the shipped declarations cannot pick up node globals.
     "types": ["node"]
   },
-  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/support/**/*.ts", "tests/client-contract.test.ts", "tests/chat-channel.test.ts", "tests/client-dom.test.ts", "tests/client-lifecycle.test.ts", "tests/client-composer.test.ts", "tests/client-settings-card.test.ts", "tests/client-refill.test.ts", "tests/client-retract.test.ts", "tests/log.test.ts"]
+  "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/support/**/*.ts", "tests/client-contract.test.ts", "tests/chat-channel.test.ts", "tests/client-dom.test.ts", "tests/client-lifecycle.test.ts", "tests/client-composer.test.ts", "tests/client-settings-card.test.ts", "tests/client-refill.test.ts", "tests/client-retract.test.ts", "tests/client-portal-refresh.test.ts", "tests/log.test.ts"]
 }
