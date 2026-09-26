@@ -175,7 +175,7 @@ transcript.
   distinct cases follow:
   1. **Sensitive / personal-information files** (e.g. a `.env` file, which may
      sit inside the workspace) the model may read or edit are backed up and
-     restorable.
+     restorable, unless the file is over the size cap.
   2. **Files outside the session workspace** the model is allowed to touch are
      likewise backed up and restored.
   In both cases the plugin introduces no authority of its own — DSH already
