@@ -456,20 +456,42 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
   it('never records a path whose CURRENT size is over the backup cap', async () => {
     const file = await touch('grew.txt', 'small')
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'small' })
-    // The boundary honours the cap: the over-cap state is not captured, and a
-    // file that is back under the cap is captured as usual. The probe reports
-    // sizes only, so the cap decision provably precedes any content comparison.
+    // The boundary honours the cap BEFORE looking at content: this probe throws
+    // if either the content comparison or the copy is reached, so a regression
+    // that moved the cap check after them fails loudly here instead of quietly
+    // spending the IO the cap exists to save.
+    let isLinkCalls = 0
     const sized = (bytes: number): DiskProbe => ({
-      isLink: async () => false,
+      isLink: async () => { isLinkCalls += 1; return false },
       size: async () => bytes,
       matches: async () => { throw new Error('the cap gate must run before any content comparison') },
       copy: async () => { throw new Error('an over-cap path must never be copied') },
     })
     expect(await reconcileTracked(store, session, 7, new Set([file]), sized(9_000_000))).toBe(0)
+    expect(isLinkCalls).toBe(1) // the path really was visited and then skipped
 
     // Back under the cap, with a NEW state to record: captured normally.
     await writeFile(file, 'shrunk again', 'utf8')
     expect(await reconcileTracked(store, session, 8, new Set([file]), defaultProbe)).toBe(1)
+  })
+
+  it('records the boundary state after a creation, then stays silent while unchanged', async () => {
+    // The write captured `before: null` (the file did not exist yet); the write
+    // itself then created it. So at the NEXT message the disk (A) no longer
+    // matches that record (null) — the boundary records A, and the message
+    // after that is genuinely unchanged and records nothing.
+    const file = join(root, 'ws', 'created-at-boundary.txt')
+    await mkdir(dirname(file), { recursive: true })
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: null })
+    await writeFile(file, 'A', 'utf8')
+    const tracked = await store.trackedPaths(session)
+
+    expect(await reconcileTracked(store, session, 6, tracked)).toBe(1)
+    const atSix = await store.entriesAfter(session, 6)
+    expect(atSix.map(entry => entry.path)).toEqual([file])
+    expect(await store.restoreAfter(session, 6, unlink)).toEqual({ restored: [], deleted: [], skipped: [], failed: [] })
+
+    expect(await reconcileTracked(store, session, 7, tracked)).toBe(0)
   })
 
   it('records only on state change (first sighting always records)', async () => {
