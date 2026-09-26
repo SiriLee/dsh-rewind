@@ -131,7 +131,7 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 
 The file half follows Claude Code's checkpoint semantics — **partial tracking + before-write backup, plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
 
-- **Before-write backup**: tracks only the write-class tools (`write`, `edit`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight.
+- **Before-write backup**: tracks only the write-class tools (`write`, `edit`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight; **a single file that is too large is not backed up**.
 - **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — external changes such as a command run or a manual edit are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
 - **Unchanged-not-recorded**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy.
 - **Accurate restore**: backups are the sole standard, checked against the real disk — **only files that actually differ are touched**: modified files restored, newly created files deleted, deleted files recovered. Backups are stored byte for byte, so the restored result matches the backups exactly, with no "ghost impact".
