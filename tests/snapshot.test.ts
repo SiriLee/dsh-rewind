@@ -453,6 +453,25 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     expect(await readFile(file, 'utf8')).toBe('original')
   })
 
+  it('never records a path whose CURRENT size is over the backup cap', async () => {
+    const file = await touch('grew.txt', 'small')
+    await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'small' })
+    // The boundary honours the cap: the over-cap state is not captured, and a
+    // file that is back under the cap is captured as usual. The probe reports
+    // sizes only, so the cap decision provably precedes any content comparison.
+    const sized = (bytes: number): DiskProbe => ({
+      isLink: async () => false,
+      size: async () => bytes,
+      matches: async () => { throw new Error('the cap gate must run before any content comparison') },
+      copy: async () => { throw new Error('an over-cap path must never be copied') },
+    })
+    expect(await reconcileTracked(store, session, 7, new Set([file]), sized(9_000_000))).toBe(0)
+
+    // Back under the cap, with a NEW state to record: captured normally.
+    await writeFile(file, 'shrunk again', 'utf8')
+    expect(await reconcileTracked(store, session, 8, new Set([file]), defaultProbe)).toBe(1)
+  })
+
   it('records only on state change (first sighting always records)', async () => {
     const file = await touch('tracked.txt', 'original')
     await store.recordEntry(session, { callId: 'tool', anchorSeq: 5, path: file, before: 'original' })

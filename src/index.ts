@@ -44,7 +44,7 @@ import z from '@deepseek-ai/schemastery'
 import { preferredLocale, translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
-import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
+import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome, type UncoveredPath } from './snapshot.ts'
 import {
   DEFAULT_CLEANUP_CONFIG,
   parseCleanupCommand,
@@ -326,6 +326,13 @@ async function captureBefore(
   // never copied — it would either hang the copy or produce a meaningless
   // "backup".
   if (info !== undefined && info.type !== 'file') return
+  // SIZE CAP: too large to back up, so record NOTHING — never a `before: null`
+  // "was created" record, which a rewind would turn into a DELETE of a file
+  // that exists. Uses the `size` the stat above already returned (no extra IO)
+  // and lands before the staged copy, so a very large file is never read
+  // (issue #39). The path is deliberately not registered as tracked: with no
+  // record there is no history to contradict, so nothing can be mis-restored.
+  if (info !== undefined && store.isOverFileCap(info.size)) return
   const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
   if (info === undefined) {
     pending.set(key, { path: target.displayPath, backup: null })
@@ -439,6 +446,13 @@ function describeTarget(target: RewindTarget): string {
     : t('describeTarget.index', { index: target.index })
 }
 
+/** Human-readable size for the report lines (binary units, whole numbers). */
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MiB`
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KiB`
+  return `${bytes} B`
+}
+
 /**
  * Render an impact list for `preview` and the `both` confirmation. The human
  * copy follows the active host locale; the trailing block is a
@@ -448,8 +462,17 @@ function describeTarget(target: RewindTarget): string {
  *   `restore:<path>`    → one file to restore
  *   `delete:<path>`     → one file to delete
  * The client MUST render from these tokens, never from the human copy.
+ *
+ * `uncovered` names recorded paths whose current size is over the backup cap:
+ * a rewind will not touch them, and saying so up front keeps the cap an honest
+ * limitation instead of a silent gap.
  */
-function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'restore' | 'delete' }[]): string {
+function formatPlan(
+  plan: RewindPlan,
+  files: readonly { path: string; action: 'restore' | 'delete' }[],
+  uncovered: readonly UncoveredPath[] = [],
+  maxFileBytes = 0,
+): string {
   const lines = [
     t('plan.rewinding', { targetSeq: plan.targetSeq, count: plan.shadowedSeqs.length }),
   ]
@@ -460,6 +483,12 @@ function formatPlan(plan: RewindPlan, files: readonly { path: string; action: 'r
     }
   } else {
     lines.push(t('plan.noChanges'))
+  }
+  if (uncovered.length > 0) {
+    lines.push(t('uncovered.header', { count: uncovered.length, limit: formatBytes(maxFileBytes) }))
+    // List a bounded number of paths: the count above stays exact.
+    for (const file of uncovered.slice(0, 5)) lines.push(`  ${file.path}`)
+    if (uncovered.length > 5) lines.push('  …')
   }
   // Machine-readable trailer (stable literal, locale-independent): the client
   // parses `impact=<n>` and the restore:/delete: lines to render its own
@@ -487,6 +516,20 @@ function renderFailures(failed: readonly { path: string; message: string }[]): s
     count: failed.length,
     list: failed.map(f => t('failures.item', { path: f.path, message: f.message })).join('、'),
   })
+}
+
+/**
+ * One "not restored" line per skipped path the cap caused: a path that is both
+ * in the uncovered set (current size over the cap) and skipped by this pass is
+ * exactly the cap refusal. Other skips stay summarised by `skip.count`.
+ */
+function renderSkipped(outcome: RestoreOutcome, uncovered: readonly UncoveredPath[], maxFileBytes: number): string {
+  const capped = new Set(uncovered.map(item => item.path))
+  const limit = formatBytes(maxFileBytes)
+  return outcome.skipped
+    .filter(path => capped.has(path))
+    .map(path => t('plan.skip', { path, reason: t('skipReason.oversized', { limit }) }))
+    .join('\n')
 }
 
 /**
@@ -712,7 +755,14 @@ async function executeRewind(
         const parts: string[] = []
         if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
         if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
-        if (outcome.skipped.length > 0) parts.push(t('skip.count', { count: outcome.skipped.length }))
+        if (outcome.skipped.length > 0) {
+          parts.push(t('skip.count', { count: outcome.skipped.length }))
+          // Name the cap refusals: the conservative choice (leave a file alone)
+          // must still be visible, never a silent omission.
+          const capped = await store.uncoveredPaths(agent.session.id).catch(() => [] as UncoveredPath[])
+          const skippedLines = renderSkipped(outcome, capped, store.fileCapBytes)
+          if (skippedLines !== '') parts.push(skippedLines)
+        }
         restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
         restore += renderFailures(outcome.failed)
       }
@@ -790,7 +840,9 @@ async function handleRewind(
     if (impacts === undefined) {
       return { kind: 'error', text: t('storeUnsupported', { version: await store.readStoreVersion(session.id) ?? 0 }) }
     }
-    return { kind: 'success', text: formatPlan(plan, impacts) }
+    // Name the cap's coverage gap up front, alongside the impact list.
+    const uncovered = await store.uncoveredPaths(session.id).catch(() => [] as UncoveredPath[])
+    return { kind: 'success', text: formatPlan(plan, impacts, uncovered, store.fileCapBytes) }
   }
 
   // Internal machine channel: `/rewind __candidates` returns the FULL

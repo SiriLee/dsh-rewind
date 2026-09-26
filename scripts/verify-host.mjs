@@ -34,7 +34,10 @@
  * 14. rewinding across a compaction checkpoint is refused with the plugin's
  *     own error (not a crash);
  * 15. no rewind/compact combination ever leaves a dangling step/start or
- *     turn/start frame in the log.
+ *     turn/start frame in the log;
+ * 16. the per-file size cap: an over-cap edit is recorded by NOTHING, the
+ *     preview names it as uncovered, and a rewind leaves it exactly as it is
+ *     (never deleted, never clobbered by an older smaller version).
  */
 import { Context } from '@deepseek-ai/cordis'
 import { CommandId } from '@deepseek-ai/dsh-commands'
@@ -74,6 +77,13 @@ const wsDir = join(tmpRoot, 'ws')
 const snapRoot = join(tmpRoot, 'snapshots')
 await mkdir(wsDir, { recursive: true })
 
+// A deliberately TINY per-file backup cap so the size-cap checks below cross it
+// with a few KiB instead of 8 MiB. Every other fixture in this file is far
+// smaller, so the cap is transparent to them. Set before any store exists: the
+// cap is read when a store is constructed.
+const CAP_BYTES = 1024 * 1024
+process.env.DSH_REWIND_MAX_FILE_BYTES = String(CAP_BYTES)
+
 /** Real-filesystem fs double: resolve returns the real display path. */
 class FakeFs extends FileSystem {
   async resolve(path, opts = {}) {
@@ -86,11 +96,14 @@ class FakeFs extends FileSystem {
   async readText(target) { return readFile(target.displayPath, 'utf8') }
   async writeText(target, content) { await writeFile(target.displayPath, content, 'utf8'); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
   async stat(target) {
-    // Mirror the fs service contract (FsInfo.type): regular file, directory or
-    // other — the plugin's capture guard depends on it.
+    // Mirror the fs service contract (FsInfo): the plugin's capture guard
+    // depends on `type` (a directory/device is never copied) AND on `size`
+    // (the per-file backup cap). A double that omits `size` would silently
+    // disable the cap — `isOverFileCap(undefined)` answers false on purpose —
+    // and mask exactly the failure the cap exists to prevent.
     try {
       const info = await stat(target.displayPath)
-      if (info.isFile()) return { version: FsVersion('v'), type: 'file' }
+      if (info.isFile()) return { version: FsVersion('v'), type: 'file', size: info.size }
       if (info.isDirectory()) return { version: FsVersion('v'), type: 'directory' }
       return { version: FsVersion('v'), type: 'other' }
     } catch { return undefined }
@@ -471,6 +484,55 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   } else {
     console.log('skip permission-bit check (chmod unsupported on this filesystem)')
   }
+}
+
+// 4f. the per-file size cap (issue #39): an over-cap write is captured by
+//     NOTHING, which must cost coverage and never data. Also the one place the
+//     destructive failure mode could hide — a skipped capture must not become a
+//     "was created" record, which a rewind would turn into a DELETE.
+{
+  const bigPath = join(wsDir, 'over-cap.bin')
+  // The file exists FIRST, then an edit touches it: that is the reported
+  // scenario (a large file already on disk being modified), and it keeps the
+  // capture's "before" state unambiguous regardless of tool-callback ordering.
+  await writeFile(bigPath, 'Z'.repeat(CAP_BYTES * 2), 'utf8')
+  session.append('user/message', user('size cap anchor question'), { surfaceOp: 'append' })
+  const capAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'cap1', bigPath, 'Z'.repeat(CAP_BYTES * 3))
+
+  const anchorDir = join(snapRoot, session.id, String(capAnchor))
+  const entryCount = (await readdir(anchorDir).catch(() => [])).filter(name => name.endsWith('.json')).length
+  check('over-cap edit records no checkpoint entry', entryCount === 0, `entries=${entryCount}`)
+  // The whole point of the cap is to NOT read the file: a refusal that still
+  // staged a copy would have spent the IO this exists to save.
+  const staged = (await readdir(join(snapRoot, session.id, '.pending')).catch(() => [])).length
+  check('over-cap edit stages no byte copy', staged === 0, `staged=${staged}`)
+  check('over-cap edit still lands on disk', (await readFile(bigPath, 'utf8')).length === CAP_BYTES * 3, String((await readFile(bigPath, 'utf8')).length))
+
+  // A file first seen already over the cap was never recorded, so it has no
+  // history to report: `uncoveredPaths` derives from the RECORD, and this path
+  // is not in it. It must simply never be touched by a rewind.
+  const capPreview = await call(agent, `preview @${capAnchor} both`)
+  check('preview does not list a never-recorded over-cap file', capPreview.kind === 'success' && !capPreview.text.includes(bigPath), capPreview.text)
+
+  const capResult = await call(agent, `@${capAnchor} both`)
+  check('rewind leaves the never-recorded over-cap file untouched', capResult.kind === 'success' && (await readFile(bigPath, 'utf8')).length === CAP_BYTES * 3, capResult.text)
+
+  // Now the OTHER direction: a path that WAS recorded while small, then grew
+  // past the cap. Its record cannot describe the current state, so a rewind
+  // must refuse it AND name it in the preview (derived from the record + one
+  // stat, so this report survives a restart).
+  const grewPath = join(wsDir, 'grew-over-cap.bin')
+  session.append('user/message', user('grew anchor question'), { surfaceOp: 'append' })
+  const grewAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
+  await runWrite(agent, 'grew1', grewPath, 'small content')
+  await writeFile(grewPath, 'W'.repeat(CAP_BYTES * 2), 'utf8')
+
+  const grewPreview = await call(agent, `preview @${grewAnchor} both`)
+  check('preview names a recorded path that grew past the cap', grewPreview.kind === 'success' && grewPreview.text.includes(grewPath) && /backup limit/.test(grewPreview.text), grewPreview.text)
+
+  const grewResult = await call(agent, `@${grewAnchor} both`)
+  check('rewind refuses the grown file and names the reason', grewResult.kind === 'success' && (await readFile(grewPath, 'utf8')).length === CAP_BYTES * 2 && /not restored/.test(grewResult.text), grewResult.text)
 }
 
 // 4e. agent creation must not clear snapshots written by a NEWER build: the

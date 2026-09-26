@@ -102,6 +102,25 @@ const REPLACEMENT_CHAR = '\uFFFD'
 /** Environment variable overriding the store root (tests, exotic homes). */
 export const SNAPSHOT_ROOT_ENV = 'DSH_REWIND_SNAPSHOT_DIR'
 
+/** Env override for the per-file backup cap (`0` = unlimited); tests set it too. */
+export const MAX_FILE_BYTES_ENV = 'DSH_REWIND_MAX_FILE_BYTES'
+
+/**
+ * A regular file larger than this is NOT backed up. This plugin is a
+ * lightweight, conversation-scoped undo, not a backup system: copying a very
+ * large file on every edit is what grows the store without bound and saturates
+ * IO (issue #39). The cap is a declared limitation, not a delta scheme.
+ */
+export const DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
+
+/** The env override, or `undefined` when unset/unparsable (`0` means no cap). */
+function maxFileBytesFromEnv(): number | undefined {
+  const raw = process.env[MAX_FILE_BYTES_ENV]?.trim()
+  if (raw === undefined || raw === '') return undefined
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) ? parsed : undefined
+}
+
 /** Number of newest anchor groups (user messages) kept per session. */
 export const MAX_ANCHOR_GROUPS = 100
 
@@ -256,6 +275,13 @@ export interface FileImpact {
   readonly action: 'restore' | 'delete'
 }
 
+/** A recorded path whose current on-disk size is over the backup cap. */
+export interface UncoveredPath {
+  readonly path: string
+  /** Byte size observed on disk, when the probe could read one. */
+  readonly size?: number
+}
+
 /** Outcome of one restore pass. */
 export interface RestoreOutcome {
   readonly restored: readonly string[]
@@ -402,6 +428,13 @@ export interface DiskProbe {
    * rescue area) without loading it into memory.
    */
   copy(path: string, dest: string): Promise<CopyOutcome>
+  /**
+   * Byte size of the regular file at `path`, or `undefined` when absent or
+   * unreadable. Consulted before any content comparison so an over-cap file is
+   * skipped without being read. Optional; a missing accessor reads as "size
+   * unknown", which never counts as "too big".
+   */
+  size?(path: string): Promise<number | undefined>
   /** True when the path is a symlink or a hard link (never planned/restored). */
   isLink(path: string): Promise<boolean>
 }
@@ -497,6 +530,15 @@ export const defaultProbe: DiskProbe = {
         if (source === undefined) return { kind: 'absent' }
       }
       return { kind: 'failed', message: error instanceof Error ? error.message : String(error) }
+    }
+  },
+  async size(path: string): Promise<number | undefined> {
+    try {
+      const st = await stat(path)
+      return st.isFile() ? st.size : undefined
+    } catch {
+      // Absent, unreadable or non-regular: an unknown size, never "too big".
+      return undefined
     }
   },
   isLink: isLinkPath,
@@ -1050,6 +1092,12 @@ export class SnapshotStore {
   /** Store options; `dedup` toggles in-place content dedup (default on). */
   private readonly dedup: boolean
 
+  /**
+   * Per-file backup cap in bytes; `<= 0` means no cap. Capture paths consult it
+   * and the restore planner refuses a pre-cap record over an over-cap file.
+   */
+  private readonly maxFileBytes: number
+
   /** Resolved checkpoint store root (absolute); see the constructor's fallback. */
   readonly root: string
 
@@ -1080,9 +1128,18 @@ export class SnapshotStore {
 
   constructor(
     root?: string,
-    opts?: { readonly dedup?: boolean; readonly dshHome?: string },
+    opts?: {
+      readonly dedup?: boolean
+      readonly dshHome?: string
+      /** Per-file backup cap in bytes; `<= 0` disables it. */
+      readonly maxFileBytes?: number
+    },
   ) {
     this.dedup = opts?.dedup ?? true
+    // An explicit option wins; then the env override; then the default. An
+    // unparsable env value falls back to the default, never to "unlimited" — a
+    // typo must not silently disable the guard.
+    this.maxFileBytes = opts?.maxFileBytes ?? maxFileBytesFromEnv() ?? DEFAULT_MAX_FILE_BYTES
     // Deterministic store-root fallback (highest first): an explicit root
     // (config `snapshotDir`) → `DSH_REWIND_SNAPSHOT_DIR` env → the harness-home
     // base derived from `config.dshHome` (via resolveDshHome: config.dshHome >
@@ -1095,6 +1152,20 @@ export class SnapshotStore {
   /** Absolute path of one session's snapshot directory (id sanitized). */
   sessionDir(sessionId: string): string {
     return join(this.root, safeSessionId(sessionId))
+  }
+
+  /**
+   * True when `size` bytes is over the per-file cap, so it must not be backed
+   * up. `undefined` (a backend that cannot report a size) answers false: the
+   * guard fails toward STORING, never toward calling a file too big on a guess.
+   */
+  isOverFileCap(size: number | undefined): boolean {
+    return this.maxFileBytes > 0 && size !== undefined && size > this.maxFileBytes
+  }
+
+  /** The cap in force, for reporting (0 = unlimited). */
+  get fileCapBytes(): number {
+    return this.maxFileBytes
   }
 
   /** Absolute path of one anchor group directory. */
@@ -1545,6 +1616,14 @@ export class SnapshotStore {
         // so the preview never promises a restore the apply pass would refuse
         // (and no doomed action ever reaches the journal).
         if (!(await parentStillMatches(entry.path, entry.parent))) {
+          skipped.push(entry.path)
+          continue
+        }
+        // SIZE CAP, the safety half: a record only exists for content under the
+        // cap, so an over-cap file means its recorded state predates untracked
+        // edits. Writing that smaller content back would destroy the larger
+        // current file, so refuse. `matches` below stats this path anyway.
+        if (probe.size !== undefined && this.isOverFileCap(await probe.size(entry.path))) {
           skipped.push(entry.path)
           continue
         }
@@ -2553,6 +2632,26 @@ export class SnapshotStore {
   }
 
   /**
+   * The session's recorded paths whose current size is over the cap, so no
+   * backup of that state exists. One `stat` per recorded path; a path first seen
+   * over the cap was never recorded and is therefore not listed.
+   */
+  async uncoveredPaths(
+    sessionId: string,
+    probe: DiskProbe = defaultProbe,
+  ): Promise<UncoveredPath[]> {
+    const sizeOf = probe.size?.bind(probe)
+    if (this.maxFileBytes <= 0 || sizeOf === undefined) return []
+    const uncovered: UncoveredPath[] = []
+    for (const path of await this.trackedPaths(sessionId)) {
+      const size = await sizeOf(path)
+      // Unknown size (deleted/unreadable): nothing to report.
+      if (this.isOverFileCap(size)) uncovered.push({ path, ...(size !== undefined ? { size } : {}) })
+    }
+    return uncovered
+  }
+
+  /**
    * Summarize a session's on-disk footprint for a clear dry-run: anchor-group
    * count, committed checkpoint-entry count (one per `.json` in an anchor
    * group), restore-journal count (both journal prefixes), and the total bytes
@@ -2838,6 +2937,10 @@ export async function reconcileTracked(
   for (const path of tracked) {
     try {
       if (await probe.isLink(path)) continue
+      // SIZE CAP: an over-cap state is never recorded, checked before the
+      // content comparison so its bytes are not read at all. A path first seen
+      // over the cap is simply never tracked, so it can never be mis-restored.
+      if (store.isOverFileCap(await probe.size?.(path))) continue
       const last = await store.lastKnownContent(sessionId, path)
       // A legacy record whose bytes were lost cannot be byte-compared: treat it
       // as "never recorded" and take a faithful byte copy (ADR-12: any doubt
