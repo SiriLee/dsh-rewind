@@ -22,11 +22,19 @@ export const CLASS = {
   guardHint: 'dsh-rewind-guard-hint',
 } as const
 
-/** The ↶ glyph, drawn inline so the bundle stays dependency-free. */
+/**
+ * The ↶ glyph, drawn inline so the bundle stays dependency-free.
+ *
+ * Size follows the 0.1.7 product-icon set (15px, as the neighbouring copy/branch
+ * actions in `MessageIconActions`). Stroke is 1.25 rather than upstream's
+ * `Regular` 1: ↶ is a single open stroke next to a dense outline-plus-fill copy
+ * glyph, so at 1 it reads thinned out. Rounded caps/joins stay — upstream keeps
+ * them on curved artwork.
+ */
 export const REWIND_ICON_SVG = [
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
-  '  <path d="M6.5 2.5 2.5 6.5l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>',
-  '  <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>',
+  '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
+  '  <path d="M6.5 2.5 2.5 6.5l4 4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>',
+  '  <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>',
   '</svg>',
 ].join('')
 
@@ -40,7 +48,7 @@ export const STYLE = `
   height: 28px;
   padding: 6px;
   border: none;
-  border-radius: 28px;
+  border-radius: var(--dsw-radius-sm, 8px);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
