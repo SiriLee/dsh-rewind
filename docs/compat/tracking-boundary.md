@@ -179,7 +179,7 @@ recorded the state after it — in case 1 nothing was recorded at all.
 | Msg | In the turn | File content | Backup |
 | :---: | --- | :---: | --- |
 | 1 | `write` creates it | `—` → `A` | `null` |
-| 2 | `edit` | `A` → `G1` | `A` (a before-write backup) |
+| 2 | the edit grows it past the cap | `A` → `G1` | `A` (differs from the previous backup `null`) |
 | 3 | a write-class tool or an external edit | `G1` → `G2` | (none: over the cap, not backed up) |
 | 4 | shrinks back to `B` | `G2` → `B` | (none: still over the cap on arrival, so the re-check skipped it) |
 | 5 | `edit` | `B` → `X` | `B` (a before-write backup; tracking resumes) |
