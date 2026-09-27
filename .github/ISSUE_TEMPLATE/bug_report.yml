@@ -1,0 +1,21 @@
+name: Bug Report
+description: Report a bug in the dsh-rewind plugin
+title: '[BUG] '
+labels: ['bug']
+body:
+  - type: input
+    id: versions
+    attributes:
+      label: Version info
+      description: Plugin version and DSH version
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: 'Read the README ([EN](https://github.com/SiriLee/dsh-rewind/blob/main/README.en.md) · [中文](https://github.com/SiriLee/dsh-rewind/blob/main/README.md))'
+        - label: 'Checked [existing issues](https://github.com/SiriLee/dsh-rewind/issues) for duplicates'
