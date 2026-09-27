@@ -1223,7 +1223,7 @@ export function apply(ctx: Context, config?: Config): void {
     })
     yield ctx.commands.register({
       name: 'undo',
-      description: t('command.description'),
+      description: t('command.undoDescription'),
       handler: rewindHandler,
     })
     yield ctx.commands.register({

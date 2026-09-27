@@ -390,7 +390,7 @@ describe('host language preference', () => {
 
     // The mount-time read covers the descriptions, which register once.
     expect(mounted.commands.get('rewind')!.description).toBe(zhLocale['command.description'])
-    expect(mounted.commands.get('undo')!.description).toBe(zhLocale['command.description'])
+    expect(mounted.commands.get('undo')!.description).toBe(zhLocale['command.undoDescription'])
     expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(zhLocale['cleanup.description'])
     // A command result renders in the same language.
     expect((await cleanupStatus(mounted)).text).toContain(zhStatus)
