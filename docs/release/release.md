@@ -93,8 +93,8 @@ outside it.
 - **After DSH goes final**: final releases are not bound by the prerelease
   tuple rule, so the peers can converge to a single stable range (e.g.
   `^0.1.x`); this section can then be deleted.
-- **Declared minimum (`dsh.engines.dsh`)**: alongside the peer tuple, each
-  release declares the DSH runtime floor under `dsh.engines.dsh` (e.g.
+- **Declared minimum (`engines.dsh`)**: alongside the peer tuple, each
+  release declares the DSH runtime floor under `engines.dsh` (e.g.
   `>=0.1.2-rc.1`). Nothing reads it on the current line yet, so it is a
   forward-looking declaration rather than an enforced guard. Bump it in
   the same release that changes the peer range; never leave code raised while

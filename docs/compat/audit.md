@@ -8,7 +8,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.1.7-rc.2`, declared by the peers as `^0.1.7-rc.2`.
+> Targeted version: npm `@deepseek-ai/*@0.2.0-rc.1` (the peers declare the matching range).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: one peer tuple per DSH line, declaring only what was verified — the
@@ -64,7 +64,7 @@ legacy branch).
 - **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
 - **`image/offload` projection**: the alpha line's first `SessionMessageProjection` changes derived content without touching surface node membership; candidate listing and target resolution tolerate it. Pin: `tests/image-offload-projection.test.ts`.
 - **session-cwd**: the fs tools no longer canonicalize a parent-traversing cwd, so `src/session-cwd.ts` returns `header.cwd` verbatim. Pin: `tests/session-cwd.test.ts`.
-- **startup admission (`0.1.7-rc.1`)**: the gate reads the manifest's own `@deepseek-ai/dsh-*` peers and requires each to satisfy the runtime with `includePrerelease`; it runs for a profile bundle and again for every row its patch inserts, and a denial skips the bundle or disables the row. This plugin's declarations all satisfy `0.1.7-rc.2`, so it is admitted with no exemption — a skipped bundle on a later line is a peer mismatch, not a load failure.
+- **startup admission (`0.1.7-rc.1`)**: the gate reads the manifest's own `@deepseek-ai/dsh-*` peers and requires each to satisfy the runtime with `includePrerelease`; it runs for a profile bundle and again for every row its patch inserts, and a denial skips the bundle or disables the row. This plugin's declarations all satisfy the targeted version above, so it is admitted with no exemption — a skipped bundle on a later line is a peer mismatch, not a load failure.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
 

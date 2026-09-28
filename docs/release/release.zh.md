@@ -81,8 +81,8 @@ DSH 仍在 rc 阶段，npm 的 prerelease 匹配规则要求 peer 范围与宿�
   范围 → `npm install` → `npm run check` → 发版。
 - **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则
   限制，peer 可收敛为稳定的 `^0.1.x` 单范围，此节即可删除。
-- **声明的最低运行时（`dsh.engines.dsh`）**：与 peer 元组一起，每个发布在
-  `dsh.engines.dsh` 声明 DSH 运行时下限（如 `>=0.1.2-rc.1`）。当前线上还没有
+- **声明的最低运行时（`engines.dsh`）**：与 peer 元组一起，每个发布在
+  `engines.dsh` 声明 DSH 运行时下限（如 `>=0.1.2-rc.1`）。当前线上还没有
   任何读取方，因此它只是前置声明、尚未被强制执行。**与 peer 范围持平的同一发布里
   一并 bump**；不可只升代码、声明下限停留在旧值。仅使用 `>=X.Y.Z[-pre]` 形式。
 - **peer 在启动时会被强制执行（`0.1.7-rc.1`）**：DSH 会拿 bundle 自身的
