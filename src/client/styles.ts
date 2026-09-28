@@ -44,14 +44,19 @@ export const STYLE = `
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  /* The neighbouring action buttons scale by this delta too. */
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
   padding: 6px;
   border: none;
   border-radius: var(--dsw-radius-sm, 8px);
   background: transparent;
   color: var(--dsw-alias-label-tertiary);
   cursor: pointer;
+}
+.dsh-rewind-btn svg {
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
 }
 .dsh-rewind-btn:hover {
   background: var(--dsw-alias-interactive-bg-hover);

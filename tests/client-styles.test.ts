@@ -1,8 +1,9 @@
 /**
- * Guard for the cleanup card's own CSS: the shared form frame (its unavailable,
- * read-only, save, and failure lines included) and the numeric field are the
- * harness's components now, so this pins only the block the card still owns —
- * the auto-cleanup toggle row and its hint.
+ * Guards for the injected stylesheet: the ↶ button's geometry and the cleanup
+ * card's own CSS — the shared form frame (its unavailable, read-only, save, and
+ * failure lines included) and the numeric field are the harness's components
+ * now, so this pins only the block the card still owns — the auto-cleanup toggle
+ * row and its hint.
  *
  * Source-text on purpose: jsdom applies no stylesheet, so only a real browser
  * could assert these numbers by rendering.
@@ -73,6 +74,22 @@ describe('popover keyboard focus', () => {
     expect(allRules().get('.dsh-rewind-popover-option:focus-visible:not(:disabled)')).toEqual({
       background: 'var(--dsw-alias-interactive-bg-hover)',
       outline: 'none',
+    })
+  })
+})
+
+describe('action button geometry', () => {
+  // The ↶ button is a sibling of the harness IconActions buttons and scales by
+  // the same content-font delta.
+  it('mirrors the IconActions box and glyph, delta included', () => {
+    const rules = allRules()
+    expect(rules.get('.dsh-rewind-btn')).toMatchObject({
+      width: 'calc(28px + var(--dsh-content-font-delta, 0px))',
+      height: 'calc(28px + var(--dsh-content-font-delta, 0px))',
+    })
+    expect(rules.get('.dsh-rewind-btn svg')).toEqual({
+      width: 'calc(15px + var(--dsh-content-font-delta, 0px))',
+      height: 'calc(15px + var(--dsh-content-font-delta, 0px))',
     })
   })
 })
