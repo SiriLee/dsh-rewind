@@ -20,6 +20,7 @@
 import { zstdDecompress } from 'node:zlib'
 import { readFile, writeFile } from 'node:fs/promises'
 import { promisify } from 'node:util'
+import { pathToFileURL } from 'node:url'
 
 const zd = promisify(zstdDecompress)
 const ZSTD_MAGIC = 0xfd2fb528
@@ -143,4 +144,7 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await main()
+// pathToFileURL compares percent-encoded against percent-encoded; the naive
+// `file://${argv1}` form silently skips main whenever the path contains
+// spaces.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await main()
