@@ -22,7 +22,7 @@ Compatibility probes against these subsystems (test-driven investigation, the
 `compat-invariants` / `compat-interop` vitest suites + the `verify-host` real
 `/compact` chain): [compat/audit.md](compat/audit.md).
 
-Also under `docs/` at the repo root: `persistence-catalog.md` (full
+Also in the harness repo's `docs/`: `persistence-catalog.md` (full
 `SessionEventMap`), `tool-catalog.md` (tool inventory), `config-catalog.md`
 (configuration inventory).
 
@@ -49,13 +49,6 @@ the canonical source; this block only adds the finer-grained client-side files
 and packaging entries.
 
 ```
-src/index.ts            host plugin: /rewind|/undo|/snapshot-auto-cleanup
-                        + checkpoint pipeline (tools/execute|post-execute)
-src/rewind.ts           pure planning: target resolution, surface range, candidate listing
-src/snapshot.ts         checkpoint store (disk before-backups, restore/preview, bounded prune)
-src/snapshot-cleanup.ts cleanup policy + plugin-entry config persistence + auto-sweep throttle
-src/session-cwd.ts      session-cwd resolution (fs-tools rule)
-src/locales.ts          host i18n (t() renderer, HostKey)
 src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals;
                         re-exports the client contract (hiddenSeqsOf / targetSeqOfArgs / HiddenChat)
 src/client/popover.ts   mode-selection popover (both-mode impact confirm)

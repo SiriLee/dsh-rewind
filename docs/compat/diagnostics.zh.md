@@ -27,11 +27,10 @@
 | `portals` | 每条消息按钮的挂载问题（如无会话绑定） |
 | `retract` | 插话撤回路径（remove 竞争失败，或 remove 抛错） |
 | `settings` | 快照清理设置卡片 |
-| `hiding` | **保留区**——当前无活跃告警。若未来新增行隐藏诊断，应归属此区域。 |
 
 ## 详细输出开关
 
-`info`/`debug` 级别受 `localStorage['dsh-rewind.debug']` 控制，每次调用读取并按命名空间过滤。在撤下那些复述现象的详细输出后，**恰好剩一条** verbose 行：`boot` 作用域的启动身份行。它**默认关闭**（普通用户控制台保持干净，且它不是异常），排查者需先开启该作用域才能看到：
+`info`/`debug` 级别受 `localStorage['dsh-rewind.debug']` 控制，每次调用读取并按命名空间过滤。仅剩两条受控行：`boot` 启动身份行与 `retract` 竞争失败行。两者**默认关闭**（普通用户控制台保持干净，且都不是异常），排查者需先开启对应作用域才能看到：
 
 ```js
 // 仅启动身份行。
@@ -47,12 +46,12 @@ localStorage['dsh-rewind.debug'] = 'dsh-rewind*'
 delete localStorage['dsh-rewind.debug']
 ```
 
-`error`/`warn` 异常告警**不受**该开关控制——它们总是打印。其余详细输出（所用写入通道、空的隐藏集、每次回退的生命周期行）已撤下：它们重复用户已经看到的现象、无归因增量。
+`error`/`warn` 异常告警**不受**该开关控制——它们总是打印。
 
 ## 采集一段报告
 
 1. 在出问题的页面上复现一次。
-2. 在 DevTools 里把 Console 按 `[dsh-rewind]` 过滤，复制输出（连同插件版本、DSH/内核版本）。
+2. 在 DevTools 里把 Console 按 `dsh-rewind` 过滤，复制输出（连同插件版本、DSH/内核版本）。
 
 `error`/`warn` 异常告警无需任何设置——它们总是打印。若要同时采集启动身份行（`boot`，用于排除「旧 bundle / 宿主未重启」），请先开启详细输出开关（见上），再刷新。
 

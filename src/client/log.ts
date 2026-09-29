@@ -19,7 +19,7 @@
  * Values accepted by the switch (empty/unset = off):
  * - `dsh-rewind*`  — every dsh-rewind namespace.
  * - `dsh-rewind:refill` — just one subsystem (exact match).
- * - `dsh-rewind:refill,dsh-rewind:hiding` — several (comma-separated).
+ * - `dsh-rewind:refill,dsh-rewind:portals` — several (comma-separated).
  *
  * @module dsh-rewind/client/log
  */

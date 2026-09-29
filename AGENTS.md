@@ -30,7 +30,7 @@ them at runtime, so the published tarball does not carry them.
   commands + checkpoint pipeline (`tools/execute` | `post-execute`)
 - `src/rewind.ts` — pure planning: target resolution, surface range, candidate listing
 - `src/snapshot.ts` — checkpoint store (on-disk before-backups, restore/preview, bounded prune)
-- `src/snapshot-cleanup.ts` — cleanup policy + dsh-settings persistence + auto-sweep throttle
+- `src/snapshot-cleanup.ts` — cleanup policy + plugin-entry config persistence + auto-sweep throttle
 - `src/session-cwd.ts` — session working-directory resolution (fs-tools rule)
 - `src/locales.ts` — host i18n (`t()` renderer, `HostKey`)
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation

@@ -73,7 +73,7 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
 
 DSH is still in rc; npm's prerelease matching rules require a peer range to
 share the host version's `[major, minor, patch]` tuple. So `peerDependencies`
-uses one peer tuple per DSH line (e.g. `^0.1.2-rc.1`). The range is
+uses one peer tuple per DSH line (e.g. `^0.2.0-rc.1`). The range is
 conservative: it declares only what was verified, and guarantees nothing
 outside it.
 
@@ -95,8 +95,8 @@ outside it.
   `^0.1.x`); this section can then be deleted.
 - **Declared minimum (`engines.dsh`)**: alongside the peer tuple, each
   release declares the DSH runtime floor under `engines.dsh` (e.g.
-  `>=0.1.2-rc.1`). Nothing reads it on the current line yet, so it is a
-  forward-looking declaration rather than an enforced guard. Bump it in
+  `>=0.2.0-rc.1`). No runtime consumer reads it; its form and its alignment with
+  the peer tuple are pinned by `tests/package-layout.test.ts`. Bump it in
   the same release that changes the peer range; never leave code raised while
   the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is used.
 - **The peers are enforced at startup (`0.1.7-rc.1`)**: DSH checks a profile
@@ -111,15 +111,9 @@ outside it.
 independent of the host; a release declares its DSH line through the peer
 constraint (a single companion tuple), never through the plugin version.
 
-| Plugin version | DSH line | Role (example) |
-| --- | --- | --- |
-| `0.7.x` | `0.1.1` + `0.1.2` (broad) | frozen / EOL |
-| `0.8.x` | `0.1.2-rc.1` (single) | current line |
-| `0.9.x` | `0.1.3` (single) | following line |
-
-The rows are illustrative — the DSH line a release targets is the peer
-constraint, and its npm dist-tag is derived from the version (see above), so
-this model does not track the plugin's own version number.
+The DSH line a release targets is the peer constraint, and its npm dist-tag is
+derived from the version (see above), so this model does not track the plugin's
+own version number.
 
 **Versioning.** A DSH version-line break is a MAJOR bump (incompatible with the
 prior DSH line). Within a line, MINOR/PATCH remain compatible.
@@ -129,11 +123,6 @@ and is always releasable. The currently-shipped stable is cut into a short-lived
 `release/<version>.x` maintenance branch from its release commit; that branch
 receives backported fixes while `main` advances to the next line. The prior
 (broad-compat) line is frozen as a tag, with no branch.
-
-**dist-tag routing.** The release workflow derives the npm dist-tag from the
-version: a stable version publishes to `latest`; a pre-release publishes to the
-dist-tag named by its pre-release identifier (`0.9.0-alpha.1` → `alpha`,
-`0.9.0-rc.1` → `rc`). A pre-release never occupies `latest`.
 
 **Support window / EOL.** A DSH line is supported within a declared window. By
 default the window runs until the next DSH line ships as `latest`; after that

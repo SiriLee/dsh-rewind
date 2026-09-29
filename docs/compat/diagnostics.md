@@ -37,16 +37,14 @@ console filter:
 | `portals` | Per-message button mount issues (e.g. no session binding) |
 | `retract` | The pending-steering retract path (the remove lost the race, or the remove threw) |
 | `settings` | The snapshot-cleanup settings card |
-| `hiding` | **Reserved** — no active alert at present. If a future row-hiding diagnostic is added, it belongs in this region. |
 
 ## Verbose switch
 
 The `info`/`debug` levels are gated by `localStorage['dsh-rewind.debug']`, read
-once per call and filtered by namespace. After the withdrawal of the restating
-verbose detail, exactly **one** verbose line remains: the `boot` scope's startup
-identity line. It is deliberately **off** by default (a normal user's console
-stays clean, and it is not an anomaly), so a reporter enables the scope to see
-it:
+once per call and filtered by namespace. Two gated lines remain: the `boot`
+startup identity line and the `retract` lost-race line. Both are deliberately
+**off** by default (a normal user's console stays clean, and neither is an
+anomaly), so a reporter enables the scope to see them:
 
 ```js
 // Just the startup identity line.
@@ -63,14 +61,12 @@ delete localStorage['dsh-rewind.debug']
 ```
 
 The `error`/`warn` anomaly alerts are **not** gated by this switch — they are
-always printed. The other verbose detail (used write channel, an empty
-hide-set, per-rewind lifecycle lines) has been withdrawn: it re-stated behavior
-the user already sees and carried no attribution.
+always printed.
 
 ## Capturing a report
 
 1. Reproduce once on the affected page.
-2. In DevTools, filter the Console for `[dsh-rewind]` and copy the output
+2. In DevTools, filter the Console for `dsh-rewind` and copy the output
    (with the plugin version and the DSH/kernel version).
 
 The `error`/`warn` anomaly alerts require no setup — they always print. To also

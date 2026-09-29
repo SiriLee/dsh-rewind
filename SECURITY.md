@@ -80,13 +80,13 @@ whose store is **newer** than this build understands is not cleared by it (see
 ## Conversation integrity
 
 The session log is **append-only** — the plugin never deletes or rewrites
-recorded history. A rewind appends a single marker event (an **empty**
-`user/message`) whose `surfaceOp` replaces every surface node after the target.
-The raw log (audit trail, search, `/export`) is untouched — only the
-model-visible surface is cut, so the next request derives its context from the
-target onward. The marker is empty, so it carries no untrusted text into the
-model context; the client hides the `[target, marker]` span from the rendered
-transcript.
+recorded history. A rewind appends a single marker event (a `user/message` whose
+content is the constant `(empty message)` placeholder) whose `surfaceOp`
+replaces every surface node after the target. The raw log (audit trail, search,
+`/export`) is untouched — only the model-visible surface is cut, so the next
+request derives its context from the target onward. The marker's content is a
+constant, so it carries no untrusted text into the model context; the client
+hides the `[target, marker]` span from the rendered transcript.
 
 ## Filesystem containment
 

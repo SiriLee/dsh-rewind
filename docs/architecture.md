@@ -1,9 +1,9 @@
 # Architecture
 
 How dsh-rewind is built: module layering, the rewind pipeline, the checkpoint
-pipeline, the compatibility strategy, and the roadmap. The module map below is
-the same one in `AGENTS.md`; this document adds the wiring between the
-modules. The durable on-disk format is specified separately in
+pipeline, the compatibility strategy, and the roadmap. The module map lives in
+`AGENTS.md`; this document adds the wiring between the modules. The durable
+on-disk format is specified separately in
 `docs/format.md`, the security model in `SECURITY.md`.
 
 ## Purpose
@@ -15,25 +15,8 @@ credentials access.
 
 ## Module layering
 
-```
-src/
-├── index.ts          host plugin: /rewind, /undo, /snapshot-auto-cleanup
-│                     commands + checkpoint pipeline
-├── rewind.ts         pure planning: target parsing, surface-range plan, candidate listing
-├── snapshot.ts       checkpoint store: disk before-backups, journaled restore,
-│                     reconcile / continue / rollback, bounded prune
-├── snapshot-cleanup.ts  cleanup policy + dsh-settings persistence + auto-sweep throttle
-├── session-cwd.ts    session working-directory resolution (fs-tools rule)
-├── locales.ts        host i18n (t() renderer, HostKey)
-└── client/           browser half: per-message ↶ button (portal bridge),
-                     mode popover, hidden-span computation, candidate parsing,
-                     pending interaction, locales, styles
-```
-
-The old marker-update repair line (`/dsh-rewind-fix` and its `rewind-fix.ts` /
-`rewind-marker-repair.ts` / `session-log-io.ts` modules) was a **temporary
-migration tool** for the DSH `0.1.2-rc.1` → `0.1.3` transition: it shipped
-through the `0.9.x` line and is **removed in the `0.10.x` line**.
+The module map is the one in `AGENTS.md` (`Layout at a glance`); this document
+adds the wiring between the modules and does not repeat it.
 
 Two dependency rules keep the design testable:
 
@@ -156,9 +139,6 @@ Ideas under consideration, not commitments:
 - **Multi-process identity/lock**: the current in-flight guard is
   per-process; a cross-process exclusive lock (like the change-ledger
   competitors) would cover multiple host processes on one worktree.
-- **Lazy-commit UX**: an explicit confirm-then-apply step (a pending state)
-  to reduce mis-touch risk on in-window rewinds, which are inherently less
-  reversible than forked branches.
 - **Locale expansion**: client/host copy is zh/en today; the copy layer
   (`src/locales.ts`, `src/client/locales.ts`) is already keyed for more.
 - **Composer re-send polish**: the target text is already refilled after a

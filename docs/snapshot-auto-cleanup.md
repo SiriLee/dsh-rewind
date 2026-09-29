@@ -1,7 +1,5 @@
 # Snapshot cleanup
 
-<!-- docs-scope: applies to DSH <= 0.1.6, where the policy is a dsh-settings document namespace. DSH 0.1.7 stores it as the plugin entry's own live configuration; the 0.1.7 seam is recorded in docs/compat/audit.md and docs/format.md. -->
-
 The plugin saves a backup of each file before it's edited, so you can rewind your
 code to an earlier point. These backups are called **snapshots**, and they're
 grouped by message and stored per session.
@@ -17,14 +15,8 @@ you've stopped using, and now and then remove their snapshots to keep disk usage
 down. It never touches your active session, and it never touches your
 conversation.
 
-**Manual**: even with automatic cleanup off, you can run the cleanup yourself:
-
-- `/snapshot-auto-cleanup run [--apply]` — preview, then actually remove the
-  snapshots of sessions you haven't used for a while.
-- `/snapshot-auto-cleanup run --current [--apply]` — preview, then actually
-  clear the **current** session's snapshots. This resets its rewind history to
-  "from now on" (your conversation is unaffected). If a turn is currently
-  running, the plugin pauses it first, then clears.
+**Manual**: even with automatic cleanup off, you can run the cleanup yourself —
+see [Commands](#commands) below.
 
 ## Commands
 
@@ -43,12 +35,14 @@ whether or not automatic cleanup is on.
 
 ## Settings
 
-The auto-cleanup switch and the idle-day cutoff live in the **dsh-settings configuration document**. View and edit them in the **Settings &gt; Plugins &gt; Plugin configuration &gt; Snapshot cleanup** panel (the auto-cleanup switch and the idle days), or view and set them with the `/snapshot-auto-cleanup` command:
+The auto-cleanup switch and the idle-day cutoff are this plugin entry's own
+configuration. View and edit them on the **Plugins** page, in this plugin's
+configuration card, or with the `/snapshot-auto-cleanup` command:
 
 <img src="../assets/screenshots/cleanup-setting.png" alt="Plugin configuration card: auto cleanup and idle time (days)" width="600">
 
-- `enabled` — whether automatic cleanup runs (default `false`).
-- `maxAgeDays` — how many idle days before a session's snapshots are removed (default `30`). Only positive integers are accepted, so a broken setting can never delete everything.
+- `autoCleanupEnabled` — whether automatic cleanup runs (default `false`).
+- `autoCleanupMaxAgeDays` — how many idle days before a session's snapshots are removed (default `30`). Only positive integers are accepted, so a broken setting can never delete everything.
 
 ## When automatic cleanup runs
 
@@ -67,16 +61,18 @@ can't make it run early. To clean up right now instead of waiting, use
   session history.
 - Automatic cleanup never removes your **active** session's snapshots — only
   sessions that have been idle past the cutoff.
-- `run --current` clears the current session's snapshots. This is one-way for
-  that session's file-rewind history: you can't rewind code to before the clear,
-  but your conversation stays intact, and the session starts recording fresh
+- `run --current` clears the current session's snapshots; if a turn is currently
+  running, the plugin pauses it first, then clears. This is one-way for that
+  session's file-rewind history: you can't rewind code to before the clear, but
+  your conversation stays intact, and the session starts recording fresh
   snapshots from now on.
 
 ## Known limitation
 
-The plugin keeps the most recent **100 messages'** snapshots per session. If you
-rewind or compact a lot in one long session, those 100 slots can be taken up by
-messages that are no longer reachable, so you may find you can't rewind as far
-back as you'd like. (Claude Code behaves the same way.) To get back to a clean
-state, run `/snapshot-auto-cleanup run --current --apply` to clear the current
-session and start fresh.
+The plugin keeps the most recent **100 anchor groups'** snapshots per session (one
+group per user message). If you rewind or compact a lot in one long session,
+those 100 slots can be taken up by messages that are no longer reachable, so you
+may find you can't rewind as far back as you'd like. (Claude Code behaves the
+same way.) To get back to a clean state, run
+`/snapshot-auto-cleanup run --current --apply` to clear the current session and
+start fresh.

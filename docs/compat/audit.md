@@ -112,26 +112,17 @@ the harness issue, its current status, and the plugin's stance, so a future main
 
 ### R-OPENSTEP (rewind part resolved): an unclosed `step` in the log breaks token-meter replay
 
-> **Situation**: once a step is left unclosed, replay rejects any later step activity, so
-> manual `/compact` fails permanently and automatic compaction silently stays disabled (the
-> `agent/pre-step` hook catches and warns). The conversation itself is unaffected — only
-> compaction-basic measures tree-wide. DSH now auto-closes crash-left step/turn/tool
-> boundaries at load (`interruptedTurnClosers`, consumed by the agent-loop's `resumeWith` cold
-> read), so **the crash path is fixed**. The tree has exactly one `append('step/start')`
-> producer, `ReactLoopAgent.turn` in `agent-loop/src/agent.ts`; an unclosed step otherwise
-> comes from a third-party plugin appending `step/start` through the public `Session.append`,
-> or from a hand-edited log. After a crash resume, `ReactLoopAgent.turn` opens a new turn
-> (`append('turn/start')`) without closing the leftover step, so continuing the conversation
-> trips the same check — a rewind is **not** the only trigger.
->
-> **Rewind's part**: the marker is a `user/message` and appends no `step/start`, so a rewind
-> no longer introduces the first trip-wire and the R-OPENSTEP rewind amplifier is closed.
+> **Status**: resolved upstream — DSH auto-closes crash-left step/turn/tool boundaries at load
+> (`interruptedTurnClosers`, consumed by the agent-loop's `resumeWith` cold read). A leftover
+> unclosed step can still come from a third-party plugin appending `step/start` through the public
+> `Session.append`, or from a hand-edited log; when it does, replay rejects later step activity, so
+> `/compact` fails and automatic compaction silently stays disabled. Rewind's part: the marker is a
+> `user/message` and appends no `step/start`, so the rewind amplifier is closed.
 >
 > **Plugin stance**: no guard. A `hasOpenStep` + `planRewind` pre-refusal was implemented and
-> misjudged on **real session logs** (normal rewinds refused, GUI verification broken), so it
-> was reverted — do not re-attempt a plugin-side pre-refusal. The fix direction is upstream
-> (token-meter recovery for unclosed steps), and the residual risk is accepted: that log is
-> already abnormal.
+> misjudged on **real session logs** (normal rewinds refused, GUI verification broken), so it was
+> reverted — do not re-attempt a plugin-side pre-refusal. The fix direction is upstream (token-meter
+> recovery for unclosed steps), and the residual risk is accepted: that log is already abnormal.
 
 ### R-PROMPTCARD (resolved on the 0.1.7 line): the repeated `System prompt` card is filtered out of chat
 
@@ -139,7 +130,8 @@ the harness issue, its current status, and the plugin's stance, so a future main
 > (`packages/client/ui-chat/src/client/contract/chat-visibility.ts`) drops `system-prompt`
 > nodes — and the `permission` command — from the visible chat rows before the row is built,
 > so a rewind on this line adds no prompt row at all; the durable events and the trajectory
-> inspection keep them. #22, #31 and README known issue #4 no longer reproduce.
+> inspection keep them. #22, #31 and the (now removed) repeated `System prompt` card known issue
+> no longer reproduce.
 >
 > **Plugin stance**: still no compensation. The DOM row-hiding seam (`hiddenSeqsOf`) covers
 > withdrawn messages, where hiding is essential, not cosmetic.
@@ -173,21 +165,6 @@ the harness issue, its current status, and the plugin's stance, so a future main
 - telemetry pipeline (`dsh-session-telemetry-otel`) and the attachment provider (`dsh-attachment-local`).
 - Running workflow/jobs cancelled by a rewind: the tool contract requires observing `exec.signal` and settling (`packages/core/tools/src/index.ts`); a rewind triggers the harness's standard cancel, not plugin-specific — statically confirmed, real workflows untested.
 
-## Audit matrix (subsystem × invariant)
-
-| DSH subsystem | I1 | I2 | I3 | I4 | I5 | I6 | I7 | I8 |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Session core (append/surface/deriveMessages) | ✓ | ✓ | ✓ | — | ✓ | — | ✓ | ✓ |
-| token-meter | ✓ | — | ✓ | — | ✓ | — | — | — |
-| compaction (transaction/command/tool-pairing) | ✓ | — | — | — | ✓ | — | — | ✓ |
-| session-stats / projection | — | — | ✓ | ✓ | — | — | — | — |
-| session-title | — | — | — | ✓ | — | — | — | — |
-| goal | — | — | — | ✓ | — | — | — | — |
-| resume / session-query replay | ✓ | — | ✓ | — | — | — | ✓ | — |
-| tool pipeline (snapshot/restore) | — | — | — | — | — | ✓ | — | ✓ |
-| client ordering | — | — | ✓ | — | — | — | ✓ | — |
-| plan-mode | ✓ | — | ✓ | — | — | — | — | ✓ (static) |
-
-✓ = probe passes; — = not applicable. Statuses and stances for the named findings live in the
-sections above; G1 (surface classification via `foldSurface`), G2 (projection checkpoint) and
-G3 (the confirmed-non-defect usage anchor on token-meter) all pass in `compat-gaps.test.ts`.
+Statuses and stances for the named findings live in the sections above; G1 (surface classification
+via `foldSurface`), G2 (projection checkpoint) and G3 (the confirmed-non-defect usage anchor on
+token-meter) all pass in `compat-gaps.test.ts`.

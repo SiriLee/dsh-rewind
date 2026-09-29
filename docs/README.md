@@ -25,7 +25,8 @@ Repo-root docs outside `docs/`: `SECURITY.md` (security model) and
 ## Conventions
 
 - Bilingual docs use the `.md` / `.zh.md` file split (e.g. `contract/client-contract.md`
-  + `contract/client-contract.zh.md`, `release/release.md` + `release/release.zh.md`).
+  + `contract/client-contract.zh.md`); the root pair is the exception — `README.md` is
+  Chinese, `README.en.md` English.
 - `compat/audit.md` is the single source of truth for compatibility conclusions;
   other docs link to it instead of restating them.
 - Cross-links are relative so the whole `docs/` directory stays relocatable — and it
