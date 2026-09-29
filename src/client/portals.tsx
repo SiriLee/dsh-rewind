@@ -439,12 +439,12 @@ const MESSAGE_ATTACHMENT_SELECTOR = '[data-message-attachments]'
  * Locate the actions container of a user/steering seat row — the element the
  * ↶ button portals into (the copy/branch IconActions row).
  *
- * The finder is STRUCTURAL on purpose: no harness attribute marks the actions
- * row on the user seat (the old `data-time-hover-root` marker lived on the
- * per-turn tail footer and is gone in 0.1.6-alpha.2), so the container is
- * located as the direct holder of the copy `<button>` (the `MessageIconActions`
- * container, which mounts that button as a direct child —
- * `MessageIconActions.tsx:83,86`).
+ * The finder is STRUCTURAL on purpose: `MessageIconActions` marks this container
+ * with `data-clock`, which names clock placement rather than the action row (the
+ * old `data-time-hover-root` marker lived on the per-turn tail footer and is
+ * gone in 0.1.6-alpha.2), so the container is located as the direct holder of
+ * the copy `<button>` (the `MessageIconActions` container, which mounts that
+ * button as a direct child).
  *
  * Returns undefined when no qualifying container is found; the caller refuses
  * to portal (never a crash, never a wrong attachment). Exported as a test seam
