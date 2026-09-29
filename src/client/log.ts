@@ -1,25 +1,17 @@
 /**
- * dsh-rewind client logger: a single, namespaced, level-filtered logging
- * channel for every browser-side diagnostic in this plugin.
+ * dsh-rewind client logger: one namespaced, level-filtered channel for every
+ * browser-side diagnostic in this plugin.
  *
- * Design (industry-normal layering, kept dependency-free):
- * - `error` / `warn` are ALWAYS emitted (they are the anomaly guard: rare,
- *   cheap, and must surface even for a user who never touched the switch).
- * - `info` / `debug` are gated by a DEBUG switch and further filtered by
- *   namespace, so verbose detail never floods a normal user's console.
+ * `error` / `warn` are ALWAYS emitted (the anomaly guard: rare, cheap, and
+ * surfaced even for a user who never touched the switch). `info` / `debug` are
+ * gated by the exclusively-own, per-origin `localStorage['dsh-rewind.debug']`
+ * switch and further filtered by namespace. The switch is read on every call
+ * (never cached), so flipping it and reloading takes effect on any published
+ * build without a plugin rebuild.
  *
- * The DEBUG switch is a runtime, per-origin knob read from
- * `localStorage['dsh-rewind.debug']` — the convention-debug-scan pattern
- * (namespace match, comma-separated, `*` wildcard), scoped to an
- * exclusively-own key so it can never enable any other plugin/feature and no
- * other feature can wake this one. Because it is read on every call (never
- * cached), flipping it and reloading takes effect on any published build
- * without a plugin rebuild.
- *
- * Values accepted by the switch (empty/unset = off):
- * - `dsh-rewind*`  — every dsh-rewind namespace.
- * - `dsh-rewind:refill` — just one subsystem (exact match).
- * - `dsh-rewind:refill,dsh-rewind:portals` — several (comma-separated).
+ * Values accepted (empty/unset = off): `dsh-rewind*` — every namespace;
+ * `dsh-rewind:refill` — one subsystem (exact match);
+ * `dsh-rewind:refill,dsh-rewind:portals` — several (comma-separated).
  *
  * @module dsh-rewind/client/log
  */

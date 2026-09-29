@@ -302,11 +302,9 @@ interface DurablePopoverOptions {
 
 /**
  * Render the impact step: show the impact outcome, then confirm/back.
- * Reuses the outcome already fetched when the popover opened (the "both"
- * option is only clickable after that fetch settles) — running a second
+ * Reuses the outcome already fetched when the popover opened — running a second
  * preview command here would re-run the probe and emit a second (now-hidden)
- * command row; a fresh preview is only fetched when the popover-open probe
- * never resolved.
+ * command row.
  */
 function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: () => void, cached?: PreviewOutcome): void {
   const { session, seq, t } = opts
@@ -589,15 +587,11 @@ export function openPopover(opts: PopoverOptions): void {
   popoverEl = root
   disposeOutside = shell.dispose
 
-  // Resolve the "both" mode's availability up front (Claude Code hides the
-  // code-restore options when the checkpoint has no tracked file changes).
-  // `hasFileImpact` reads only the host's machine-readable `impact=<n>`
-  // trailer (locale-independent). EVERY settled probe resolves the modes step:
-  // a success decides has/no changes, and any failure — a rejected admission,
-  // an unmatched line, or a wait that never settled — becomes the error state,
-  // which shows the reason and hides the code-restore entry. The probe must
-  // never leave the step on "checking file changes…" forever
-  // (SiriLee/dsh-rewind#26).
+  // Resolve "both" availability up front (Claude Code hides the code-restore
+  // options when no tracked file changes exist). EVERY settled probe resolves
+  // the modes step: success decides has/no changes, any failure (rejected
+  // admission, unmatched line, never-settled wait) becomes the error state that
+  // shows the reason and hides the entry — never a step stuck on "checking…".
   void (async () => {
     const outcome = await previewImpact(session, chatOf, seq, cb => opts.watchChat(session.sessionId, cb))
     impactOutcome = outcome

@@ -126,6 +126,6 @@
 
 两项限制换来的是：轻量、可预测，以及**只写它确实备份过的内容、绝不做任何猜测**。需要工作区级别的精确历史时，请使用 Git。
 
-## 背景
+## 相关
 
-本文最初为 issue [#5](https://github.com/SiriLee/dsh-rewind/issues/5) 编写，并为 issue [#39](https://github.com/SiriLee/dsh-rewind/issues/39) 进行完善。相关：[SECURITY.md](../../SECURITY.md) · [快照自动清理](../snapshot-auto-cleanup.zh.md)
+[SECURITY.md](../../SECURITY.md) · [快照自动清理](../snapshot-auto-cleanup.zh.md)

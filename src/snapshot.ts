@@ -20,33 +20,9 @@
  * - Because entries live on disk under the dsh data directory, they survive a
  *   host restart, are bounded (the newest 100 anchor groups per session are
  *   kept), and restores read/write the real file system with plain `node:fs`
- *   — independent of the fs service.
- *
- * Security note: this `node:fs` authority is the DSH host authority every host
- * plugin holds — the model-facing fences constrain the model's tools, not this
- * code. The store stays bounded to the model-touched paths, so excluding a
- * file (e.g. `.env`) is a model-permission concern (see `SECURITY.md`).
- *
- * Crash safety (this module's own engineering asset):
- *  - Checkpoint commits are ATOMIC: the sidecar is fully written first, then
- *    the entry JSON is written to a sibling temp file and renamed over the
- *    target, so a host crash mid-write can never leave a readable entry
- *    without its bytes — at worst an unreferenced orphan sidecar, or an inert
- *    `.tmp` leftover that the next commit of the same file overwrites and that
- *    no reader ever picks up.
- *  - Every restore pass is JOURNALED. Before mutating anything the store
- *    captures the pre-restore ("rescue") state of each planned path as a raw
- *    byte copy and persists an intent journal (`journal-<op>.json` in the
- *    session dir) holding only references, then marks each action done as it
- *    is applied. A crash at any point leaves the journal on disk; after a host
- *    restart `reconcileRestores(sessionId)` re-derives from the REAL disk which
- *    paths already match the target and which are still pending (reporting
- *    "restored up to where, what changed"), auto-heals journals whose goal is
- *    already reached, and `continueRestore` / `rollbackRestore` finish the
- *    interrupted op or undo it back to the exact pre-restore state.
- *  - Journal IO is best-effort and never fails a restore: if the journal
- *    cannot be written the restore proceeds exactly like the pre-journal code
- *    (crash safety degrades, behavior does not).
+ *   — independent of the fs service. The atomic-commit and journaled-restore
+ * guarantees, the security model and the in-store layout are specified in
+ * `SECURITY.md` and `docs/format.md`.
  *
  * Restore semantics (identical to Claude Code): for every path with entries
  * anchored at or after the target message, apply the EARLIEST entry — write
@@ -54,13 +30,8 @@
  * creation. Symlinked and hard-linked paths are skipped and reported, never
  * written through.
  *
- * Format compatibility: entries written before this module stored bytes
- * (released v1: `{callId, anchorSeq, path, before: string | null}` plus the
- * `restore-journal-` prefix) are still READ — their string content is the
- * exact UTF-8 bytes it always was, except for records that were decoded
- * lossily (they contain U+FFFD: comparable, but never written back). New
- * writes are always the byte format; the marker contract that keeps a
- * downgraded v1 build from touching the workspace lives in
+ * Released-v1 entries stay readable and the byte format is specified in
+ * `docs/format.md`; the downgrade marker contract lives in
  * `tests/downgrade-safety.test.ts`.
  *
  * @module dsh-rewind/snapshot

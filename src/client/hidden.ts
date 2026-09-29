@@ -73,9 +73,9 @@ export function chatSnapshotOf(
  * filling the composer after a withdraw. Accepts BOTH `user` and `steering`
  * nodes: a plan-mode (`/plan <text>`) input is delivered through the agent
  * inbox next-step and claimed, so it renders as `steering`, and its text must
- * still return to the composer (`portals.tsx` `runRewindAndFill`) — the old
- * `user`-only read silently left it empty. State absent → undefined; a message
- * with no text blocks → ''. Same text-blocks join the candidate side uses.
+ * still return to the composer (`portals.tsx` `runRewindAndFill`). State absent
+ * → undefined; a message with no text blocks → ''. Same text-blocks join the
+ * candidate side uses.
  */
 export function messageTextAt(chat: HiddenChat | undefined, seq: number): string | undefined {
   if (chat === undefined) return undefined
@@ -283,26 +283,17 @@ function cutsContain(cuts: readonly CutSpan[], seq: number): boolean {
 }
 
 /**
- * Anchor seqs that must be hidden from the rendered transcript so the user
- * sees the conversation as the agent sees it: every impact-preview flow node
- * (pending, succeeded, or errored — it only exists to feed the popover) and
- * every SUCCESSFUL executed `/rewind` command row, plus every message
- * withdrawn by a rewind — the target message itself, everything after it, and
- * the (unrendered) marker.
+ * Anchor seqs that must be hidden from the rendered transcript so the user sees
+ * the conversation as the agent sees it: every impact-preview flow node (it only
+ * exists to feed the popover) and every SUCCESSFUL executed `/rewind` command
+ * row, plus every message a rewind withdrew — the target, everything after it,
+ * and the (unrendered) marker.
  *
- * Each executed rewind cuts ONE span `[target, marker]`: the target message
- * and everything after it, up to the marker appended at rewind time. Spans are
- * kept SEPARATE (never collapsed to a single `[min target, max marker]`)
- * because a later rewind to a LATER point leaves a visible gap of new traffic
- * between the earlier marker and the later target — collapsing the spans would
- * hide that still-on-surface gap. Endpoints come from the command nodes:
- * `sourceEventSeq` is the marker's log seq, and the outcome text carries the
- * target seq.
- *
- * The spans are coalesced into disjoint ascending ranges before the membership
- * test, so a node costs one binary search instead of a scan of every rewind's
- * range: that keeps the walk linear in the nodes rather than in nodes ×
- * rewinds, on a pass that runs for every chat mutation.
+ * Each executed rewind cuts ONE span `[target, marker]`, and callers must keep
+ * the spans SEPARATE: collapsing them to `[min target, max marker]` would hide a
+ * still-on-surface gap of new traffic between an earlier marker and a later
+ * target. Endpoints come from the command nodes (`sourceEventSeq` is the
+ * marker's log seq; the outcome text carries the target seq).
  */
 export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
   const hidden = new Set<number>()

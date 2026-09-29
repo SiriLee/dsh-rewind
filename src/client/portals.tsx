@@ -492,14 +492,8 @@ export function actionsContainerOf(row: HTMLElement | undefined): HTMLElement | 
  * withdrawn "command executed" tool group on screen as an empty expandable row
  * after every member below it had been hidden.
  *
- * Cost stays O(seats) per refresh: the caller queries the batch once, and each
- * shell decision reuses the member outcomes already computed here — no second
- * document scan, and no per-shell subtree walk.
- *
- * Every hidden element carries `data-dsh-rewind-hidden`, so DevTools, other DOM
- * plugins and tests can tell a rewind-hide apart from a collapse/filter hide; a
- * re-created row has no marker and is re-judged, and a row that leaves the
- * withdrawn span is shown again.
+ * Every hidden element carries `data-dsh-rewind-hidden` (see
+ * `docs/contract/client-contract.md`).
  *
  * @param chat - the live chat snapshot the seats belong to.
  * @param seats - this refresh's seat batch (every `[data-chat-anchor-key]`).
@@ -537,15 +531,7 @@ export function hideWithdrawnSeats(
       delete seat.dataset.dshRewindHidden
       hidden.delete(seat)
     }
-    // Only a real chat node seat is a group member: `ChatNodeSeat` is the one
-    // shape that writes `data-chat-node-key` beside the anchor key. A nested
-    // decoration — the tool call tree's own `call:<callId>` row, or any other
-    // anchor-only element — resolves to no chat node, so it must not vote here:
-    // counting one as "still live" is what left a fully withdrawn "command
-    // executed" shell on screen as an empty expandable row after every member
-    // below it had been hidden.
     if (seat.dataset.chatNodeKey === undefined) continue
-    // The shell is an ancestor of the seat, so its own hide is applied below.
     const shell = seat.parentElement?.closest<HTMLElement>(GROUP_SHELL_SELECTOR)
     if (shell === null || shell === undefined) continue
     shells.set(shell, (shells.get(shell) ?? true) && withdrawn)

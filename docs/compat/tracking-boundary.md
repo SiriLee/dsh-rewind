@@ -212,9 +212,6 @@ What the two limitations buy is: lightweight, predictable, and **only ever writi
 back content it actually backed up, never a guess**. For precise workspace-level
 history, use Git.
 
-## Background
+## See also
 
-This document was originally written for issue
-[#5](https://github.com/SiriLee/dsh-rewind/issues/5) and completed for issue
-[#39](https://github.com/SiriLee/dsh-rewind/issues/39). See also:
 [SECURITY.md](../../SECURITY.md) · [Snapshot auto-cleanup](../snapshot-auto-cleanup.md)

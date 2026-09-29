@@ -1,28 +1,16 @@
 /**
  * dsh-rewind client half: the `/rewind` command decoration, the locale
  * registration, and the session-scoped portal bridge that renders the
- * per-message ↶ rewind button (see
- * `portals.tsx` for the button itself).
+ * per-message ↶ rewind button (`portals.tsx` owns the button and the popover).
  *
- * The button is NOT injected by hand into the DOM anymore: the plugin
- * registers a bridge into the harness's `conversation.session.header.actions`
- * list slot, and that bridge portals a React button into every user message's
- * IconActions row — the same rendering family as the copy button (a React
- * child of the actions row), without touching any harness source. The
- * registration is typed structurally (see `SlotsLike` in portals.tsx), so the
- * plugin never imports conversation UI types and survives harness version
- * drift.
- *
- * The text-driven flow is the harness's STANDARD command decoration
- * (`ctx.commandUi.decorate`): a bare `/rewind` (or its alias `/undo`) —
- * picked from the slash-menu completion, or typed in full and Entered —
- * opens the harness's own popupSelect shell (search, ↑↓/Enter, Esc) listing
- * the rewind candidates instead of executing the command. Picking one
- * continues the SAME flow as the ↶ button: the mode popover, both-impact
- * confirmation, execution, row hiding and the composer refill
- * (`runRewindAndFill`). The parameterized forms (`/rewind @<seq> chat|both`,
- * `/rewind preview …`) stay internal channels the ↶ button and the popover
- * drive through `session.command`.
+ * The button registers through the harness's
+ * `conversation.session.header.actions` slot — a typed structural registration,
+ * so the plugin imports no conversation UI types and survives harness drift.
+ * The command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or
+ * its alias `/undo`) open the harness's own popupSelect instead of executing;
+ * the parameterized `@<seq>` / `preview` forms stay internal channels the
+ * button and the popover drive. The exported contract is specified in
+ * `docs/contract/client-contract.md`.
  *
  * @module dsh-rewind/client
  */
