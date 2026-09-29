@@ -84,7 +84,7 @@ export type PortalTarget =
       readonly container: HTMLElement
       /** The host inbox occurrence the retract button addresses. */
       readonly itemId: string
-      /** Complete editable text; null when the message contains non-text blocks. */
+      /** Complete editable text; null when the message contains no text block. */
       readonly text: string | null
       readonly preview: string
     }
@@ -432,6 +432,9 @@ export function resolveSeatAnchorSeq(
 /** Pending steering bubble rows (Host-authoritative pre-admission projection). */
 const PENDING_SEAT_SELECTOR = '[data-pending-steering]'
 
+/** The message-attachment block shared by user, steering and pending bubbles. */
+const MESSAGE_ATTACHMENT_SELECTOR = '[data-message-attachments]'
+
 /**
  * Locate the actions container of a user/steering seat row — the element the
  * ↶ button portals into (the copy/branch IconActions row).
@@ -655,21 +658,32 @@ function inboxOf(session: SessionFace): InboxLike | undefined {
 const INBOX_PROJECTION = 'inbox'
 
 /**
- * The pending bubble row's message text EXCLUDING its trailing actions
- * container. The harness copy button inside that container wraps its label in
- * a Tooltip whose bubble mounts (hover, delayMs=0) as a DOM node inside the
- * row — so the full row `textContent` flips between "message" and
- * "message+Copy" with the mouse. Reading the bubble text from a CLONE (the
- * live row is never touched) keeps the strict equality in `matchPendingRows`
- * stable while the user hovers the action buttons.
+ * The pending bubble row's compared text and its message-attachment block
+ * count, read from a CLONE (the live row is never touched).
+ *
+ * Both the actions container and the message-attachment block are excluded from
+ * the text: the copy button's Tooltip mounts its label inside that button, and
+ * the attachment block renders text of its own (a file name/size, a lone
+ * image's loading label) that no inbox row reproduces. The block is counted
+ * instead, as the attachment half of the match key (`matchPendingRows`).
+ *
+ * The clone's counterpart is taken by query position, not by position among the
+ * row's children: the harness renders the attachment block BEFORE the message
+ * bubble, so "drop the first child" would drop the message text.
+ *
+ * @param row - one rendered `[data-pending-steering]` row.
+ * @returns the compared text and the attachment block count.
  */
-function bubbleTextOf(row: HTMLElement): string {
+export function bubbleTextOf(row: HTMLElement): { readonly text: string; readonly attachments: number } {
   const clone = row.cloneNode(true) as HTMLElement
   // The actions container is the last child of the pending bubble row. If the
   // harness structure ever changes, the clone keeps the extra text and the
   // strict match degrades to no button (never a wrong attachment).
   clone.lastElementChild?.remove()
-  return clone.textContent ?? ''
+  const originals = row.querySelectorAll(MESSAGE_ATTACHMENT_SELECTOR)
+  const copies = clone.querySelectorAll(MESSAGE_ATTACHMENT_SELECTOR)
+  for (let i = 0; i < copies.length; i++) copies[i]!.remove()
+  return { text: clone.textContent ?? '', attachments: originals.length }
 }
 
 /**
@@ -689,10 +703,7 @@ function collectPendingTargets(snapshot: SessionKindLike, steering: readonly Pen
   if (snapshot.subagent !== null) return []
   if (steering.length === 0) return []
   const rows = Array.from(document.querySelectorAll<HTMLElement>(PENDING_SEAT_SELECTOR))
-  const matched = matchPendingRows(
-    rows.map((row) => ({ text: bubbleTextOf(row) })),
-    steering,
-  )
+  const matched = matchPendingRows(rows.map(bubbleTextOf), steering)
   const targets: PortalTarget[] = []
   for (let i = 0; i < matched.length; i++) {
     const itemId = matched[i]!

@@ -18,7 +18,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { ChatConversationViewNode } from '../src/client/hidden.ts'
 import {
-  actionsContainerOf, collectDurableTargets, collectTargets, hideWithdrawnSeats, isRewindInertSession,
+  actionsContainerOf, bubbleTextOf, collectDurableTargets, collectTargets, hideWithdrawnSeats, isRewindInertSession,
   resolveSeatAnchorSeq,
 } from '../src/client/portals.tsx'
 import { hiddenSeqsOf, type HiddenChat } from '../src/client/hidden.ts'
@@ -225,6 +225,44 @@ describe('actionsContainerOf (structural finder)', () => {
     const row = document.createElement('div')
     document.body.appendChild(row)
     expect(actionsContainerOf(row)).toBeUndefined()
+  })
+})
+
+describe('bubbleTextOf (pending row compared text)', () => {
+  /**
+   * Append a pending steering row in the harness's real shape: the attachment
+   * block FIRST (it renders before the message bubble), the bubble, then the
+   * actions container holding the copy button. The attachment block's own text
+   * stands in for a file card or an image's loading label.
+   */
+  function addPendingRowWithAttachment(bubble: string, attachment: string): HTMLElement {
+    const row = document.createElement('div')
+    row.dataset.pendingSteering = ''
+    const attachments = document.createElement('div')
+    attachments.dataset.messageAttachments = ''
+    attachments.textContent = attachment
+    const message = document.createElement('div')
+    message.textContent = bubble
+    const actions = document.createElement('div')
+    actions.dataset.clock = 'start'
+    const button = document.createElement('button')
+    button.textContent = 'Copy'
+    actions.appendChild(button)
+    row.append(attachments, message, actions)
+    document.body.appendChild(row)
+    return row
+  }
+
+  it('excludes the attachment block and the actions container from the text', () => {
+    const row = addPendingRowWithAttachment('look at this', 'LICENSE 1.0 KB')
+    expect(bubbleTextOf(row)).toEqual({ text: 'look at this', attachments: 1 })
+  })
+
+  it('keeps the message text of an attachment-only row empty but counted', () => {
+    // A lone image renders its loading label until the bytes resolve; that
+    // label is the attachment block's text, never the message's.
+    const row = addPendingRowWithAttachment('', 'loading…')
+    expect(bubbleTextOf(row)).toEqual({ text: '', attachments: 1 })
   })
 })
 
