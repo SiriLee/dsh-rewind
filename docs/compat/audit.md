@@ -8,7 +8,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.2.0-rc.1` (the peers declare the matching range).
+> Targeted version: npm `@deepseek-ai/*@0.2.0-rc.2` (the peers declare the matching range).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: one peer tuple per DSH line, declaring only what was verified — the
@@ -46,7 +46,7 @@ legacy branch).
 | I6 tool pipeline | before-snapshot capture/commit/restore is correct (existing `snapshot.test.ts` + `verify-host` 4–8) for the tracked tools `write` / `edit` — `str_replace_editor` is an optional DSH package that stopped being a default tool in DSH 0.1.3, so it is not tracked; cancellation timing never hangs | `verify-host` 4–9 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
 | I8 runtime safety | `rewind`/`compact` combinations never leave a dangling step/turn frame | `verify-host` 13 |
-| I9 tool-update projection | rc.2 folds mid-conversation tool additions from the whole log while a rewind cuts only the surface: after a withdrawal no `tool-addition`/`tool-removal` block reaches the provider and the current declarations stay complete | `compat-tool-updates` I9 |
+| I9 tool-update projection | `0.1.7-rc.2` folds mid-conversation tool additions from the whole log while a rewind cuts only the surface: after a withdrawal no `tool-addition`/`tool-removal` block reaches the provider and the current declarations stay complete | `compat-tool-updates` I9 |
 
 ## Verified-compatible surfaces (probes pass)
 
@@ -116,13 +116,13 @@ the harness issue, its current status, and the plugin's stance, so a future main
 > manual `/compact` fails permanently and automatic compaction silently stays disabled (the
 > `agent/pre-step` hook catches and warns). The conversation itself is unaffected — only
 > compaction-basic measures tree-wide. DSH now auto-closes crash-left step/turn/tool
-> boundaries at load (`interruptedTurnClosers`, consumed by
-> `packages/core/agent-loop/src/index.ts:907`), so **the crash path is fixed**. The tree has
-> exactly one `append('step/start')` producer, `agent-loop/src/agent.ts:303`; an unclosed step
-> otherwise comes from a third-party plugin appending `step/start` through the public
-> `Session.append`, or from a hand-edited log. After a crash resume, `turn()` opens a new turn
-> (`agent.ts:277-283`) without closing the leftover step, so continuing the conversation trips
-> the same check — a rewind is **not** the only trigger.
+> boundaries at load (`interruptedTurnClosers`, consumed by the agent-loop's `resumeWith` cold
+> read), so **the crash path is fixed**. The tree has exactly one `append('step/start')`
+> producer, `ReactLoopAgent.turn` in `agent-loop/src/agent.ts`; an unclosed step otherwise
+> comes from a third-party plugin appending `step/start` through the public `Session.append`,
+> or from a hand-edited log. After a crash resume, `ReactLoopAgent.turn` opens a new turn
+> (`append('turn/start')`) without closing the leftover step, so continuing the conversation
+> trips the same check — a rewind is **not** the only trigger.
 >
 > **Rewind's part**: the marker is a `user/message` and appends no `step/start`, so a rewind
 > no longer introduces the first trip-wire and the R-OPENSTEP rewind amplifier is closed.
@@ -147,8 +147,9 @@ the harness issue, its current status, and the plugin's stance, so a future main
 ### R-PANELKEYS: the panel keyboard stays the plugin's own
 
 > **Situation**: on Web, Escape, Tab, the four arrows, and Enter without Alt are
-> platform-reserved — inline in the shortcuts `bindingIssue` list, with no exported form — so
-> neither a plugin nor a user may bind them and there is nothing to read and follow. `Menu`
+> platform-reserved. The predicate is exported (`bindingIssue` from
+> `@deepseek-ai/dsh-client-shortcuts/protocol`), but a reserved binding is still refused, so
+> neither a plugin nor a user may bind them. `Menu`
 > is the dropdown primitive, while the harness's command-option panel (`ui-commands`'
 > popupSelect) renders `MenuSurface` plus its own controller with `role="listbox"`/
 > `role="option"`. `ui-commands`' `settle()` also calls `focusComposer()` unconditionally
