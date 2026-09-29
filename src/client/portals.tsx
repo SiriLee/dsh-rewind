@@ -676,13 +676,18 @@ const INBOX_PROJECTION = 'inbox'
  */
 export function bubbleTextOf(row: HTMLElement): { readonly text: string; readonly attachments: number } {
   const clone = row.cloneNode(true) as HTMLElement
-  // The actions container is the last child of the pending bubble row. If the
-  // harness structure ever changes, the clone keeps the extra text and the
-  // strict match degrades to no button (never a wrong attachment).
+  // Drop the actions container: the copy button's Tooltip mounts its label
+  // inside that button, so the row's text flips with the mouse. A future
+  // harness structure change leaves extra text and the match then degrades to
+  // no button — never to a wrong one.
   clone.lastElementChild?.remove()
+  // Drop the message-attachment block for the same reason (a file name, an
+  // image's loading label) and count it instead. Query position identifies the
+  // clone's copies; the harness renders this block BEFORE the message bubble,
+  // so "drop the first child" would drop the message text.
   const originals = row.querySelectorAll(MESSAGE_ATTACHMENT_SELECTOR)
   const copies = clone.querySelectorAll(MESSAGE_ATTACHMENT_SELECTOR)
-  for (let i = 0; i < copies.length; i++) copies[i]!.remove()
+  for (let index = 0; index < copies.length; index++) copies[index]?.remove()
   return { text: clone.textContent ?? '', attachments: originals.length }
 }
 

@@ -174,8 +174,8 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
     expect(item!.preview.startsWith('🙂'.repeat(200))).toBe(true)
   })
 
-  it('marks a non-text block by its type in the preview', () => {
+  it('leaves the preview empty for a message with no text block', () => {
     const row: InboxMessageLike = { id: 'tool', source: { kind: 'user' }, content: [{ type: 'tool-call' }] }
-    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, attachments: 1, preview: '[tool-call]' }])
+    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, attachments: 1, preview: '' }])
   })
 })

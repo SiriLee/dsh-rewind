@@ -5,15 +5,12 @@
  * Both sides follow the same host order, so index-primary matching is reliable;
  * the match key is still verified per row, and a row that fails (or has no
  * counterpart) is skipped INDIVIDUALLY: one bad row never takes down the other
- * rows' buttons. The key is `(text, attachment count)`: a text-only row must
- * match its text exactly, while an attachment-bearing row matches on the count,
- * because its rendered attachment block contributes text (a file name, an
- * image's loading label) that no inbox row reproduces.
+ * rows' buttons. The key is `(text, attachment count)`: exact text for a
+ * text-only message, the count for one that carries attachments — whose
+ * rendered attachment block contributes text no inbox row reproduces.
  *
- * The compared text excludes the bubble's actions container — the copy
- * button's Tooltip mounts its label inside that button, so the row's
- * `textContent` flips with the mouse — and the message-attachment block (see
- * `bubbleTextOf` in portals.tsx).
+ * The compared text excludes the bubble's actions container and its
+ * message-attachment block (see `bubbleTextOf` in portals.tsx).
  *
  * The browser half lives in `portals.tsx`; this module stays DOM-free so the
  * matching contract is unit-testable in a plain node environment.
@@ -96,19 +93,16 @@ function attachmentsCountOf(content: readonly InboxBlockLike[]): number {
 }
 
 /**
- * Space-collapsed preview of one inbox row, excluding image/file blocks and
- * truncated to {@link QUEUE_PREVIEW_CHARS} code points. Mirror of the harness
- * QueueDock's `previewOf`.
- * @param content - the row's wire content blocks.
+ * Space-collapsed preview of one inbox row, truncated to
+ * {@link QUEUE_PREVIEW_CHARS} code points, built from the row's own text so it
+ * never repeats a block the text already excludes (an attachment). A message
+ * with no text block has an empty preview.
+ * @param text - the row's complete text (see `textOf`).
  * @returns the preview text.
  */
-function previewOf(content: readonly InboxBlockLike[]): string {
-  const flat = content
-    .filter(block => block.type !== 'image' && block.type !== 'file')
-    .map(block => (block.type === 'text' ? block.text ?? '' : `[${block.type}]`))
-    .join(' ').replace(/\s+/g, ' ').trim()
-  const chars = Array.from(flat)
-  return chars.length > QUEUE_PREVIEW_CHARS ? `${chars.slice(0, QUEUE_PREVIEW_CHARS).join('')}…` : flat
+function previewOf(text: string | null): string {
+  const chars = Array.from((text ?? '').replace(/\s+/g, ' ').trim())
+  return chars.length > QUEUE_PREVIEW_CHARS ? `${chars.slice(0, QUEUE_PREVIEW_CHARS).join('')}…` : chars.join('')
 }
 
 /**
@@ -128,12 +122,15 @@ function previewOf(content: readonly InboxBlockLike[]): string {
 export function steeringItemsOf(nextStep: readonly InboxMessageLike[] | undefined): readonly PendingSteeringItem[] {
   return (nextStep ?? [])
     .filter(item => item.source?.kind === 'user')
-    .map(item => ({
-      id: item.id,
-      text: textOf(item.content),
-      attachments: attachmentsCountOf(item.content),
-      preview: previewOf(item.content),
-    }))
+    .map((item) => {
+      const text = textOf(item.content)
+      return {
+        id: item.id,
+        text,
+        attachments: attachmentsCountOf(item.content),
+        preview: previewOf(text),
+      }
+    })
 }
 
 /**
