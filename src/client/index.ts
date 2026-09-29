@@ -245,6 +245,7 @@ export function apply(ctx: ClientContext): void {
       const conversation = (ctx as { get(name: string): unknown }).get('conversation') as {
         input?: { for(actx: unknown): { addAttachments(ids: readonly string[]): boolean } }
         createDrafts?: (id: SessionId, files: readonly File[]) => readonly { id: string }[]
+        releaseDraftAttachments?: (drafts: readonly { id: string }[]) => void
       } | undefined
       const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
       if (ui?.imageUrl === undefined || conversation?.input === undefined || conversation.createDrafts === undefined || scope === undefined) {
@@ -268,9 +269,14 @@ export function apply(ctx: ClientContext): void {
       }
       if (files.length === 0) return
       try {
-        const ids = conversation.createDrafts(sessionId as SessionId, files).map(draft => draft.id)
-        const admitted = conversation.input.for(scope).addAttachments(ids)
-        if (!admitted) rewindLog.warn('refill', `composer refused ${ids.length} restored image(s) (busy)`)
+        const drafts = conversation.createDrafts(sessionId as SessionId, files)
+        const admitted = conversation.input.for(scope).addAttachments(drafts.map(draft => draft.id))
+        if (!admitted) {
+          // A busy admission locks the composer; release what it refused, as the
+          // harness's own drop path does.
+          rewindLog.warn('refill', `composer refused ${drafts.length} restored image(s) (busy)`)
+          conversation.releaseDraftAttachments?.(drafts)
+        }
       } catch (error) {
         rewindLog.warn('refill', 'image restore threw', error)
       }
