@@ -3,27 +3,14 @@
  * No I/O and no `Session` dependency — everything derives from the event log
  * and the ordered surface, so this module stays unit-testable.
  *
- * Rewind semantics (see README): rewinding to a user message appends a marker
- * node into the session log whose `surfaceOp` replaces every surface node
- * AFTER the target with itself. The log (the audit trail and the rendered
- * transcript) is untouched; only the model-visible surface is cut, so the
- * next request derives its context from the target message onward.
- *
- * Marker shape (v4): the marker is a `user/message` carrying a replace
- * `surfaceOp` and the producer-owned source `{ kind: 'dsh-rewind' }` (see
- * `marker.ts`) — a single event:
- *
- *   user/message (marker content) → { surfaceOp {replace, startSeq, endSeq} }
- *
- * v3 reserves surface `replace` to a node that cites every shadowed seq via
- * `sourceEventSeqs`, and `assistant/message` can no longer carry
- * `sourceEventSeqs` (it now embeds its provider stream instead) — so the
- * replacement node must be a `user/message`, exactly as /compact's checkpoint
- * is. No ghost `step/start`…`step/end` frame is needed: the token-meter's
- * step state machine ignores `user/message`, and the session invariant
- * (`invariant.ts`) imposes no open-turn requirement on it, so the marker is
- * appended while idle, outside any turn. It sits at the surface tail as the
- * model-visible "cut point" — a present user turn in derived history.
+ * Rewind semantics: rewinding to a user message appends a marker node into the
+ * session log whose `surfaceOp` replaces every surface node AFTER the target
+ * with itself. The log (audit trail, rendered transcript) is untouched; only
+ * the model-visible surface is cut, so the next request derives its context
+ * from the target message onward. The marker is a `user/message` carrying a
+ * replace `surfaceOp` and the producer-owned source `{ kind: 'dsh-rewind' }`
+ * (see `marker.ts`); the shape's invariants and history are documented in
+ * `docs/architecture.md`.
  *
  * @module dsh-rewind/rewind
  */

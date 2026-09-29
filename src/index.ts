@@ -4,17 +4,9 @@
  * lives in `src/client/`).
  *
  * Rewind mechanism: planning is pure (`src/rewind.ts`); execution appends a
- * marker `user/message` into the session log whose `surfaceOp` replaces every
- * surface node after the target message with the marker. The append-only log
- * (and the rendered transcript) is untouched — only the model-visible surface
- * is cut, so the next request derives its context from the target onward.
- * The marker is a `user/message` carrying the shadowed-seq citations
- * (`sourceEventSeqs`): v3 reserves surface `replace` to a node that cites
- * every shadowed seq, and `assistant/message` can no longer carry those — so
- * the replacement node is a `user/message`, exactly as /compact's checkpoint
- * is. It derives to itself (a present user turn), so the marker stays as the
- * surface-tail cut point rather than vanishing.
- *
+ * marker `user/message` whose `surfaceOp` replaces every surface node after the
+ * target with itself, cutting only the model-visible surface
+ * (`docs/architecture.md`).
  *
  * File restore (mode `both`) follows Claude Code's checkpointing: the plugin
  * backs up each tracked write-class edit BEFORE it happens (at the
@@ -424,13 +416,10 @@ const REWIND_MARKER_CONTENT: ContentBlock[] = [{ type: 'text', text: '(empty mes
 /**
  * Build the rewind marker: a `user/message` carrying the surface-replace op.
  * Surface `replace` belongs to the node that cites the shadowed seqs via
- * `sourceEventSeqs`; a `user/message` is the only surface type that can do so
- * (assistant/message embeds its stream and cannot cite sources; tool/result
- * is restricted to single-node rewrites). The source is the producer-owned
- * `{ kind: 'dsh-rewind' }` (see `marker.ts`). The marker is appended while
- * idle, outside any turn — no ghost `step/start`…`step/end` frame is needed,
- * because the token-meter's step machine ignores `user/message` and the
- * session invariant imposes no open-turn requirement on it.
+ * `sourceEventSeqs`, and `user/message` is the only surface type that can do so
+ * (the source is the producer-owned `{ kind: 'dsh-rewind' }`, see `marker.ts`).
+ * It is appended while idle, outside any turn — `docs/architecture.md` records
+ * why that needs no step frame.
  */
 function buildMarker(): UserMessage {
   return createUserMessage({
@@ -700,17 +689,6 @@ async function executeRewind(
     const marker = buildMarker()
     let event: ReturnType<Session['append']>
     try {
-      // The marker is a `user/message` carrying the surface-replace op.
-      // v3 keeps surface `replace` for the one node that cites every shadowed
-      // seq via `sourceEventSeqs`; `assistant/message` can no longer carry
-      // those (it now embeds its provider stream), so the replacement node
-      // must be a `user/message` — exactly as /compact's checkpoint is. The
-      // marker is appended while idle, outside any turn, with NO ghost step
-      // frame: the token-meter's step machine ignores `user/message`, and the
-      // session invariant imposes no open-turn requirement on it. It derives
-      // to itself (a present user turn), so it stays only as the surface-tail
-      // cut point — the model-visible surface ends before the withdrawn
-      // messages.
       event = agent.session.append('user/message', marker, {
         surfaceOp: { op: 'replace', startSeq: plan.surfaceStart as SessionSeq, endSeq: plan.surfaceEnd as SessionSeq },
         sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],
