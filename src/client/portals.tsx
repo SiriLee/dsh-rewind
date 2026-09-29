@@ -54,7 +54,7 @@ import {
 import { createPortal } from 'react-dom'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { UserMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
+import { hiddenSeqsOf, isExecutedRewindCommand, messageAttachmentsAt, messageTextAt, type ChatOf, type ChatWatch, type HiddenChat, type MessageImageRef } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
@@ -118,6 +118,13 @@ export interface RewindBridgeDeps {
    * Session-scoped so the refill only lands in the session that just rewound.
    */
   readonly setComposerText: (sessionId: string, text: string) => boolean
+  /**
+   * Session-aware image restorer (see `restoreImages` in index.ts): re-adds
+   * a withdrawn message's durable image references to that session's
+   * composer draft so a rewind of an image-bearing message does not lose
+   * the pictures. Optional — absent degrades to the text-only refill.
+   */
+  readonly restoreImages?: (sessionId: string, images: readonly MessageImageRef[]) => Promise<void>
 }
 
 /** Structural face of the runtime slot service (see the module doc). */
@@ -258,6 +265,7 @@ export async function runRewindAndFill(
   chatOf: ChatOf,
   watchChat: ChatWatch,
   setComposerText: (sessionId: string, text: string) => boolean,
+  restoreImages?: (sessionId: string, images: readonly MessageImageRef[]) => Promise<void>,
 ): Promise<void> {
   // Exclude already-present executed-rewind nodes for this target BEFORE
   // issuing the command: a repeated rewind of the same message must wait
@@ -312,11 +320,25 @@ export async function runRewindAndFill(
     return
   }
   let text: string | undefined
+  let images: readonly MessageImageRef[] | undefined
   try {
-    text = messageTextAt(chatOf(session), seq)
+    const chat = chatOf(session)
+    text = messageTextAt(chat, seq)
+    images = messageAttachmentsAt(chat, seq)
   } catch (error) {
-    rewindLog.warn('refill', `reading target text for @${seq} threw`, error)
+    rewindLog.warn('refill', `reading target content for @${seq} threw`, error)
     return
+  }
+  // Restore the withdrawn message's images FIRST: adding draft attachments
+  // never clobbers an in-progress draft, so this is NOT gated by the
+  // empty-composer guard below. Best-effort — a restore failure leaves the
+  // text refill intact (the image stays in the hidden history message).
+  if (restoreImages !== undefined && images !== undefined && images.length > 0) {
+    try {
+      await restoreImages(session.sessionId, images)
+    } catch (error) {
+      rewindLog.warn('refill', `image restore for @${seq} threw`, error)
+    }
   }
   if (text === undefined || text === '') {
     return
@@ -721,7 +743,7 @@ interface RewindPortalsProps extends RewindBridgeDeps {
  * their actions containers) and the session's `inbox` projection (the pending
  * occurrences — see `syncInboxSubscription`).
  */
-export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession, watchChat, t, subscribeLocale, setComposerText }: RewindPortalsProps): ReactNode {
+export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession, watchChat, t, subscribeLocale, setComposerText, restoreImages }: RewindPortalsProps): ReactNode {
   const [targets, setTargets] = useState<readonly PortalTarget[]>([])
   // Rows we have hidden; re-shown when they leave the withdrawn span.
   const hidden = useRef(new WeakSet<HTMLElement>())
@@ -859,6 +881,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
           watchChat={watchChat}
           isMainViewSession={isMainViewSession}
           setComposerText={setComposerText}
+          restoreImages={restoreImages}
           t={t}
         />
       ),
@@ -875,11 +898,12 @@ interface RewindButtonProps {
   readonly watchChat: ChatWatch
   readonly isMainViewSession: (sessionId: string) => boolean
   readonly setComposerText: (sessionId: string, text: string) => boolean
+  readonly restoreImages?: (sessionId: string, images: readonly MessageImageRef[]) => Promise<void>
   readonly t: Translate
 }
 
 /** The per-message ↶ button (28px, matching the harness IconActions). */
-function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, isMainViewSession, setComposerText, t }: RewindButtonProps): ReactNode {
+function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, isMainViewSession, setComposerText, restoreImages, t }: RewindButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
@@ -900,7 +924,7 @@ function RewindButton({ target, sessionId, sessionOf, chatOf, watchChat, isMainV
       preview: messagePreviewOf(node),
       anchor: event.currentTarget,
       t,
-      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText) },
+      onRewind: mode => { void runRewindAndFill(session, node.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
     })
   }
 
