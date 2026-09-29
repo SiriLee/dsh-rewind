@@ -72,7 +72,6 @@ function autoCleanupEnabledField(): FieldSpec {
   }
 }
 
-/** One form snapshot as this card reads it (the shared store's `getSnapshot`). */
 /**
  * One form snapshot as this card reads it: the shared form frame's own state
  * (`SettingsFormShell`) plus the two field drafts.

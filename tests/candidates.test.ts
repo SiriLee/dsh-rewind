@@ -13,8 +13,6 @@ import {
   rewindCandidatesFromHostText,
   rewindCandidatesOf,
   rewindOptionsFromCandidates,
-  rewindOptionsFromHostText,
-  rewindOptionsOf,
   type CandidateChat,
 } from '../src/client/candidates.ts'
 
@@ -122,26 +120,6 @@ describe('formatCandidateTime', () => {
   })
 })
 
-describe('rewindOptionsOf', () => {
-  it('maps candidates to popupSelect rows (label = text, detail = time, no numbers)', () => {
-    const chat = snap([
-      userNode('u0', 0, new Date(2026, 7, 21, 9, 5).getTime(), 'first'),
-      userNode('u1', 1, new Date(2026, 7, 21, 10, 30).getTime(), 'second'),
-    ])
-    expect(rewindOptionsOf(chat, t)).toEqual([
-      { id: '1', label: 'second', detail: '10:30' },
-      { id: '0', label: 'first', detail: '09:05' },
-    ])
-  })
-
-  it('uses the no-text fallback for the label of empty previews', () => {
-    const chat = snap([userNode('u0', 0, new Date(2026, 7, 21, 8, 0).getTime(), '   ')])
-    expect(rewindOptionsOf(chat, t)).toEqual([
-      { id: '0', label: 'popover.noText', detail: '08:00' },
-    ])
-  })
-})
-
 describe('rewindCandidatesFromHostText', () => {
   it('parses a host candidate list into typed candidates', () => {
     const text = 'candidates=2\n4\t240000\tthird question\n0\t0\tfirst question'
@@ -163,23 +141,6 @@ describe('rewindCandidatesFromHostText', () => {
   it('skips malformed lines but keeps valid ones', () => {
     const text = 'candidates=3\n4\t240000\tok\nbad-line\n5\tnot-a-number\tno'
     expect(rewindCandidatesFromHostText(text).map(c => c.seq)).toEqual([4])
-  })
-})
-
-describe('rewindOptionsFromHostText', () => {
-  it('maps host candidates to popupSelect rows (label/detail/time)', () => {
-    const time = new Date(2026, 7, 21, 4, 0).getTime()
-    const text = `candidates=1\n4\t${time}\tthird question`
-    expect(rewindOptionsFromHostText(text, t)).toEqual([
-      { id: '4', label: 'third question', detail: '04:00' },
-    ])
-  })
-
-  it('falls back to noText for an empty preview', () => {
-    const time = new Date(2026, 7, 21, 8, 0).getTime()
-    expect(rewindOptionsFromHostText(`candidates=1\n4\t${time}\t`, t)).toEqual([
-      { id: '4', label: 'popover.noText', detail: '08:00' },
-    ])
   })
 })
 

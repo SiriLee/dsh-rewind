@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 import {
-  formatCandidate, formatCandidateList, isRewindMarker, listRewindCandidates, messagePreview, parseRewindTarget,
+  formatCandidate, formatCandidateList, listRewindCandidates, messagePreview, parseRewindTarget,
   planRewind, REWIND_MARKER_SOURCE, RewindError,
 } from '../src/rewind.ts'
 
@@ -282,23 +282,5 @@ describe('rewind marker message shape', () => {
     // plugin wrapper and any field outside the producer's own shape.
     expect(REWIND_MARKER_SOURCE).toEqual({ kind: 'dsh-rewind' })
     expect(Object.isFrozen(REWIND_MARKER_SOURCE)).toBe(true)
-    expect(isRewindMarker(REWIND_MARKER_SOURCE)).toBe(true)
-  })
-
-  it('isRewindMarker recognizes every shape a stored marker can carry', () => {
-    // Current writes.
-    expect(isRewindMarker({ kind: 'dsh-rewind' })).toBe(true)
-    // Logs written before this build: the released v3 plugin wrapper, and the
-    // form the v3→v4 conversion gives an unlisted third-party producer.
-    expect(isRewindMarker({ kind: 'plugin', plugin: 'dsh-rewind' })).toBe(true)
-    expect(isRewindMarker({ kind: 'plugin:dsh-rewind' })).toBe(true)
-  })
-
-  it('isRewindMarker rejects every other source', () => {
-    expect(isRewindMarker({ kind: 'plugin', plugin: 'compact' })).toBe(false)
-    expect(isRewindMarker({ kind: 'plugin:compact' })).toBe(false)
-    expect(isRewindMarker({ kind: 'user' })).toBe(false)
-    expect(isRewindMarker({ kind: 'plugin', plugin: 'other' })).toBe(false)
-    expect(isRewindMarker({ kind: 'dsh-rewind-extra' })).toBe(false)
   })
 })

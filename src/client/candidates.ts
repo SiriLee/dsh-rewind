@@ -111,19 +111,6 @@ export function rewindCandidatesOfChat(snap: CandidateChat): RewindCandidate[] {
 }
 
 /**
- * Map the candidates to popupSelect rows: the message preview as the row
- * label (left) and the clock time as the detail (right) — the shell's native
- * label/detail flex layout, with no recency numbers.
- */
-export function rewindOptionsOf(snap: CandidateChat, t: Translate): SelectOption[] {
-  return rewindCandidatesOfChat(snap).map(candidate => ({
-    id: String(candidate.seq),
-    label: candidate.preview || t('popover.noText'),
-    detail: formatCandidateTime(candidate.time),
-  }))
-}
-
-/**
  * Header prefix of the host's machine-readable candidate list (matches
  * `CANDIDATE_LIST_HEADER` in src/rewind.ts). Kept as a local literal so the
  * client bundle never imports the host module (which would drag in dsh-session).
@@ -163,12 +150,4 @@ export function rewindOptionsFromCandidates(candidates: readonly RewindCandidate
     label: candidate.preview || t('popover.noText'),
     detail: formatCandidateTime(candidate.time),
   }))
-}
-
-/**
- * Parse the host's candidate-list encoding (see `formatCandidateList` in
- * src/rewind.ts) into popupSelect rows.
- */
-export function rewindOptionsFromHostText(text: string, t: Translate): SelectOption[] {
-  return rewindOptionsFromCandidates(rewindCandidatesFromHostText(text), t)
 }

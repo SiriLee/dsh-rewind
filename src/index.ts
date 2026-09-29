@@ -514,7 +514,7 @@ function renderFailures(failed: readonly { path: string; message: string }[]): s
   if (failed.length === 0) return ''
   return t('failures.suffix', {
     count: failed.length,
-    list: failed.map(f => t('failures.item', { path: f.path, message: f.message })).join('、'),
+    list: failed.map(f => t('failures.item', { path: f.path, message: f.message })).join(t('sep.list')),
   })
 }
 
@@ -744,7 +744,7 @@ async function executeRewind(
         // succeeded — the two are independent.
         if (!(error instanceof UnknownStoreVersionError)) throw error
         const version = await store.readStoreVersion(agent.session.id)
-        restore = `；${t('storeUnsupported', { version: version ?? error.version })}`
+        restore = `${t('sep.clause')}${t('storeUnsupported', { version: version ?? error.version })}`
       }
       if (outcome !== undefined) {
         // The restore wrote through plain node:fs, invisible to the harness
@@ -763,7 +763,7 @@ async function executeRewind(
           const skippedLines = renderSkipped(outcome, capped, store.fileCapBytes)
           if (skippedLines !== '') parts.push(skippedLines)
         }
-        restore = parts.length > 0 ? `；${parts.join('、')}` : t('noRestorable')
+        restore = parts.length > 0 ? `${t('sep.clause')}${parts.join(t('sep.list'))}` : t('noRestorable')
         restore += renderFailures(outcome.failed)
       }
     }

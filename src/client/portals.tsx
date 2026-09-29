@@ -792,9 +792,10 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       const chat = chatOf(session)
       const hiddenSeqs = chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
       // Hide withdrawn rows (rewind markers, /rewind command rows, and every
-      // message inside the executed rewinds' [earliest target, latest marker]
-      // span) so the rendered transcript matches the agent's context. React
-      // re-renders recreate rows, so this runs on every refresh.
+      // message inside any executed rewind's [target, marker] span — the spans
+      // stay separate, never one collapsed range) so the rendered transcript
+      // matches the agent's context. React re-renders recreate rows, so this
+      // runs on every refresh.
       //
       // Each hidden row also carries a semantic marker (`data-dsh-rewind-hidden`)
       // so DevTools, other DOM plugins and tests can tell a rewind-hide apart
@@ -810,10 +811,8 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
         hiddenSeqs,
         hidden.current,
       )
-      // Hiding diagnostics are event-level: logged once where a rewind
-      // settles (runRewindAndFill), not per mutation batch — printing them
-      // here would flood the console during streaming, and the rewind event
-      // already carries the hide set. Nothing is logged in this per-batch scan.
+      // Nothing is logged in this per-batch scan: printing a hide set here would
+      // flood the console during streaming.
       const durable = collectDurableTargets(snapshot, chat, hiddenSeqs)
       const next = [...durable, ...collectPendingTargets(snapshot, steeringItemsOf(inboxOf(session)?.['next-step']))]
       // Diff: no change → no re-render (the observer fires on every mutation;

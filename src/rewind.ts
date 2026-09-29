@@ -30,7 +30,7 @@
 
 import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 
-export { REWIND_MARKER_KIND, REWIND_MARKER_SOURCE, isRewindMarker } from './marker.ts'
+export { REWIND_MARKER_SOURCE } from './marker.ts'
 
 /** Which of the two rewind modes a rewind executes. */
 export type RewindMode = 'chat' | 'both'
@@ -136,20 +136,32 @@ export function messagePreview(message: UserMessage): string {
     : `${text.slice(0, CANDIDATE_PREVIEW_CHARS - 1)}…`
 }
 
+/** Absolute-seq token: `@` followed by decimal digits only. */
+const SEQ_TOKEN = /^@(\d+)$/
+
+/** Recency-index token: decimal digits only. */
+const INDEX_TOKEN = /^(\d+)$/
+
 /**
- * Parse a raw command token into a rewind target.
+ * Parse a raw command token into a rewind target. Both forms must be plain
+ * decimal integers: a bare `Number()` would also accept `@1e3`, `@0x10` and
+ * `@+5`, and would read a bare `@` as seq 0.
  * @param raw - one token: `@123` (absolute seq) or `12` (recency index).
  * @returns the parsed target, or undefined when the token is malformed.
  */
 export function parseRewindTarget(raw: string): RewindTarget | undefined {
   const token = raw.trim()
-  if (token === '') return undefined
-  if (token.startsWith('@')) {
-    const seq = Number(token.slice(1))
-    return Number.isSafeInteger(seq) && seq >= 0 ? { kind: 'seq', seq } : undefined
+  const seq = SEQ_TOKEN.exec(token)
+  if (seq !== null) {
+    const value = Number(seq[1] ?? '')
+    return Number.isSafeInteger(value) ? { kind: 'seq', seq: value } : undefined
   }
-  const index = Number(token)
-  return Number.isSafeInteger(index) && index >= 1 ? { kind: 'index', index } : undefined
+  const index = INDEX_TOKEN.exec(token)
+  if (index !== null) {
+    const value = Number(index[1] ?? '')
+    return Number.isSafeInteger(value) && value >= 1 ? { kind: 'index', index: value } : undefined
+  }
+  return undefined
 }
 
 /**
