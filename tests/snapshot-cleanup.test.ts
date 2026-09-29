@@ -172,7 +172,16 @@ describe('last-sweep state (persisted across restart)', () => {
 })
 
 describe('resolveCleanupStatePath', () => {
-  it('resolves the last-sweep state path under the harness home', () => {
+  const prevHome = process.env.DSH_HOME
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+  })
+
+  it('resolves the last-sweep state path under the default harness home', () => {
+    // The path follows $DSH_HOME, so clear it to pin the ~/.dsh default.
+    delete process.env.DSH_HOME
     expect(resolveCleanupStatePath()).toBe(join(homedir(), '.dsh', 'snapshot-cleanup-last-sweep.json'))
   })
 })

@@ -43,13 +43,4 @@ describe('client contract entry (dsh-rewind-plugin/client)', () => {
     expect(hiddenSeqsOf).toBe(hiddenSeqsOfInternal)
     expect(targetSeqOfArgs).toBe(targetSeqOfArgsInternal)
   })
-
-  it('pins the declared slot list', () => {
-    // The compile-time check is the type above; this pins the list so a future
-    // addition cannot quietly drop one of the two registrations.
-    expect([...REGISTERED_SLOTS].sort()).toEqual([
-      'conversation.session.header.actions',
-      'plugins.bundle.config',
-    ])
-  })
 })

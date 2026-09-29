@@ -21,8 +21,8 @@ export type ScenarioOp =
   | { kind: 'turn' }
   /** One complete turn with a balanced tool-call/result pair. */
   | { kind: 'toolTurn' }
-  /** Rewind to the N-th most recent human user message still on the surface (1 = latest). */
-  | { kind: 'rewind'; index: number }
+  /** Rewind to the newest human user message still on the surface. */
+  | { kind: 'rewind' }
   /**
    * Compact a surface range by position: `from` is the 0-based surface index
    * of the first node, `to` the last (or -1 for the surface tail). The range
@@ -88,11 +88,11 @@ export function runScenario(ops: readonly ScenarioOp[], name = 'scenario'): Scen
         case 'rewind': {
           const target = latestHumanUserSeq(session)
           if (target === null) {
-            log.push(`rejected rewind#${op.index}: no human user message on surface`)
+            log.push('rejected rewind: no human user message on surface')
             break
           }
           applyRewind(session, target)
-          log.push(`ok rewind#${op.index}@${target}`)
+          log.push(`ok rewind@${target}`)
           break
         }
         case 'compact': {
@@ -134,7 +134,7 @@ export const SINGLE_REWIND: ScenarioOp[] = [
   { kind: 'turn' },
   { kind: 'turn' },
   { kind: 'probe' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'probe' },
 ]
 
@@ -143,7 +143,7 @@ export const REWIND_AFTER_TOOL_TURN: ScenarioOp[] = [
   { kind: 'toolTurn' },
   { kind: 'turn' },
   { kind: 'probe' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'probe' },
 ]
 
@@ -151,9 +151,9 @@ export const REWIND_AFTER_TOOL_TURN: ScenarioOp[] = [
 export const MULTI_REWIND_INTERLEAVED: ScenarioOp[] = [
   { kind: 'turn' },
   { kind: 'turn' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'turn' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'turn' },
   { kind: 'probe' },
 ]
@@ -163,7 +163,7 @@ export const REWIND_THEN_COMPACT: ScenarioOp[] = [
   { kind: 'turn' },
   { kind: 'turn' },
   { kind: 'turn' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'compact', from: 0, to: -1 },
   { kind: 'probe' },
 ]
@@ -174,7 +174,7 @@ export const COMPACT_THEN_REWIND: ScenarioOp[] = [
   { kind: 'toolTurn' },
   { kind: 'turn' },
   { kind: 'compact', from: 0, to: 4 },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'probe' },
 ]
 
@@ -189,15 +189,15 @@ export const LONG_MIXED: ScenarioOp[] = [
   { kind: 'turn' },
   { kind: 'toolTurn' },
   { kind: 'probe' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'turn' },
   { kind: 'probe' },
   { kind: 'toolTurn' },
-  { kind: 'rewind', index: 2 },
+  { kind: 'rewind' },
   { kind: 'turn' },
   { kind: 'compact', from: 0, to: 3 },
   { kind: 'probe' },
-  { kind: 'rewind', index: 1 },
+  { kind: 'rewind' },
   { kind: 'turn' },
   { kind: 'probe' },
 ]

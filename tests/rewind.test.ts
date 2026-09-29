@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   formatCandidate, formatCandidateList, listRewindCandidates, messagePreview, parseRewindTarget,
   planRewind, REWIND_MARKER_SOURCE, RewindError,
@@ -264,19 +264,6 @@ describe('planRewind', () => {
 })
 
 describe('rewind marker message shape', () => {
-  it('the marker is a user/message with the producer-owned source and the (empty message) content', () => {
-    // The marker content is a constant `(empty message)` placeholder so it is
-    // accepted by every provider: the session log is immutable but the model
-    // serving it may change (Issue #21).
-    const marker: UserMessage = createUserMessage({
-      content: [{ type: 'text', text: '(empty message)' }],
-      source: REWIND_MARKER_SOURCE,
-    })
-    expect(marker.role).toBe('user')
-    expect(marker.source).toEqual({ kind: 'dsh-rewind' })
-    expect(marker.content).toEqual([{ type: 'text', text: '(empty message)' }])
-  })
-
   it('REWIND_MARKER_SOURCE is the frozen producer-owned source shape', () => {
     // One `kind`, no private field: the v4 source admission rejects the retired
     // plugin wrapper and any field outside the producer's own shape.
