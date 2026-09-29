@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, messageTextAt, targetSeqOfArgs, type ChatConversationViewNode, type HiddenChat } from '../src/client/hidden.ts'
+import { hasFileImpact, hiddenSeqsOf, isExecutedRewindCommand, messageAttachmentsAt, messageTextAt, targetSeqOfArgs, type ChatConversationViewNode, type HiddenChat } from '../src/client/hidden.ts'
 
 /** A chat view node for one row; only fields the hiding logic reads are real. */
 function viewNode(key: string, kind: string, anchorSeq: number, data: unknown = null): ChatConversationViewNode {
@@ -305,5 +305,68 @@ describe('messageTextAt (composer refill source)', () => {
 
   it('returns undefined for an undefined chat snapshot', () => {
     expect(messageTextAt(undefined, 0)).toBeUndefined()
+  })
+})
+
+describe('messageAttachmentsAt (composer image-restore source)', () => {
+  const imageBlock = (attachment: unknown) => ({ type: 'image', attachment })
+  const imageRef = () => ({
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    mediaType: 'image/png',
+    bytes: 12,
+    width: 3,
+    height: 4,
+  })
+
+  it('reads image references of a user node in order, skipping non-image blocks', () => {
+    const ref = imageRef()
+    const chat = snap([
+      viewNode('u0', 'user', 0, {
+        kind: 'user', seq: 0,
+        content: [
+          imageBlock(ref),
+          { type: 'text', text: 'what is this?' },
+          { type: 'file', attachment: { attachmentId: 'sha256:'.concat('b'.repeat(64)), name: 'f.zip', bytes: 1 } },
+          { type: 'image', attachment: { attachmentId: `sha256:${'c'.repeat(64)}`, mediaType: 'image/webp' }, offloaded: true },
+        ],
+      }),
+    ])
+    expect(messageAttachmentsAt(chat, 0)).toEqual([
+      ref,
+      { attachmentId: `sha256:${'c'.repeat(64)}`, mediaType: 'image/webp', bytes: undefined, width: undefined, height: undefined, name: undefined },
+    ])
+  })
+
+  it('reads image references of a steering node (the /plan <text> entry)', () => {
+    const ref = imageRef()
+    const chat = snap([
+      viewNode('s4', 'steering', 4, { kind: 'steering', seq: 4, content: [imageBlock(ref)] }),
+    ])
+    expect(messageAttachmentsAt(chat, 4)).toEqual([ref])
+  })
+
+  it('skips image blocks with malformed references, never throwing', () => {
+    const chat = snap([
+      viewNode('u0', 'user', 0, {
+        kind: 'user', seq: 0,
+        content: [
+          { type: 'image' },
+          imageBlock(null),
+          imageBlock({ attachmentId: 42, mediaType: 'image/png' }),
+          imageBlock({ attachmentId: `sha256:${'a'.repeat(64)}` }),
+          imageBlock(imageRef()),
+        ],
+      }),
+    ])
+    expect(messageAttachmentsAt(chat, 0)).toEqual([imageRef()])
+  })
+
+  it('returns [] for a text-only message and undefined for an absent seq or chat', () => {
+    const chat = snap([
+      viewNode('u0', 'user', 0, { kind: 'user', seq: 0, content: [{ type: 'text', text: 'hi' }] }),
+    ])
+    expect(messageAttachmentsAt(chat, 0)).toEqual([])
+    expect(messageAttachmentsAt(chat, 99)).toBeUndefined()
+    expect(messageAttachmentsAt(undefined, 0)).toBeUndefined()
   })
 })

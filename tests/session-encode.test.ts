@@ -3,8 +3,11 @@ import { execFileSync } from 'node:child_process'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = new URL('..', import.meta.url).pathname
+// `new URL(...).pathname` keeps percent-escapes (`%20`), which breaks the
+// child-process paths when the checkout lives under a directory with spaces.
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const ENCODE = join(ROOT, 'scripts/session-encode.mjs')
 const DECODE = join(ROOT, 'scripts/session-decode.mjs')
 

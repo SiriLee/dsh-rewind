@@ -49,7 +49,7 @@ import {
 } from './candidates.ts'
 import { closePopover, openPopover, knownCommandSeqs, waitForCommand, registerComposerFocuser } from './popover.ts'
 import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
-import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch } from './hidden.ts'
+import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
 import { en, zh } from './locales.ts'
@@ -216,6 +216,67 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
+     * File-extension map for the composer intake's accepted image types (the
+     * harness's `isImageMediaType` whitelist): restores name unnamed drafts so
+     * the rail card renders the right kind.
+     */
+    const IMAGE_MEDIA_EXTENSION: Record<string, string> = {
+      'image/png': 'png',
+      'image/jpeg': 'jpg',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+    }
+
+    /**
+     * The composer image restorer: puts a withdrawn message's durable image
+     * references back into that session's composer draft. Round-trip through
+     * the harness's own services, resolved lazily like `composerFacade`:
+     * `uiConversation.imageUrl` resolves session-authorized bytes
+     * (content-verified by the host attachment store), and
+     * `conversation.createDrafts` + `input.addAttachments` run the same
+     * intake a dragged-in image takes — so a rewind of an image-bearing
+     * message loses nothing. Best-effort and never throws: one image's
+     * failure skips that image, and absent services degrade to the
+     * text-only refill of the previous versions.
+     */
+    const restoreImages = async (sessionId: string, images: readonly MessageImageRef[]): Promise<void> => {
+      if (images.length === 0) return
+      const ui = uiConversation() as (UiConversationLike & { imageUrl?: (id: SessionId, ref: MessageImageRef) => Promise<string> }) | undefined
+      const conversation = (ctx as { get(name: string): unknown }).get('conversation') as {
+        input?: { for(actx: unknown): { addAttachments(ids: readonly string[]): boolean } }
+        createDrafts?: (id: SessionId, files: readonly File[]) => readonly { id: string }[]
+      } | undefined
+      const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
+      if (ui?.imageUrl === undefined || conversation?.input === undefined || conversation.createDrafts === undefined || scope === undefined) {
+        rewindLog.warn('refill', 'image restore unavailable (conversation services not ready)')
+        return
+      }
+      const files: File[] = []
+      for (const [index, ref] of images.entries()) {
+        const extension = IMAGE_MEDIA_EXTENSION[ref.mediaType]
+        if (extension === undefined) {
+          rewindLog.warn('refill', `skipping image with unsupported type ${ref.mediaType}`)
+          continue
+        }
+        try {
+          const url = await ui.imageUrl(sessionId as SessionId, ref)
+          const blob = await (await fetch(url)).blob()
+          files.push(new File([blob], ref.name ?? `image-${index + 1}.${extension}`, { type: ref.mediaType }))
+        } catch (error) {
+          rewindLog.warn('refill', `image fetch threw for ${ref.attachmentId}`, error)
+        }
+      }
+      if (files.length === 0) return
+      try {
+        const ids = conversation.createDrafts(sessionId as SessionId, files).map(draft => draft.id)
+        const admitted = conversation.input.for(scope).addAttachments(ids)
+        if (!admitted) rewindLog.warn('refill', `composer refused ${ids.length} restored image(s) (busy)`)
+      } catch (error) {
+        rewindLog.warn('refill', 'image restore threw', error)
+      }
+    }
+
+    /**
      * The composer writer: the `conversation` service's `input` resolver
      * (`SessionInputResolver`), whose `setDraft` replaces the whole composer
      * draft through the harness's own Lexical editor. Wrapped in `writeComposer`
@@ -266,7 +327,7 @@ export function apply(ctx: ClientContext): void {
         id: 'dsh-rewind-portals',
         order: 1000,
       },
-      createRewindBridge({ sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, t, subscribeLocale }),
+      createRewindBridge({ sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, restoreImages, t, subscribeLocale }),
     ))
 
     // ---- snapshot-cleanup configuration form (sidebar Plugins page) ----
@@ -380,7 +441,7 @@ export function apply(ctx: ClientContext): void {
             preview: candidate.preview,
             anchor: composerAnchor(),
             t,
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText) },
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
           })
         },
       },

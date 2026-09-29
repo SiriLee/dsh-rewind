@@ -96,6 +96,76 @@ export function messageTextAt(chat: HiddenChat | undefined, seq: number): string
 }
 
 /**
+ * A durable image reference carried by an `image` content block in the chat
+ * snapshot, read structurally (the harness's `ImageAttachmentRef` from
+ * dsh-attachment, without importing it, so the plugin survives harness
+ * drift). Fields beyond `attachmentId`/`mediaType` pass through to the
+ * durable image URL loader unchanged.
+ */
+export interface MessageImageRef {
+  readonly attachmentId: string
+  readonly mediaType: string
+  readonly bytes?: number
+  readonly width?: number
+  readonly height?: number
+  readonly name?: string
+}
+
+/**
+ * The durable image references of the human message at `seq` in the chat
+ * snapshot, in message order. The composer-refill counterpart of
+ * `messageTextAt` (see `portals.tsx` `runRewindAndFill`): rewinding an
+ * image-bearing message restores its pictures into the composer so the
+ * withdraw does not silently drop them.
+ *
+ * Reads the same node kinds as `messageTextAt` (`user` and `steering`).
+ * Blocks tolerate malformed or missing references (skipped, never a throw),
+ * and `image/offload` projections leave the durable reference in place —
+ * which is all the URL loader needs. `file` blocks are intentionally
+ * excluded: the harness exposes no client-side file-bytes loader (file
+ * uploads go one-way), so a file is not restorable.
+ * State absent → undefined; a message without images → [].
+ */
+export function messageAttachmentsAt(chat: HiddenChat | undefined, seq: number): readonly MessageImageRef[] | undefined {
+  if (chat === undefined) return undefined
+  for (const key of chat.order) {
+    const node = chat.nodes.get(key)
+    if (node === undefined || (node.kind !== 'user' && node.kind !== 'steering')) continue
+    const data = node.data as {
+      seq?: number
+      content?: readonly {
+        type?: string
+        attachment?: {
+          attachmentId?: unknown
+          mediaType?: unknown
+          bytes?: unknown
+          width?: unknown
+          height?: unknown
+          name?: unknown
+        }
+      }[]
+    }
+    if (data.seq !== seq) continue
+    const images: MessageImageRef[] = []
+    for (const block of data.content ?? []) {
+      if (block.type !== 'image') continue
+      const attachment = block.attachment
+      if (typeof attachment?.attachmentId !== 'string' || typeof attachment.mediaType !== 'string') continue
+      images.push({
+        attachmentId: attachment.attachmentId,
+        mediaType: attachment.mediaType,
+        bytes: typeof attachment.bytes === 'number' ? attachment.bytes : undefined,
+        width: typeof attachment.width === 'number' ? attachment.width : undefined,
+        height: typeof attachment.height === 'number' ? attachment.height : undefined,
+        name: typeof attachment.name === 'string' ? attachment.name : undefined,
+      })
+    }
+    return images
+  }
+  return undefined
+}
+
+/**
  * Extract the rewind target seq from a `/rewind` command's structured `args`
  * (e.g. `@5 chat`, `preview @5 both`). Locale-independent — never parses the
  * host's human outcome copy.

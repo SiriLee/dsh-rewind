@@ -30,6 +30,21 @@ function userNode(seq: number): ChatConversationViewNode {
   return node(`u${seq}`, 'user', seq, { seq, content: [{ type: 'text', text: TEXT }] })
 }
 
+/** A durable image reference as a user-message content block carries it. */
+function imageRef(mediaType = 'image/png') {
+  return { attachmentId: `sha256:${'a'.repeat(64)}`, mediaType, bytes: 12, width: 3, height: 4 }
+}
+
+/** A user message row carrying one image block plus editable text. */
+function imageTextNode(seq: number): ChatConversationViewNode {
+  return node(`u${seq}`, 'user', seq, { seq, content: [{ type: 'image', attachment: imageRef() }, { type: 'text', text: TEXT }] })
+}
+
+/** A user message row carrying ONLY an image block. */
+function imageOnlyNode(seq: number): ChatConversationViewNode {
+  return node(`u${seq}`, 'user', seq, { seq, content: [{ type: 'image', attachment: imageRef() }] })
+}
+
 /** An executed rewind command row (success + marker) targeting `target`. */
 function executedRewind(seq: number, target: number): ChatConversationViewNode {
   const data = {
@@ -51,10 +66,10 @@ function makeChat(nodes: readonly ChatConversationViewNode[]): HiddenChat {
 }
 
 /** Build a fake session whose `command` appends the executed rewind node. */
-function fakeSession() {
-  let chat = makeChat([userNode(TARGET)])
+function fakeSession(target: ChatConversationViewNode = userNode(TARGET)) {
+  let chat = makeChat([target])
   const command = vi.fn(async () => {
-    chat = makeChat([userNode(TARGET), executedRewind(COMMAND_SEQ, TARGET)])
+    chat = makeChat([target, executedRewind(COMMAND_SEQ, TARGET)])
     return { ok: true, value: { matched: true } }
   })
   const session = {
@@ -200,6 +215,55 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     getTrigger()?.()
     await call
     expect(setComposerText).not.toHaveBeenCalled()
+  })
+
+  it('restores the image blocks of an image-bearing message alongside its text', async () => {
+    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
+    const setComposerText = vi.fn(() => true)
+    const restoreImages = vi.fn(async () => {})
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
+    expect(restoreImages).toHaveBeenCalledTimes(1)
+    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef()])
+    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+  })
+
+  it('restores the image of an image-only message (no text refill, no crash)', async () => {
+    const { session, chatOf, watch } = fakeSession(imageOnlyNode(TARGET))
+    const setComposerText = vi.fn(() => true)
+    const restoreImages = vi.fn(async () => {})
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
+    expect(restoreImages).toHaveBeenCalledTimes(1)
+    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef()])
+    expect(setComposerText).not.toHaveBeenCalled()
+  })
+
+  it('restores images even when a draft blocks the text refill (nothing clobbers the draft)', async () => {
+    addEditableDraft('in progress draft')
+    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
+    const setComposerText = vi.fn(() => true)
+    const restoreImages = vi.fn(async () => {})
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
+    expect(restoreImages).toHaveBeenCalledTimes(1)
+    expect(setComposerText).not.toHaveBeenCalled()
+  })
+
+  it('keeps the text refill when the image restore throws (best-effort restore)', async () => {
+    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
+    const setComposerText = vi.fn(() => true)
+    const restoreImages = vi.fn(async () => { throw new Error('image store down') })
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
+    await expect(runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)).resolves.toBeUndefined()
+    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('degrades to the text-only refill when no restorer was injected', async () => {
+    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
+    const setComposerText = vi.fn(() => true)
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
+    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+    expect(warn).not.toHaveBeenCalled()
   })
 
   it('skips the refill when the rewound session is no longer the main view', async () => {
