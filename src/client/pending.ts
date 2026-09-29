@@ -3,12 +3,17 @@
  * bubble rows with the session's `next-step` inbox rows.
  *
  * Both sides follow the same host order, so index-primary matching is reliable;
- * text equality is still verified per row, and a row that fails (or has no
+ * the match key is still verified per row, and a row that fails (or has no
  * counterpart) is skipped INDIVIDUALLY: one bad row never takes down the other
- * rows' buttons. The compared text excludes the bubble's actions container —
- * the copy button's Tooltip mounts a label bubble there on hover, so the row's
- * full `textContent` would flip between "message" and "message+Copy" with the
- * mouse (see `bubbleTextOf` in portals.tsx).
+ * rows' buttons. The key is `(text, attachment count)`: a text-only row must
+ * match its text exactly, while an attachment-bearing row matches on the count,
+ * because its rendered attachment block contributes text (a file name, an
+ * image's loading label) that no inbox row reproduces.
+ *
+ * The compared text excludes the bubble's actions container — the copy
+ * button's Tooltip mounts its label inside that button, so the row's
+ * `textContent` flips with the mouse — and the message-attachment block (see
+ * `bubbleTextOf` in portals.tsx).
  *
  * The browser half lives in `portals.tsx`; this module stays DOM-free so the
  * matching contract is unit-testable in a plain node environment.
@@ -20,6 +25,8 @@
 export interface PendingRow {
   /** The bubble's message text, excluding the actions container (see module doc). */
   readonly text: string
+  /** Message-attachment blocks the row renders; compared against the item's count. */
+  readonly attachments: number
 }
 
 /** One wire content block of an inbox row (only the fields the derivation reads). */
@@ -54,8 +61,10 @@ export interface InboxLike {
 /** One steering occurrence derived from the session's inbox projection. */
 export interface PendingSteeringItem {
   readonly id: string
-  /** Complete editable text; null when the message contains non-text blocks. */
+  /** Complete editable text; null when the message carries no text block at all. */
   readonly text: string | null
+  /** Non-text blocks (image/file/…) the message carries, in prompt order. */
+  readonly attachments: number
   /** Space-collapsed preview with image/file blocks excluded (the harness QueueDock rule). */
   readonly preview: string
 }
@@ -64,15 +73,26 @@ export interface PendingSteeringItem {
 const QUEUE_PREVIEW_CHARS = 200
 
 /**
- * Complete editable text of one inbox row: the joined text blocks, or null
- * when the row carries any non-text block. Mirror of the harness QueueDock's
- * `textOf` (the owner of these rows).
+ * Complete editable text of one inbox row: the joined text blocks, or null when
+ * the row has no text block at all. Unlike the harness QueueDock's `textOf`, a
+ * message that mixes text with attachments still has text.
  * @param content - the row's wire content blocks.
  * @returns the complete text, or null.
  */
 function textOf(content: readonly InboxBlockLike[]): string | null {
-  if (!content.every(block => block.type === 'text')) return null
-  return content.map(block => block.text ?? '').join('')
+  const texts = content.filter(block => block.type === 'text')
+  if (texts.length === 0) return null
+  return texts.map(block => block.text ?? '').join('')
+}
+
+/**
+ * The attachment half of the match key: how many non-text blocks one inbox row
+ * carries.
+ * @param content - the row's wire content blocks.
+ * @returns the non-text block count.
+ */
+function attachmentsCountOf(content: readonly InboxBlockLike[]): number {
+  return content.filter(block => block.type !== 'text').length
 }
 
 /**
@@ -111,16 +131,22 @@ export function steeringItemsOf(nextStep: readonly InboxMessageLike[] | undefine
     .map(item => ({
       id: item.id,
       text: textOf(item.content),
+      attachments: attachmentsCountOf(item.content),
       preview: previewOf(item.content),
     }))
 }
 
 /**
- * Pair rows to steering items by index, verifying text equality per row.
+ * Pair rows to steering items by index, verifying the match key per row: the
+ * visible text when the message has no attachments, otherwise the attachment
+ * count. Exact text equality cannot apply to an attachment-bearing row — which
+ * is why its ↶ button never mounted — because the rendered attachment block
+ * contributes text no inbox row reproduces.
+ *
  * @param rows - pending bubble rows in DOM order (== render order).
  * @param steering - steering items in host order (== render order).
  * @returns the item id for each row, or null for rows that cannot be matched
- *   safely (missing counterpart, text mismatch). A bad row never affects the
+ *   safely (missing counterpart, key mismatch). A bad row never affects the
  *   other rows.
  */
 export function matchPendingRows(
@@ -131,13 +157,20 @@ export function matchPendingRows(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]!
     const item = steering[i]
-    if (item !== undefined && row.text === (item.text ?? '')) {
-      matched.push(item.id)
-    } else {
-      matched.push(null)
-    }
+    matched.push(item !== undefined && matches(item, row) ? item.id : null)
   }
   return matched
+}
+
+/**
+ * Whether one rendered row is the given inbox occurrence.
+ * @param item - the steering item derived from the inbox row.
+ * @param row - the rendered bubble row at the same index.
+ * @returns whether the row may be paired with the item.
+ */
+function matches(item: PendingSteeringItem, row: PendingRow): boolean {
+  if (item.attachments > 0) return row.attachments === item.attachments
+  return row.text === (item.text ?? '')
 }
 
 /**

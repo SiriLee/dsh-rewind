@@ -16,13 +16,13 @@ import {
 } from '../src/client/pending.ts'
 
 /** A steering item fixture (as `steeringItemsOf` would derive it). */
-function item(id: string, text: string | null): PendingSteeringItem {
-  return { id, text, preview: text ?? '' }
+function item(id: string, text: string | null, attachments = 0): PendingSteeringItem {
+  return { id, text, attachments, preview: text ?? '' }
 }
 
 /** A rendered bubble row fixture (text = bubble text, actions excluded). */
-function row(text: string): PendingRow {
-  return { text }
+function row(text: string, attachments = 0): PendingRow {
+  return { text, attachments }
 }
 
 describe('matchPendingRows', () => {
@@ -74,13 +74,23 @@ describe('matchPendingRows', () => {
     expect(matchPendingRows(rows, steering)).toEqual([null, 'b'])
   })
 
-  it('treats a null item text as empty (image-only steering)', () => {
+  it('treats a null item text as empty when the row has no attachments', () => {
     expect(matchPendingRows([row('')], [item('img', null)])).toEqual(['img'])
   })
 
-  it('mismatches only the row when an image-only row renders text (alt content)', () => {
-    expect(matchPendingRows([row('[image]'), row('text')], [item('img', null), item('t', 'text')]))
-      .toEqual([null, 't'])
+  it('pairs an attachment-only row by index and count, whatever its block renders', () => {
+    // A lone image renders its loading label until the bytes resolve, and a
+    // file card renders the name and size: neither is predictable from the
+    // inbox row, so the count is the key and the text is not compared.
+    expect(matchPendingRows([row('loading…', 1)], [item('img', null, 1)])).toEqual(['img'])
+    expect(matchPendingRows([row('look at this', 1), row('', 1)],
+      [item('m', 'look at this', 1), item('f', null, 1)])).toEqual(['m', 'f'])
+  })
+
+  it('mismatches only the row whose attachment count differs', () => {
+    const rows = [row('a', 1), row('b', 1)]
+    const steering = [item('x', 'a', 2), item('y', 'b', 1)]
+    expect(matchPendingRows(rows, steering)).toEqual([null, 'y'])
   })
 })
 
@@ -120,7 +130,7 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
 
   it('joins every text block into the editable text and the preview', () => {
     expect(steeringItemsOf([textRow('a', 'hello ', 'world')]))
-      .toEqual([{ id: 'a', text: 'hello world', preview: 'hello world' }])
+      .toEqual([{ id: 'a', text: 'hello world', attachments: 0, preview: 'hello world' }])
   })
 
   it('drops injected (non-user) rows — the host called those context, not steering', () => {
@@ -139,20 +149,21 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
     expect(items.map(item => item.id)).toEqual(['u1', 'u2'])
   })
 
-  it('reports null text and excludes image/file blocks from the preview', () => {
+  it('counts attachments and keeps the text of a message that carries both', () => {
     const image: InboxMessageLike = { id: 'img', source: { kind: 'user' }, content: [{ type: 'image' }] }
-    expect(steeringItemsOf([image])).toEqual([{ id: 'img', text: null, preview: '' }])
+    expect(steeringItemsOf([image])).toEqual([{ id: 'img', text: null, attachments: 1, preview: '' }])
     const mixed: InboxMessageLike = {
       id: 'mixed',
       source: { kind: 'user' },
       content: [{ type: 'text', text: 'look' }, { type: 'image' }, { type: 'file' }],
     }
-    expect(steeringItemsOf([mixed])).toEqual([{ id: 'mixed', text: null, preview: 'look' }])
+    expect(steeringItemsOf([mixed])).toEqual([{ id: 'mixed', text: 'look', attachments: 2, preview: 'look' }])
+    expect(steeringItemsOf([textRow('plain', 'hi')])).toEqual([{ id: 'plain', text: 'hi', attachments: 0, preview: 'hi' }])
   })
 
   it('collapses whitespace in the preview', () => {
     const row: InboxMessageLike = { id: 'ws', source: { kind: 'user' }, content: [{ type: 'text', text: '  a\n\n b   c ' }] }
-    expect(steeringItemsOf([row])).toEqual([{ id: 'ws', text: '  a\n\n b   c ', preview: 'a b c' }])
+    expect(steeringItemsOf([row])).toEqual([{ id: 'ws', text: '  a\n\n b   c ', attachments: 0, preview: 'a b c' }])
   })
 
   it('truncates the preview at 200 code points, counting code points not units', () => {
@@ -165,6 +176,6 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
 
   it('marks a non-text block by its type in the preview', () => {
     const row: InboxMessageLike = { id: 'tool', source: { kind: 'user' }, content: [{ type: 'tool-call' }] }
-    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, preview: '[tool-call]' }])
+    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, attachments: 1, preview: '[tool-call]' }])
   })
 })
