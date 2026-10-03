@@ -48,9 +48,9 @@ first, ISO dates.
 6. Categories: `新增功能`/`New Features` (capability), `问题修复`/`Bug Fixes`
    (user-visible defect), `体验优化`/`Improvements` (copy, icon, style, performance),
    `其他变更`/`Chores` (the rest — a DSH line change goes first).
-7. Credits at the end of an entry: `#123` as it is; an external contributor as
-   `@handle` (look the account up while writing the entry). An identity you cannot
-   confirm is written by name — never guessed.
+7. Credits at the end of an entry: `(#PR) @handle`; an issue number belongs in the
+   entry's text instead, and a change with no pull request carries the handle alone.
+   A handle is looked up, never guessed — an unconfirmed identity is written by name.
 8. Omit empty sections.
 9. `**Full Changelog**` once, as the last line, ending at this tag (the extractor
    enforces it).
