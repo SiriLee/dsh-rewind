@@ -52,22 +52,21 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
 - The release commit is **`chore: release vX.Y.Z`**; the **lightweight `vX.Y.Z`
   tag** sits on it. Do **not** create tag/release first with `gh release create
   <tag>` (it tags the remote `main` head and breaks the tag/version match).
-- **Before bumping, manually confirm there is no newer DSH version the plugin
-  has not been verified against** (a pre-release can ship in DSH Desktop
-  without being on npm; see docs/compat/audit.md).
+- The release commit carries **both the version bump and the finished release
+  notes** (rename `## [Unreleased]` to the version block;
+  [`notes-template.md`](notes-template.md) has the format).
 - The workflow verifies the tag matches `package.json`, runs typecheck + tests +
   a full build + artifact verification, publishes with `--provenance` (Sigstore)
-  to the version-derived dist-tag, and creates a GitHub Release (a pre-release
-  is created as a GitHub pre-release, not `latest`). It is **idempotent** — an
-  already published version is skipped.
+  to the version-derived dist-tag, and creates a GitHub Release. It is
+  **idempotent** — an already published version is skipped.
 - CI (`.github/workflows/ci.yml`) runs `npm run check` — typecheck + tests +
   build + artifact verification + a `npm pack --dry-run` — on every push / PR
   across both Node engines boundary versions; the tarball layout is guarded by
   `tests/package-layout.test.ts`.
-- The GitHub Release body is auto-created with `--generate-notes` as a
-  **placeholder** (`--latest` / `--prerelease` per version). After the publish
-  run succeeds, overwrite the body by hand in the repo's bilingual style
-  (Chinese first, then English) — never keep the auto text as the final note.
+- The GitHub Release body is **that block**, extracted by
+  `node scripts/changelog-extract.mjs <tag>` and attached with `--notes-file`
+  (`--latest` / `--prerelease` per version). The extraction runs **before** the npm
+  publish and fails on a missing or inconsistent block.
 
 ## DSH version alignment
 

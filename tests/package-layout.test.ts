@@ -72,6 +72,13 @@ describe('package layout', () => {
     }
   })
 
+  it('keeps the changelog out of the tarball', () => {
+    // The per-release notes are the repository's history, not an install-time
+    // resource: `files` is an allowlist, so a root `CHANGELOG.md` stays out of
+    // the package. Listing it would silently ship it (docs/release/notes-template.md).
+    expect(pkg.files, 'CHANGELOG.md must stay out of the tarball').not.toContain('CHANGELOG.md')
+  })
+
   it('exposes only declared entry points', () => {
     expect(pkg.main).toBe('lib/index.js')
     expect(pkg.types).toBe('lib/types/index.d.ts')

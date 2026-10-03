@@ -18,9 +18,10 @@ index/navigation entry point.
 | `compat/tracking-boundary.md` | Which files a rewind restores: the tracking boundary (`.zh` mirror) | users / maintainers |
 | `compat/diagnostics.md` | Browser diagnostics (anomaly alerts; verbose switch gates the startup identity line) (`.zh` mirror) | users / maintainers |
 | `release/release.md` | Release workflow & DSH peer-version alignment (`.zh` mirror) | maintainers |
+| `release/notes-template.md` | Release-notes (CHANGELOG) block, rules, and lifecycle (`.zh` mirror) | maintainers |
 
-Repo-root docs outside `docs/`: `SECURITY.md` (security model) and
-`CONTRIBUTING.md` (contribution guide).
+Repo-root docs outside `docs/`: `SECURITY.md`, `CONTRIBUTING.md`, and
+`CHANGELOG.md` (per-release notes, kept out of the npm tarball).
 
 ## Conventions
 
