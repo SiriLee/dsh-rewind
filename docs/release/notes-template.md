@@ -41,8 +41,8 @@ first, ISO dates.
 2. The compatibility line quotes `engines.dsh` verbatim and declares no upper bound.
 3. Stage word after the range: `内测版`/`Internal alpha.` for `-alpha`, `公测版`/`Public
    beta.` for `-beta`, `候选版`/`Release candidate.` for `-rc`; a stable version omits it.
-4. A stable block opens with `本版汇总了自 \`vPrev\` 以来的主要变更。` / `This release
-   summarizes the main changes since \`vPrev\`.`; a prerelease drops it.
+4. A stable block that spans several intermediates opens with `本版汇总了自 \`vPrev\`
+   以来的主要变更。` / `This release summarizes the main changes since \`vPrev\`.`
 5. Only functionality-related net changes: no internal refactors, docs, tests, or
    tooling; nothing an unreleased span introduced and then reverted.
 6. Categories: `新增功能`/`New Features` (capability), `问题修复`/`Bug Fixes`
