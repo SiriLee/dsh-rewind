@@ -43,11 +43,9 @@
     "README.md",
     "README.en.md",
     "SECURITY.md",
-    "CONTRIBUTING.md",
-    "docs",
-    "assets",
     "LICENSE",
-    "locale/*.json"
+    "locale/*.json",
+    "assets/icon.svg"
   ],
   "dsh": {
     "bundle": {

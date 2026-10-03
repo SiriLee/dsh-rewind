@@ -30,5 +30,4 @@ Repo-root docs outside `docs/`: `SECURITY.md`, `CONTRIBUTING.md`, and
   Chinese, `README.en.md` English.
 - `compat/audit.md` is the single source of truth for compatibility conclusions;
   other docs link to it instead of restating them.
-- Cross-links are relative so the whole `docs/` directory stays relocatable — and it
-  ships intact in the npm tarball via the `docs` entry in `files` (`package.json`).
+- Cross-links are relative.

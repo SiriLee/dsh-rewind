@@ -1,10 +1,8 @@
 /**
  * Publish-layout guard tests (mirrors the `dsh-turn-rewind` package-layout
- * discipline): the prebuilt tarball must stay portable and complete. The
- * properties under test:
+ * discipline): the prebuilt tarball must stay portable and complete:
  *
- *  - `files` covers every artifact the plugin needs at install time
- *    (lib, cordis patch, README pair, security/contributing docs, docs/, assets);
+ *  - `files` carries every install-time artifact and no repository-only doc;
  *  - the host bundle `lib/index.js` is external-clean: it imports only
  *    `@deepseek-ai/*` peers and `node:` builtins — no relative paths, no
  *    bare third-party dependencies that would break outside a checkout;
@@ -60,23 +58,21 @@ describe('package layout', () => {
       'README.md',
       'README.en.md',
       'SECURITY.md',
-      'CONTRIBUTING.md',
-      'docs',
-      'assets',
       'LICENSE',
-      // The localized title/description dictionaries the harness reads as
-      // package resources, so they must ride the tarball.
+      // Read by the harness as package resources, not only by the repository.
       'locale/*.json',
+      'assets/icon.svg',
     ]) {
       expect(pkg.files, `files must include ${entry}`).toContain(entry)
     }
   })
 
-  it('keeps the changelog out of the tarball', () => {
-    // The per-release notes are the repository's history, not an install-time
-    // resource: `files` is an allowlist, so a root `CHANGELOG.md` stays out of
-    // the package. Listing it would silently ship it (docs/release/notes-template.md).
-    expect(pkg.files, 'CHANGELOG.md must stay out of the tarball').not.toContain('CHANGELOG.md')
+  it('keeps repository-only documentation out of the tarball', () => {
+    // `files` is an allowlist; the npm page renders the README itself and its
+    // relative links resolve against the repository, so these need no bytes here.
+    for (const entry of ['docs', 'assets/screenshots', 'CONTRIBUTING.md', 'CHANGELOG.md']) {
+      expect(pkg.files, `${entry} must stay out of the tarball`).not.toContain(entry)
+    }
   })
 
   it('exposes only declared entry points', () => {
