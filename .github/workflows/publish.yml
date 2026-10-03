@@ -106,6 +106,15 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "::notice::publishing $VERSION to npm dist-tag '$TAG'"
 
+      # The release body is the reviewed block this tag owns in CHANGELOG.md, not
+      # GitHub's generated text (see docs/release/notes-template.md). Extracting
+      # here fails the run BEFORE anything reaches npm when the block is missing,
+      # empty, disagrees with `dsh.engines`, or still points its compare link at
+      # another tag.
+      - name: Extract the release notes
+        if: github.ref_type == 'tag'
+        run: node scripts/changelog-extract.mjs "${GITHUB_REF_NAME}" --out "$RUNNER_TEMP/release-notes.md"
+
       # OIDC handles authentication; --provenance emits Sigstore attestation
       # (available because the job carries the GitHub OIDC token). The dist-tag
       # is passed explicitly so a pre-release never lands on `latest`.
@@ -126,13 +135,13 @@ jobs:
               gh release create "${GITHUB_REF_NAME}" \
                 --repo "${{ github.repository }}" \
                 --title "${GITHUB_REF_NAME}" \
-                --generate-notes \
+                --notes-file "$RUNNER_TEMP/release-notes.md" \
                 --prerelease
             else
               gh release create "${GITHUB_REF_NAME}" \
                 --repo "${{ github.repository }}" \
                 --title "${GITHUB_REF_NAME}" \
-                --generate-notes \
+                --notes-file "$RUNNER_TEMP/release-notes.md" \
                 --latest
             fi
           fi
