@@ -8,7 +8,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.2.0-rc.2` (the peers declare the matching range).
+> Targeted version: npm `@deepseek-ai/*@0.2.1-alpha.1` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: one peer tuple per DSH line, declaring only what was verified — the
