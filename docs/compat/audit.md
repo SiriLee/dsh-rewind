@@ -11,14 +11,7 @@
 > Targeted version: npm `@deepseek-ai/*@0.2.1-alpha.1` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
-> Version alignment: one peer tuple per DSH line, declaring only what was verified — the
-> model, the update steps, and the `check-dsh-version.mjs` signal live in
-> `docs/release/release.md`. The floor moved when a release changed interfaces inside the
-> tuple: `0.1.6-alpha.2` removed the client session-ownership and queue-mirror APIs, and
-> `0.1.7-alpha.1` moved the session writer to format v4 (producer-owned message sources,
-> tool-role results, `developer/message`) and replaced the settings namespace registry with
-> each entry's volatile `Config`, so the peer floor and both plugin seams moved with them.
-> The plugin targets a single DSH version line; compatibility with earlier lines is not kept.
+> Version alignment: see `docs/release/release.md`.
 
 ### Single channel
 

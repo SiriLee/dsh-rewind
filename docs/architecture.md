@@ -117,11 +117,6 @@ pruneStale            cross-session auto-cleanup (default off): whole
 
 ## Compatibility strategy
 
-- **Peer ranges as one tuple per DSH line**: npm's prerelease rules require the
-  peer range to share the host's `[major, minor, patch]` tuple, so a new DSH
-  tuple replaces the peer tuple (the single-line model) and `package.json` is
-  the only place the current tuple is written down; `scripts/check-dsh-version.mjs`
-  flags when a new tuple arrives. See `docs/release/release.md`.
 - **Test-driven investigation**: `tests/compat-invariants.test.ts` /
   `compat-interop.test.ts` / `compat-gaps.test.ts` probe harness behavior and pin findings in
   `docs/compat/audit.md`; `scripts/verify-host.mjs` runs a real end-to-end

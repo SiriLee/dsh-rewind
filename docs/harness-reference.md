@@ -62,7 +62,6 @@ src/client/styles.ts    injected styles (dsh design tokens)
 src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_REWIND_BUILD__)
 src/client/log.ts       client logger (namespaced, dsh-rewind.debug-gated)
 scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-scripts/check-dsh-version.mjs  DSH peer-tuple check (latest dist-tag vs peers)
 scripts/update-badge.mjs       regenerate the tests badge (CI only)
 scripts/verify-host.mjs end-to-end host verification (full check suite)
 scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)

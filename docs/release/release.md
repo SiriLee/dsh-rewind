@@ -69,47 +69,25 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
   run succeeds, overwrite the body by hand in the repo's bilingual style
   (Chinese first, then English) — never keep the auto text as the final note.
 
-## DSH version alignment (single peer tuple)
+## DSH version alignment
 
-DSH is still in rc; npm's prerelease matching rules require a peer range to
-share the host version's `[major, minor, patch]` tuple. So `peerDependencies`
-uses one peer tuple per DSH line (e.g. `^0.2.0-rc.1`). The range is
-conservative: it declares only what was verified, and guarantees nothing
-outside it.
+`peerDependencies` declares the DSH range the plugin is adapted to. DSH admits a
+plugin when every `@deepseek-ai/dsh-*` peer satisfies the runtime under
+`includePrerelease` (see `docs/compat/audit.md`), which matches a wider range
+than npm's default rules. The declaration is updated when the range stops
+fitting: our own update drops compatibility with older releases, or upstream
+makes a minor or major change. Compatibility outside it is not maintained on
+purpose; `engines.dsh` declares the same range's floor.
 
-- **When to update**: when the verified range changes — a new DSH tuple, or a
-  deliberate narrowing (e.g. dropping the internal `alpha` series); a release
-  already inside the range changes nothing **unless it changes interfaces inside
-  the tuple** (`0.1.6-alpha.2` removed the client session-ownership and
-  queue-mirror APIs, so the floor moved with it). All `@deepseek-ai/*` packages
-  release together; `npm view @deepseek-ai/dsh dist-tags` is the signal.
-- **Published-tuple check (optional)**: `node scripts/check-dsh-version.mjs`
-  compares the `latest` dist-tag version against the tuple the peers cover
-  (exit 0 = nothing to do, exit 1 = update). It reads the `latest` tag only; a
-  pre-release published under another tag or bundled without
-  going to npm is a manual pre-release check — see the "Before bumping" step above.
-- **Update steps**: point every `@deepseek-ai/dsh-*` peer and devDependency at
-  the verified range → `npm install` → `npm run check` → release.
-- **After DSH goes final**: final releases are not bound by the prerelease
-  tuple rule, so the peers can converge to a single stable range (e.g.
-  `^0.1.x`); this section can then be deleted.
-- **Declared minimum (`engines.dsh`)**: alongside the peer tuple, each
-  release declares the DSH runtime floor under `engines.dsh` (e.g.
-  `>=0.2.0-rc.1`). No runtime consumer reads it; its form and its alignment with
-  the peer tuple are pinned by `tests/package-layout.test.ts`. Bump it in
-  the same release that changes the peer range; never leave code raised while
-  the declared floor stays behind. Only the `>=X.Y.Z[-pre]` form is used.
-- **The peers are enforced at startup (`0.1.7-rc.1`)**: DSH checks a profile
-  bundle's own `@deepseek-ai/dsh-*` peers against the running version and skips
-  the whole bundle when one does not satisfy it, so a peer range that is merely
-  stale now costs the plugin its load instead of a warning. See
-  `docs/compat/audit.md`.
+The declaration is not the verification record: that is the Targeted version in
+`docs/compat/audit.md`, moved each release by pointing the `@deepseek-ai/dsh-*`
+devDependencies at the new version and running `npm run check`.
 
 ## Versioned-line release model
 
 **One release targets one DSH version line.** The plugin's own version is
 independent of the host; a release declares its DSH line through the peer
-constraint (a single companion tuple), never through the plugin version.
+constraint, never through the plugin version.
 
 The DSH line a release targets is the peer constraint, and its npm dist-tag is
 derived from the version (see above), so this model does not track the plugin's
@@ -131,6 +109,3 @@ the line is EOL, frozen, and receives no further patches.
 **Bug-fix flow (forward-fix then backport).** A fix affecting multiple supported
 lines is applied on `main` first, then backported to each still-supported
 release branch. A fix specific to one line is applied only on that line.
-
-The single-line model uses one peer tuple per release (see DSH version
-alignment above); the OR-union multi-line practice it replaced is not used.

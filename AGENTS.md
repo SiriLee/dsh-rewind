@@ -34,8 +34,7 @@ them at runtime, so the published tarball does not carry them.
 - `src/session-cwd.ts` — session working-directory resolution (fs-tools rule)
 - `src/locales.ts` — host i18n (`t()` renderer, `HostKey`)
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation
-- `scripts/` — `build.mjs` (artifacts), `check-dsh-version.mjs` (peer-tuple check),
-  `update-badge.mjs` (badge), `verify-host.mjs` (host verification),
+- `scripts/` — `build.mjs` (artifacts), `update-badge.mjs` (badge), `verify-host.mjs` (host verification),
   `session-decode.mjs` / `session-encode.mjs` (log codec)
 - `docs/` — organized: `contract/` (client contract), `compat/` (audit + compatibility notes), `release/`, plus `harness-reference.md`, `format.md`, `architecture.md`; repo root holds `SECURITY.md` and `CONTRIBUTING.md`
 - `tests/` — vitest suites (rewind / snapshot / hidden / session-cwd / integration)
@@ -46,7 +45,6 @@ them at runtime, so the published tarball does not carry them.
 - Commit **one logical change per commit**: finish one feature/fix, run `npm run
   check`, then commit and push before starting the next change.
 - Every change must pass `npm run check` before it is committed.
-- When DSH interfaces change, maintain the peer version ranges (see `docs/release/release.md`).
 - DSH compatibility is iteration-driven: `main` always adapts to the **latest**
   DSH line — cross-version compatibility is not kept, and a shipped DSH line is
   preserved only on its release branch (see `docs/release/release.md`).

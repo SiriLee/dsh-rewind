@@ -62,38 +62,20 @@ npm publish --access public
   （按版本取 `--latest` / `--prerelease`）。发布运行成功后，请用**手写双语**
   正文（中文在前、英文在后）覆盖——切勿把自动文本当作最终发布说明。
 
-## DSH 版本适配（单一 peer 元组）
+## DSH 版本适配
 
-DSH 仍在 rc 阶段，npm 的 prerelease 匹配规则要求 peer 范围与宿主版本
-**同 `[major, minor, patch]` 元组**才能匹配。因此 peerDependencies 采用
-**每一条 DSH 线一个 peer 元组**（如 `^0.1.2-rc.1`）；范围是保守的，只声明实际验证过的内容。
+`peerDependencies` 声明插件已适配的 DSH 范围。DSH 在 `includePrerelease` 下校验每个
+`@deepseek-ai/dsh-*` peer（见 `docs/compat/audit.md`），匹配范围因此比 npm 默认规则更宽。
+范围不再适配时更新声明：插件自身更新放弃了对旧版本的兼容，或上游发生 minor/major 变更。
+不刻意维持范围之外的兼容性；`engines.dsh` 声明同一范围的下限。
 
-- **何时需要更新**：**已验证范围**变化时——DSH 发新元组，或主动收窄（例如不再
-  声明内测的 DSH `alpha` 系列）；落在已声明范围内的发布不改变任何东西，**除非它在
-  同一元组内改变了接口**（`0.1.6-alpha.2` 删除了客户端会话所有权与 queue 镜像
-  API，下限随之移动）。DSH 所有包同版本发布；信号是
-  `npm view @deepseek-ai/dsh dist-tags`。
-- **已发布元组检查（可选）**：`node scripts/check-dsh-version.mjs` 用 npm `latest`
-  dist-tag 版本对比 peer 覆盖的元组（exit 0 无需动作，exit 1 需要）。它**只读
-  `latest` tag**；发布在其它 tag 的 pre-release 走**手动发布前检查**
-  ——见上文"升版前手动确认"。
-- **更新步骤**：把每个 `@deepseek-ai/dsh-*` peer 与 devDependency 指向已验证
-  范围 → `npm install` → `npm run check` → 发版。
-- **正式版后收敛**：DSH 发布 final 版本后，正式版不受 prerelease 元组规则
-  限制，peer 可收敛为稳定的 `^0.1.x` 单范围，此节即可删除。
-- **声明的最低运行时（`engines.dsh`）**：与 peer 元组一起，每个发布在
-  `engines.dsh` 声明 DSH 运行时下限（如 `>=0.1.2-rc.1`）。当前线上还没有
-  任何读取方，因此它只是前置声明、尚未被强制执行。**与 peer 范围持平的同一发布里
-  一并 bump**；不可只升代码、声明下限停留在旧值。仅使用 `>=X.Y.Z[-pre]` 形式。
-- **peer 在启动时会被强制执行（`0.1.7-rc.1`）**：DSH 会拿 bundle 自身的
-  `@deepseek-ai/dsh-*` peer 与运行版本比对，只要有一个不满足就**整包跳过**，
-  因此过期的 peer 范围不再是"仅告警"，而是直接导致插件不加载。见
-  `docs/compat/audit.md`。
+声明不等于验证记录：验证记录是 `docs/compat/audit.md` 的 Targeted version，每个 DSH 发布
+通过把 `@deepseek-ai/dsh-*` devDependency 指向新版本并跑 `npm run check` 来更新。
 
 ## 发布版本线模型
 
 **一个发布对准一条 DSH 版本线。** 插件自身版本号与宿主解耦；某发布所对准的
-DSH 线由 peer 约束（单一 companion 元组）声明，而非插件版本号。
+DSH 线由 peer 约束声明，而非插件版本号。
 
 | 插件版本 | DSH 线 | 角色（示例） |
 | --- | --- | --- |
@@ -120,5 +102,3 @@ DSH 线作为 `latest` 发布为止；此后该线 EOL、冻结、不再发补�
 
 **Bug 修复流程（先向前修，再回迁）。** 跨多条支持线的修复，先在 `main` 上
 修复，再回迁到各仍受支持的 release 分支。仅特定线的修复，只在对应线修复。
-
-单线模型每个发布使用单一 peer 元组（见上文「DSH 版本适配」）；其取代的 OR 并集多线做法已不使用。
