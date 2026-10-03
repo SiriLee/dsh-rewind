@@ -52,6 +52,8 @@ npm run verify:host    # end-to-end host verification (full check suite)
     source of truth; other docs link to it instead of restating).
   - **`SECURITY.md`** — any change to the security model (trust boundary,
     mutation gates, containment, crash handling).
+  - **`CHANGELOG.md`** — a user-visible change gets a line under `## [Unreleased]`
+    ([format](docs/release/notes-template.md)).
 - Bilingual docs use the `.md` / `.zh.md` file split; keep the two mirrors in
   sync.
 
