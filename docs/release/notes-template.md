@@ -1,7 +1,5 @@
 # Release notes (CHANGELOG) guide
 
-[简体中文](notes-template.zh.md)
-
 Release notes live in [`CHANGELOG.md`](../../CHANGELOG.md); the publish workflow
 attaches a tag's block as that release's GitHub Release body. The layout follows
 [Keep a Changelog](https://keepachangelog.com/) — one block per release, newest

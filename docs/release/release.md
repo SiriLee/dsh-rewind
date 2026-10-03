@@ -1,7 +1,5 @@
 # Release
 
-[简体中文](release.zh.md)
-
 ## First release (manual, one-time)
 
 Trusted Publisher can only be configured once the package exists, so the first
