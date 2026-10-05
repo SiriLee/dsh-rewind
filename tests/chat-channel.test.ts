@@ -129,3 +129,48 @@ describe('hiddenSeqsOf cut spans', () => {
     expect(hiddenSeqsOf(chat)).toEqual(expected)
   })
 })
+
+/**
+ * Synthetic fractional anchors (harness `CHAT_SYNTHETIC_SEQ_OFFSETS`).
+ *
+ * These rows belong to events INSIDE a cut but are anchored beside the event's
+ * integer seq, so an integer-inclusive test left them on screen after a rewind
+ * — the "已停止" header and the per-turn copy/branch row survived it.
+ */
+describe('hiddenSeqsOf covers synthetic fractional anchors', () => {
+  /** A cut [10, 20] plus one node per synthetic anchor around the cut. */
+  function chatWithAnchors(anchorSeq: number, kind = 'turn-tail'): HiddenChat {
+    const nodes = new Map<string, unknown>()
+    nodes.set('c20', {
+      kind: 'command',
+      anchorSeq: 20,
+      data: { seq: 20, name: 'rewind', args: '@10 chat', outcome: { kind: 'success', sourceEventSeq: 20 } },
+    })
+    nodes.set('anchor', { kind, anchorSeq, data: { turn: 3 } })
+    return {
+      order: [...nodes.keys()],
+      nodes: { get: key => nodes.get(key) as ChatConversationViewNode | undefined },
+    }
+  }
+
+  it.each([
+    ['turn footer at turn/end + 0.1', 20.1],
+    ['turn-process summary at control - 0.1', 19.9],
+    ['turn-error at the turn/end seq', 20],
+    ['interrupted assistant prefix at turn/end - 0.9', 19.1],
+    ['max-tokens notice after the closing assistant', 20.05],
+  ])('hides %s', (_label, anchorSeq) => {
+    expect(hiddenSeqsOf(chatWithAnchors(anchorSeq))).toContain(anchorSeq)
+  })
+
+  it('leaves a row anchored after the cut visible', () => {
+    // The slack stays inside one seq, so the first turn AFTER the marker keeps
+    // its rows — the cut never swallows later traffic.
+    expect(hiddenSeqsOf(chatWithAnchors(21))).not.toContain(21)
+    expect(hiddenSeqsOf(chatWithAnchors(21.1))).not.toContain(21.1)
+  })
+
+  it('leaves a row anchored before the cut visible', () => {
+    expect(hiddenSeqsOf(chatWithAnchors(9.9))).not.toContain(9.9)
+  })
+})

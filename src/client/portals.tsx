@@ -59,6 +59,7 @@ import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
 import { matchPendingRows, retractSpan, steeringItemsOf, type InboxLike, type PendingSteeringItem } from './pending.ts'
+import { hideWithdrawnTurnMarks, railIndexResolverOf, withdrawnTurnsOf } from './turn-rail.ts'
 import { rewindLog } from './log.ts'
 import { CLASS, REWIND_ICON_SVG } from './styles.ts'
 
@@ -644,6 +645,28 @@ function inboxOf(session: SessionFace): InboxLike | undefined {
 const INBOX_PROJECTION = 'inbox'
 
 /**
+ * The host's Turn-outline projection: one entry per `turn/start`, folded over the
+ * append-only event log. It is what the Turn rail renders, so reading it is how
+ * a withdrawn Turn is mapped onto its rail mark — a mark carries no Turn number,
+ * only its position in the array this projection orders.
+ *
+ * The value is typed `unknown` (projection values are wire data) and narrowed in
+ * `turn-rail.ts`. A projection that has not loaded reads as undefined, which
+ * degrades to hiding footers alone.
+ */
+const TURN_OUTLINE_PROJECTION = 'turnOutline'
+
+/** Read the Turn-outline projection of a session, or undefined when absent. */
+function turnOutlineOf(session: SessionFace): unknown {
+  try {
+    return session.projections.faceOf(TURN_OUTLINE_PROJECTION).getSnapshot()
+  } catch (error) {
+    rewindLog.warn('portals', 'turnOutline projection read failed', error)
+    return undefined
+  }
+}
+
+/**
  * The pending bubble row's compared text and its message-attachment block
  * count, read from a CLONE (the live row is never touched).
  *
@@ -760,6 +783,8 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
     let queued = false
     // The pending path's out-of-DOM data channel (`syncInboxSubscription`).
     let unsubscribeInbox: (() => void) | undefined
+    // The Turn rail's projection channel (same reason as the inbox).
+    let unsubscribeRail: (() => void) | undefined
     let inboxOwner: SessionFace | undefined
 
     const refresh = (): void => {
@@ -797,6 +822,17 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
         hiddenSeqs,
         hidden.current,
       )
+      // The Turn rail is fed by the host's `turnOutline` projection — a pure
+      // `turn/start` fold that ignores `surfaceOp` and exposes no removal API —
+      // so its marks outlive a rewind while the transcript above correctly drops
+      // the same Turns. Hide them here, from the same withdrawn set. The Turn →
+      // rail-index mapping comes from that projection (a mark's only identity is
+      // its array position), so a projection that has not loaded degrades to
+      // hiding footers alone rather than hiding a wrong mark.
+      hideWithdrawnTurnMarks(withdrawnTurnsOf(chat, hiddenSeqs), railIndexResolverOf(turnOutlineOf(session)), document, element => {
+        element.dataset.dshRewindHidden = 'true'
+        hidden.current.add(element)
+      })
       // Nothing is logged in this per-batch scan: printing a hide set here would
       // flood the console during streaming.
       const durable = collectDurableTargets(snapshot, chat, hiddenSeqs)
@@ -835,12 +871,23 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       if (session === inboxOwner) return
       unsubscribeInbox?.()
       unsubscribeInbox = undefined
+      unsubscribeRail?.()
+      unsubscribeRail = undefined
       inboxOwner = session
       if (session === undefined) return
       try {
         unsubscribeInbox = session.projections.faceOf(INBOX_PROJECTION).subscribe(queueRefresh)
       } catch (error) {
         rewindLog.warn('portals', 'inbox projection subscribe failed', error)
+      }
+      // The Turn rail is virtualized: a mark for a withdrawn Turn that scrolls
+      // into view mounts AFTER the hide pass ran, so the rail projection is
+      // subscribed for the same reason the inbox is — a Turn arriving changes
+      // which marks exist, and only a re-run can hide a freshly mounted one.
+      try {
+        unsubscribeRail = session.projections.faceOf(TURN_OUTLINE_PROJECTION).subscribe(queueRefresh)
+      } catch (error) {
+        rewindLog.warn('portals', 'turnOutline projection subscribe failed', error)
       }
     }
 
@@ -854,6 +901,8 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       observer.disconnect()
       unsubscribeInbox?.()
       unsubscribeInbox = undefined
+      unsubscribeRail?.()
+      unsubscribeRail = undefined
       inboxOwner = undefined
     }
   }, [sessionId, sessionOf])

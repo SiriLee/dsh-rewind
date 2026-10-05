@@ -32,12 +32,38 @@ every successful executed `/rewind` row, and every message inside its
 command's `args`. Reuse these instead of re-deriving the logic (cf.
 dsh-chat-timeline#6).
 
+### Synthetic anchors
+
+A returned seq may be **fractional**. The harness anchors some rows beside the
+event seq rather than on it (`CHAT_SYNTHETIC_SEQ_OFFSETS`):
+
+| Row | anchorSeq |
+| --- | --- |
+| interrupted assistant | `turn/end.seq - 0.9` |
+| interrupted followup | `turn/end.seq - 0.8` |
+| turn-process summary | `controlAnchorSeq - 0.1` |
+| max-tokens notice | `<assistant>.seq + 0.05` |
+| turn tail footer | `turn/end.seq + 0.1` |
+
+These belong to events inside a cut, so a rewind span covers them: the span
+reaches the marker's seq plus a slack of 1, which contains every offset above
+(no offset exceeds ±1). Consumers must compare with `Set.has` on the exact
+number — **do not floor or round a seq before the lookup**, or a withdrawn
+turn footer or process summary stays visible. That was the "已停止" header and
+the per-turn action row surviving a rewind.
+
 ## DOM attribute
 
 Each withdrawn row carries `data-dsh-rewind-hidden="true"` while hidden,
-removed on un-hide. The same attribute also lands on a step/process GROUP shell
-— the view container around a turn's process rows, which is not itself a message
-— when every member it holds is withdrawn. Contract:
+removed on un-hide. The same attribute also lands on:
+
+- a step/process GROUP shell — the view container around a turn's process rows,
+  which is not itself a message — when every member it holds is withdrawn.
+- a Turn footer (`[data-turn-tail]`) and a Turn-rail mark whose Turn lost all of
+  its rows. The rail is fed by the host `turnOutline` projection, which ignores
+  `surfaceOp` and offers no removal, so the client hides it to match.
+
+Contract:
 
 - The **attribute name** is stable; treat the value as opaque.
 - It is **observational only** — rewind hides via `style.display`; the

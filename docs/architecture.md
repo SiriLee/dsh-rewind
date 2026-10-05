@@ -67,6 +67,38 @@ Key invariants:
   no-op. A path whose directory no longer resolves to its commit-time location
   is skipped and reported, never written through (see `SECURITY.md`).
 
+### Why the client hides rows
+
+`surfaceOp: 'replace'` is **model-facing only**. The harness never consumes it:
+every chat node's `match()` accepts `op: 'append'` alone, so a replaced range
+stays in the transcript and the human still sees it. This is intentional on the
+harness side — `dsh-session`'s surface contract states the surface serves the
+model and the event log serves the human transcript, and its own policy for a
+replaced range is to keep a compaction summary card. Hiding withdrawn rows is
+therefore **this plugin's** responsibility, not a harness feature to wait for.
+
+Two consequences shape the client code:
+
+- **Anchors are not event seqs.** A row's `anchorSeq` may be fractional — the
+  harness places some rows beside their event (`turn/end + 0.1` for a turn
+  footer, `control - 0.1` for a process summary, `turn/end - 0.9` for an
+  interrupted assistant). A cut therefore spans `[target, marker + 1]`, and the
+  hidden set must be compared by exact `Set.has`. Flooring a seq before lookup
+  left the "已停止" header and the per-turn action row on screen after a rewind.
+- **The Turn rail is host-projected and rewind-blind.** Its marks come from the
+  `turnOutline` projection, a pure `turn/start` fold that ignores `surfaceOp`
+  and exposes no removal API. So a rewind leaves rail marks behind while the
+  transcript correctly drops those Turns. `src/client/turn-rail.ts`
+  reconciles them from the same withdrawn set: a Turn counts as withdrawn when
+  any of its Turn-scoped rows was cut, and its mark is addressed by
+  `data-index` — the rail array position — resolved through the same
+  projection's ascending Turn order.
+
+The rail is virtualized, so a mark can mount *after* a hide pass ran (scrolling
+it into view). That is why the refresh subscribes to `turnOutline` alongside the
+inbox projection: a projection change re-runs the pass, and a freshly mounted
+mark is judged again.
+
 ### Marker format history
 
 The rewind marker is written as form C (a `user/message` with a

@@ -228,44 +228,63 @@ export function isCandidateCommand(command: CommandNode): boolean {
 }
 
 /**
- * One executed rewind's cut: the target seq through the marker's seq, inclusive.
+ * One executed rewind's cut: the target seq through the marker's seq, plus the
+ * fractional slack the harness's synthetic anchors need (see `CUT_END_SLACK`).
+ * The upper bound is stored EXCLUSIVE so the slack is applied once here rather
+ * than on every membership test.
  */
 interface CutSpan {
   readonly start: number
-  end: number
+  readonly endExclusive: number
 }
+
+/**
+ * How far past the marker a cut still reaches, in anchorSeq units.
+ *
+ * The Chat target anchors some rows at a FRACTIONAL position inside their
+ * durable event's neighborhood rather than at the event's own integer seq: a
+ * turn footer at `turn/end.seq + 0.1`, the Turn-process summary at
+ * `controlAnchorSeq - 0.1`, an interrupted assistant prefix at `turn/end.seq -
+ * 0.9` (harness `CHAT_SYNTHETIC_SEQ_OFFSETS`). Those rows belong to events
+ * INSIDE the cut, so an integer-inclusive test left them on screen — the
+ * "已停止" header and the per-turn copy/branch row survived a rewind because
+ * of it. The bound stays within one seq, so a row anchored at the FIRST seq
+ * after the marker still stays visible and the slack never swallows later
+ * traffic.
+ */
+const CUT_END_SLACK = 1
 
 /**
  * Coalesce rewind cut spans into disjoint, ascending ranges.
  *
- * A span covers an inclusive range of anchor seqs, so two spans that overlap
- * describe one continuous cut and merge. Only strict overlap merges: adjacent
- * ranges stay separate, which keeps the union exact without assuming seqs are
- * integers. Membership then costs one binary search per node instead of a scan
- * of every span, which is what keeps `hiddenSeqsOf` linear in the nodes rather
- * than nodes × rewinds.
+ * Two half-open spans `[start, endExclusive)` that touch or overlap describe
+ * one continuous cut and merge. Touching ranges merge too — an earlier marker's
+ * slack always overlaps the next target, and both describe one withdrawn run.
+ * Membership then costs one binary search per node instead of a scan of every
+ * span, which is what keeps `hiddenSeqsOf` linear in the nodes rather than
+ * nodes × rewinds.
  *
- * @param spans - one `[target, marker]` range per executed rewind.
+ * @param spans - one `[target, marker + slack)` range per executed rewind.
  * @returns the merged ranges, ascending by start.
  */
 function coalesceCuts(spans: readonly CutSpan[]): readonly CutSpan[] {
   if (spans.length < 2) return spans
-  const sorted = [...spans].sort((left, right) => left.start - right.start || left.end - right.end)
+  const sorted = [...spans].sort((left, right) => left.start - right.start || left.endExclusive - right.endExclusive)
   const merged: CutSpan[] = []
   for (const span of sorted) {
     const last = merged[merged.length - 1]
-    if (last !== undefined && span.start <= last.end) {
-      if (span.end > last.end) last.end = span.end
+    if (last !== undefined && span.start <= last.endExclusive) {
+      if (span.endExclusive > last.endExclusive) merged[merged.length - 1] = { start: last.start, endExclusive: span.endExclusive }
       continue
     }
-    merged.push({ start: span.start, end: span.end })
+    merged.push(span)
   }
   return merged
 }
 
 /**
  * Whether an anchor seq falls inside any coalesced cut range.
- * @param cuts - coalesced ranges, ascending by start (see `coalesceCuts`).
+ * @param cuts - coalesced half-open ranges, ascending by start (see `coalesceCuts`).
  * @param seq - the anchor seq to test.
  * @returns true when a rewind withdrew that seq.
  */
@@ -276,7 +295,7 @@ function cutsContain(cuts: readonly CutSpan[], seq: number): boolean {
     const middle = (low + high) >> 1
     const cut = cuts[middle]!
     if (seq < cut.start) high = middle - 1
-    else if (seq > cut.end) low = middle + 1
+    else if (seq >= cut.endExclusive) low = middle + 1
     else return true
   }
   return false
@@ -323,7 +342,7 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
     hidden.add(command.seq)
     const target = targetSeqOfArgs(command.args)
     if (target !== undefined) {
-      spans.push({ start: target, end: marker })
+      spans.push({ start: target, endExclusive: marker + CUT_END_SLACK })
     }
   }
   const cuts = coalesceCuts(spans)
