@@ -10,6 +10,16 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.0-rc.1`
 
+---
+
+> DSH `>=0.2.0-rc.1` supported
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.2...vNEXT
+
+## [0.15.2] - 2026-10-08
+
+> 适配 DSH `>=0.2.0-rc.1`
+
 ### 问题修复
 
 - 与其他插件命令重名时，本插件不再整体激活失败：只有重名的那条命令不可用，回退按钮、候选面板与文件快照均照常。客户端改为驱动内部引擎通道 `rewind-plugin`，不再依赖 `/rewind` 这个名字。#49 首次报告了该问题。 @SiriLee
@@ -24,7 +34,7 @@ and the release steps are documented in
 - A command name owned by another plugin no longer fails the whole plugin: only that name is unavailable, while the rewind button, picker and file snapshots keep working. The client now drives the internal `rewind-plugin` engine channel instead of depending on the `/rewind` name. The problem was first reported in #49. @SiriLee
 - After a rewind, a fully withdrawn Turn that produced no output (no assistant reply or tool call) now hides its summary row (e.g. "Stopped") with it. The problem was first reported in #48. @SiriLee
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.1...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.1...v0.15.2
 
 ## [0.15.1] - 2026-10-03
 
