@@ -26,14 +26,16 @@ const hidden = hiddenSeqsOf(chat as HiddenChat) // 被隐藏的 anchor seq 集�
 
 `hiddenSeqsOf` 隐藏所有内部探针行（`preview` / `__candidates`）、所有成功
 执行的 `/rewind` 行，以及每条回退 `[target, marker]` 区间内的消息（每次
-回退切一条区间，区间互不合并）。只需从命令 `args` 取 target 时，可用同样
-导出的 `targetSeqOfArgs`。请复用这些实现，勿自行重写（参见
-dsh-chat-timeline#6）。
+回退切一条区间，区间互不合并）。某回合的行被**全部**撤回时，该回合的
+Turn 过程摘要行也会一并隐藏——它自身的锚点可能早于 target。只需从命令
+`args` 取 target 时，可用同样导出的 `targetSeqOfArgs`。请复用这些实现，
+勿自行重写（参见 dsh-chat-timeline#6）。
 
 ## DOM 属性
 
 每条被撤回的行在隐藏期间带有 `data-dsh-rewind-hidden="true"`，取消隐藏时
-移除。契约如下：
+移除。该属性也会落在被整体撤回的回合的 Turn 过程摘要行上（其锚点可能早于
+区间起点）。契约如下：
 
 - **属性名**稳定；值视为不透明。
 - 仅**观测性**标记 — rewind 通过 `style.display` 隐藏，该属性记录的是

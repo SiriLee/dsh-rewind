@@ -10,9 +10,17 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.0-rc.1`
 
+### 问题修复
+
+- 回退后，被整体撤回且未产生任何输出（无助手回复、无工具调用）的回合，其摘要行（如「已停止」）会随该回合一起隐藏。#48 首次报告了该问题。 @SiriLee
+
 ---
 
 > DSH `>=0.2.0-rc.1` supported
+
+### Bug Fixes
+
+- After a rewind, a fully withdrawn Turn that produced no output (no assistant reply or tool call) now hides its summary row (e.g. "Stopped") with it. The problem was first reported in #48. @SiriLee
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.1...vNEXT
 

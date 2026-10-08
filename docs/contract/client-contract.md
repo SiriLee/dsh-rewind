@@ -27,17 +27,19 @@ const hidden = hiddenSeqsOf(chat as HiddenChat) // Set<number> of anchor seqs
 
 `hiddenSeqsOf` hides every internal probe row (`preview` / `__candidates`),
 every successful executed `/rewind` row, and every message inside its
-`[target, marker]` span (each rewind cuts one span; spans stay separate).
-`targetSeqOfArgs` is exported for consumers that only need the target from a
-command's `args`. Reuse these instead of re-deriving the logic (cf.
-dsh-chat-timeline#6).
+`[target, marker]` span (each rewind cuts one span; spans stay separate). A Turn
+whose rows were ALL withdrawn also contributes its Turn-process summary row,
+whose own anchor can precede the target. `targetSeqOfArgs` is exported for
+consumers that only need the target from a command's `args`. Reuse these instead
+of re-deriving the logic (cf. dsh-chat-timeline#6).
 
 ## DOM attribute
 
 Each withdrawn row carries `data-dsh-rewind-hidden="true"` while hidden,
 removed on un-hide. The same attribute also lands on a step/process GROUP shell
 — the view container around a turn's process rows, which is not itself a message
-— when every member it holds is withdrawn. Contract:
+— when every member it holds is withdrawn, and on a fully withdrawn Turn's
+Turn-process summary row (whose anchor can sit before the span). Contract:
 
 - The **attribute name** is stable; treat the value as opaque.
 - It is **observational only** — rewind hides via `style.display`; the

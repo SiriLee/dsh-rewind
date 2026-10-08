@@ -17,12 +17,17 @@ export interface ChatConversationViewNode {
   readonly kind?: string
   readonly data?: unknown
   readonly anchorSeq: number
+  /** Owning Turn as the chat snapshot carries it; its `turn` and `start` are read
+   * (see `addWithdrawnTurnChrome`). */
+  readonly location?: { readonly turn?: { readonly turn?: unknown; readonly start?: unknown } }
 }
 
 /** Minimal chat snapshot reader the hiding logic needs. */
 export interface HiddenChat {
   readonly order: readonly string[]
   readonly nodes: { get(key: string): ChatConversationViewNode | undefined }
+  /** Turn-keyed node index; absent on older snapshots, which the chrome pass tolerates. */
+  readonly locations?: { getTurn(turn: number): readonly string[] }
 }
 
 /**
@@ -283,6 +288,67 @@ function cutsContain(cuts: readonly CutSpan[], seq: number): boolean {
 }
 
 /**
+ * Node keys of rows OUTSIDE every cut, by anchor value. The DOM hide matches a
+ * row by anchor VALUE, so a chrome row may only join the set while no live row
+ * shares that value.
+ * @param snap - the live chat snapshot.
+ * @param cuts - coalesced withdrawn ranges (see `coalesceCuts`).
+ */
+function liveAnchorKeys(snap: HiddenChat, cuts: readonly CutSpan[]): Map<number, string[]> {
+  const live = new Map<number, string[]>()
+  for (const key of snap.order) {
+    const node = snap.nodes.get(key)
+    if (node === undefined || cutsContain(cuts, node.anchorSeq)) continue
+    const keys = live.get(node.anchorSeq)
+    if (keys === undefined) live.set(node.anchorSeq, [key])
+    else keys.push(key)
+  }
+  return live
+}
+
+const EMPTY_KEYS: readonly string[] = []
+
+/**
+ * Add the Turn-process summary row of every Turn whose rows were ALL withdrawn.
+ *
+ * That row is the one Turn row whose anchor can precede the rewind target: a Turn
+ * stopped before any process evidence anchors at `turn.start.seq − 0.1`, which is
+ * BEFORE its human message (the target), so the anchor comparison never reaches
+ * it. Same rule as the seat pass's emptied GROUP shell, one level up: the summary
+ * goes when it can no longer disclose anything live. This reads a SUPERSET of the
+ * harness's disclosure members, so the test can only get harder to pass — a
+ * misjudgement drops the summary row, never a live one.
+ *
+ * @param snap - the live chat snapshot.
+ * @param cuts - coalesced withdrawn ranges (see `coalesceCuts`).
+ * @param hidden - the set being built; extended in place.
+ */
+function addWithdrawnTurnChrome(snap: HiddenChat, cuts: readonly CutSpan[], hidden: Set<number>): void {
+  const locations = snap.locations
+  if (locations === undefined || cuts.length === 0) return
+  let live: Map<number, string[]> | undefined
+  for (const key of snap.order) {
+    const chrome = snap.nodes.get(key)
+    if (chrome === undefined || chrome.kind !== 'turn-process') continue
+    const located = chrome.location?.turn
+    // A window that holds only part of the Turn cannot be judged honestly.
+    if (located?.start === undefined) continue
+    const turn = located.turn
+    if (typeof turn !== 'number') continue
+    const keys = locations.getTurn(turn)
+    if (keys.length === 0) continue
+    const rows = keys
+      .map(member => snap.nodes.get(member))
+      .filter((member): member is ChatConversationViewNode => member !== undefined)
+    if (rows.length !== keys.length) continue
+    if (!rows.every(member => member.key === chrome.key || cutsContain(cuts, member.anchorSeq))) continue
+    live ??= liveAnchorKeys(snap, cuts)
+    if ((live.get(chrome.anchorSeq) ?? EMPTY_KEYS).some(holder => holder !== chrome.key)) continue
+    hidden.add(chrome.anchorSeq)
+  }
+}
+
+/**
  * Anchor seqs that must be hidden from the rendered transcript so the user sees
  * the conversation as the agent sees it: every impact-preview flow node (it only
  * exists to feed the popover) and every SUCCESSFUL executed `/rewind` command
@@ -294,6 +360,9 @@ function cutsContain(cuts: readonly CutSpan[], seq: number): boolean {
  * still-on-surface gap of new traffic between an earlier marker and a later
  * target. Endpoints come from the command nodes (`sourceEventSeq` is the
  * marker's log seq; the outcome text carries the target seq).
+ *
+ * A Turn whose rows were ALL withdrawn also contributes its Turn-process summary
+ * row, whose own anchor can precede the target (see `addWithdrawnTurnChrome`).
  */
 export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
   const hidden = new Set<number>()
@@ -331,6 +400,11 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
     const node = snap.nodes.get(key)
     if (node === undefined) continue
     if (cutsContain(cuts, node.anchorSeq)) hidden.add(node.anchorSeq)
+  }
+  try {
+    addWithdrawnTurnChrome(snap, cuts, hidden)
+  } catch {
+    // A malformed index must not break the hiding that already works.
   }
   return hidden
 }
