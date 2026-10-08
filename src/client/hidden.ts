@@ -8,6 +8,19 @@
 
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
+/**
+ * The internal engine channel every client call is sent to. Mirrored by
+ * `ENGINE_COMMAND` in `src/index.ts` — the two bundles share no module.
+ */
+export const ENGINE_COMMAND = 'rewind-plugin'
+
+/**
+ * Recognized engine command names. `rewind` is what sessions written before the
+ * engine channel existed contain, so keeping it preserves their withdrawn
+ * spans (forward compatibility only: an older client cannot know the new name).
+ */
+export const ENGINE_COMMANDS: ReadonlySet<string> = new Set([ENGINE_COMMAND, 'rewind'])
+
 /** A chat-snapshot view node as the hiding / composer-refill logic reads it.
  * The harness's view node shape plus the `anchorSeq` the chat snapshot carries
  * (the plugin reads `anchorSeq` off each node; it is not declared on the
@@ -182,16 +195,15 @@ export function targetSeqOfArgs(args: string | null | undefined): number | undef
 }
 
 /**
- * True when a `/rewind` command node is an EXECUTED rewind for `seq` — the
- * admission form the popover drives (`@<seq> chat` / `both`) that settled
- * with a marker-carrying success outcome. The composer refill waits for
+ * True when one of this plugin's engine command nodes is an EXECUTED rewind for
+ * `seq` — the admission form the popover drives (`@<seq> chat` / `both`) that
+ * settled with a marker-carrying success outcome. The composer refill waits for
  * exactly this node after the user confirms, so a history-loaded command can
  * never trigger a fill.
  */
 export function isExecutedRewindCommand(node: CommandNode, seq: number): boolean {
-  if (node.name !== 'rewind' || node.outcome?.kind !== 'success') return false
-  // A success WITHOUT a marker rewound nothing (an impact preview, or the
-  // step-2 "choose a mode" hint from the now-blocked manual text flow).
+  if (node.name === null || !ENGINE_COMMANDS.has(node.name) || node.outcome?.kind !== 'success') return false
+  // A success WITHOUT a marker rewound nothing (an impact preview).
   if (node.outcome.sourceEventSeq === undefined) return false
   const args = node.args ?? ''
   return new RegExp(`(?:^|\\s)@${seq}(?:\\s|$)`).test(args)
@@ -214,8 +226,8 @@ export function hasFileImpact(text: string | undefined): boolean {
   return false
 }
 
-/** True when a `/rewind` command node is an impact preview — the internal probe
- * the popover runs (`/rewind preview @seq both`) to fetch the restore/delete
+/** True when an engine command node is an impact preview — the internal probe
+ * the popover runs (`preview @seq both`) to fetch the restore/delete
  * list. Previews never surface in the transcript (their result is shown in the
  * popover), so their flow node is hidden in every state. */
 function isPreviewCommand(command: CommandNode): boolean {
@@ -223,8 +235,8 @@ function isPreviewCommand(command: CommandNode): boolean {
 }
 
 /**
- * True when a `/rewind` command node is the internal candidate-list probe
- * (`/rewind __candidates`) the popupSelect runs to fetch the FULL candidate
+ * True when an engine command node is the internal candidate-list probe
+ * (`__candidates`) the popupSelect runs to fetch the FULL candidate
  * list from the host. Like previews, its flow node never surfaces in the
  * transcript — it only feeds the popup — so it is hidden in every state.
  */
@@ -371,7 +383,7 @@ export function hiddenSeqsOf(snap: HiddenChat): Set<number> {
     const node = snap.nodes.get(key)
     if (node === undefined || node.kind !== 'command') continue
     const command = node.data as CommandNode
-    if (command.name !== 'rewind') continue
+    if (command.name === null || !ENGINE_COMMANDS.has(command.name)) continue
     // An internal probe (preview or candidate-list fetch) is hidden in every
     // state — pending, succeeded, or errored — so no row flashes in the
     // transcript while the popover/popup shows its result. Probes never

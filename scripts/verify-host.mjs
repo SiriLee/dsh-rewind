@@ -309,6 +309,11 @@ const readOrMissing = async path => readFile(path, 'utf8').catch(() => '<missing
 check('command registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
 // `/undo` is a bare alias of `/rewind`: registered and sharing the same handler.
 check('undo alias registered', typeof commands.get('undo')?.handler === 'function' && commands.get('undo').name === 'undo' && commands.get('undo').handler === commands.get('rewind').handler, JSON.stringify(commands.get('undo')))
+// The internal engine channel the client drives, independent of `/rewind`.
+check('engine channel registered', typeof commands.get('rewind-plugin')?.handler === 'function' && typeof commands.get('rewind-plugin').input?.hint === 'string', JSON.stringify(commands.get('rewind-plugin')))
+// A bare engine invocation refuses instead of rewinding.
+const bareEngine = await commands.get('rewind-plugin').handler({ commandId: CommandId('cid'), agent, rawInput: '', signal: aborted() })
+check('engine channel refuses a bare invocation', bareEngine.kind === 'error' && /Internal command/.test(bareEngine.text), bareEngine.text)
 
 // 2. bare /rewind (manual, no parameters) withdraws the most recent user
 //    message (seq 2 "second question") and everything after it
@@ -332,7 +337,7 @@ check('marker is a user/message with the dsh-rewind producer source and the (emp
   && bareMarker.data.content[0].text === '(empty message)'
   && bareMarker.data.source.kind === 'dsh-rewind', JSON.stringify(bareMarker?.data))
 
-// 3. /rewind @<seq> chat (the button's exact call form) cuts the surface on a
+// 3. @<seq> chat (the form the button sends) cuts the surface on a
 //    fresh session
 const paramSession = buildSession('verify-param')
 const paramAgent = makeAgent(paramSession.id, paramSession)

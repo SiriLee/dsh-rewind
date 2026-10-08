@@ -33,7 +33,7 @@ machine channels (see [Compatibility strategy](#compatibility-strategy)).
 ## Rewind pipeline
 
 ```
-↶ button / /rewind @<seq> both
+↶ button / /rewind-plugin @<seq> both
   → handleRewind: parseRewindTarget + planRewind (target must be a
     user/message currently on the surface)
   → agent.cancel({ keepInbox: true }) if running; waitForAgentIdle

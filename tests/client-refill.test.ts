@@ -140,7 +140,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
     await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(command).toHaveBeenCalledWith(`/rewind @${TARGET} both`)
+    expect(command).toHaveBeenCalledWith(`/rewind-plugin @${TARGET} both`)
     expect(setComposerText).toHaveBeenCalledTimes(1)
     expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
     expect(info).not.toHaveBeenCalled()
@@ -199,7 +199,7 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     settleChat()
     getTrigger()?.()
     await call
-    expect(command).toHaveBeenCalledWith(`/rewind @${TARGET} both`)
+    expect(command).toHaveBeenCalledWith(`/rewind-plugin @${TARGET} both`)
     expect(setComposerText).toHaveBeenCalledTimes(1)
     expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
   })

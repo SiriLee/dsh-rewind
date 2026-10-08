@@ -8,7 +8,7 @@ is internal and may change without notice.
 
 | Channel | Stability | Consumers |
 | --- | --- | --- |
-| `/rewind` command `args` `@<seq>` | ✅ stable, semver-protected | machine |
+| this plugin's engine command `args` `@<seq>` (`rewind-plugin`; `rewind` in older sessions) | ✅ stable, semver-protected | machine |
 | `outcome.sourceEventSeq` (marker log seq) | ✅ stable, semver-protected | machine |
 | `data-dsh-rewind-hidden` attribute | ✅ stable name; observational only | DOM plugins |
 | `outcome.text` | ❌ **not** stable — human copy, never parse | — |
@@ -26,7 +26,8 @@ const hidden = hiddenSeqsOf(chat as HiddenChat) // Set<number> of anchor seqs
 ```
 
 `hiddenSeqsOf` hides every internal probe row (`preview` / `__candidates`),
-every successful executed `/rewind` row, and every message inside its
+every successful executed engine command row (`rewind-plugin`; `rewind` in older
+sessions), and every message inside its
 `[target, marker]` span (each rewind cuts one span; spans stay separate). A Turn
 whose rows were ALL withdrawn also contributes its Turn-process summary row,
 whose own anchor can precede the target. `targetSeqOfArgs` is exported for

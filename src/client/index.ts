@@ -37,7 +37,7 @@ import {
 } from './candidates.ts'
 import { closePopover, openPopover, knownCommandSeqs, waitForCommand, registerComposerFocuser } from './popover.ts'
 import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
-import { chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
+import { ENGINE_COMMAND, chatSnapshotOf, resolveChatWatch, isCandidateCommand, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
 import { en, zh } from './locales.ts'
@@ -384,7 +384,7 @@ export function apply(ctx: ClientContext): void {
      */
     const fetchHostCandidates = async (face: SessionFace, chatOf: ChatOf): Promise<readonly RewindCandidate[] | undefined> => {
       const known = knownCommandSeqs(face, chatOf, node => isCandidateCommand(node))
-      const result = await face.command('/rewind __candidates')
+      const result = await face.command(`/${ENGINE_COMMAND} __candidates`)
       if (!result.ok || result.value?.matched !== true) return undefined
       const outcome = await waitForCommand(face, chatOf, node => isCandidateCommand(node) && !known.has(node.seq), 8000, cb => watchChat(face.sessionId, cb))
       if (outcome === null || outcome.kind !== 'success' || outcome.text === undefined) return undefined

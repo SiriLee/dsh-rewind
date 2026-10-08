@@ -7,7 +7,7 @@
 
 | 通道 | 稳定性 | 适用方 |
 | --- | --- | --- |
-| `/rewind` 命令 `args` 中的 `@<seq>` | ✅ 稳定，受 semver 保护 | 机器 |
+| 本插件引擎命令 `args` 中的 `@<seq>`（`rewind-plugin`；旧会话为 `rewind`） | ✅ 稳定，受 semver 保护 | 机器 |
 | `outcome.sourceEventSeq`（marker 日志 seq） | ✅ 稳定，受 semver 保护 | 机器 |
 | `data-dsh-rewind-hidden` 属性 | ✅ 属性名稳定；仅观测性 | DOM 插件 |
 | `outcome.text` | ❌ **不**稳定 — 人类可读文案，禁止解析 | — |
@@ -25,7 +25,7 @@ const hidden = hiddenSeqsOf(chat as HiddenChat) // 被隐藏的 anchor seq 集�
 ```
 
 `hiddenSeqsOf` 隐藏所有内部探针行（`preview` / `__candidates`）、所有成功
-执行的 `/rewind` 行，以及每条回退 `[target, marker]` 区间内的消息（每次
+执行的引擎命令行（`rewind-plugin`；旧会话里是 `rewind`），以及每条回退 `[target, marker]` 区间内的消息（每次
 回退切一条区间，区间互不合并）。某回合的行被**全部**撤回时，该回合的
 Turn 过程摘要行也会一并隐藏——它自身的锚点可能早于 target。只需从命令
 `args` 取 target 时，可用同样导出的 `targetSeqOfArgs`。请复用这些实现，

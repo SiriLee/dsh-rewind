@@ -2,7 +2,7 @@
  * The rewind mode-selection popover (plain DOM, no React). Step two of the
  * interaction: the target is already fixed (the clicked message); the popover
  * offers the two modes. Choosing "both" first fetches the impact list through
- * the `/rewind preview @seq both` command and shows it before confirming.
+ * the engine channel's `preview @seq both` command and shows it before confirming.
  *
  * Keyboard: ↑/↓ move focus across the step's ACTION buttons only (the two
  * modes, or the confirm button on the impact step), Enter activates the
@@ -16,7 +16,7 @@
 
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { hasFileImpact, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
+import { ENGINE_COMMAND, ENGINE_COMMANDS, hasFileImpact, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'
@@ -195,17 +195,18 @@ export function waitForCommand(
   })
 }
 
-/** Outcome of a `/rewind preview` command, or null when it never settled. */
+/** Outcome of a `preview` engine command, or null when it never settled. */
 type PreviewOutcome = { kind: 'success' | 'error'; text?: string } | null
 
-/** True for the `/rewind preview @<seq> both` command node of one target. */
+/** True for this plugin's `preview @<seq> both` engine command node of one target. */
 function isPreviewFor(node: CommandNode, seq: number): boolean {
   const args = node.args ?? ''
-  return node.name === 'rewind' && args.includes('preview') && new RegExp(`(?:^|\\s)@${seq}(?=\\s|$)`).test(args)
+  return node.name !== null && ENGINE_COMMANDS.has(node.name)
+    && args.includes('preview') && new RegExp(`(?:^|\\s)@${seq}(?=\\s|$)`).test(args)
 }
 
 /**
- * Run `/rewind preview @seq both` and await its outcome.
+ * Run `preview @seq both` on the engine channel and await its outcome.
  *
  * `null` means ONLY "admitted but never settled" (the outcome wait timed out).
  * An ADMISSION failure is a settled error outcome carrying the reason: the call
@@ -227,7 +228,7 @@ async function previewImpact(
   const known = knownCommandSeqs(session, chatOf, node => isPreviewFor(node, seq))
   let result: Awaited<ReturnType<SessionFace['command']>>
   try {
-    result = await session.command(`/rewind preview @${seq} both`)
+    result = await session.command(`/${ENGINE_COMMAND} preview @${seq} both`)
   } catch (error) {
     rewindLog.warn('preview', `preview command threw for @${seq}`, error)
     return { kind: 'error', text: error instanceof Error ? error.message : String(error) }

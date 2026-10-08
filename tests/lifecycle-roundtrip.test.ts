@@ -18,7 +18,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { en as enLocale, zh as zhLocale } from '../src/locales.ts'
-import { apply, cleanupConfigKey, inject } from '../src/index.ts'
+import { apply, cleanupConfigKey, ENGINE_COMMAND, inject } from '../src/index.ts'
 import { resolveCleanupStatePath } from '../src/snapshot-cleanup.ts'
 import { testConfig, textMessage } from './helpers.ts'
 
@@ -29,8 +29,10 @@ type Disposer = () => unknown
 interface Mounted {
   readonly ctx: Context
   readonly logger: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> }
-  /** Registered `/rewind`-family commands, by command name. */
-  readonly commands: ReadonlyMap<string, { readonly name: string; readonly description?: string; readonly handler: (invocation: unknown) => Promise<unknown> }>
+  /** Registered engine commands, by command name. */
+  readonly commands: ReadonlyMap<string, { readonly name: string; readonly description?: string; readonly input?: { readonly hint: string }; readonly handler: (invocation: unknown) => Promise<unknown> }>
+  /** Occupy one command name before `apply`, standing in for a third-party plugin. */
+  occupyCommand(name: string): void
   /** `ctx.on` handlers, by event name. */
   readonly handlers: ReadonlyMap<string, (...args: never[]) => unknown>
   /** `tools/*` handlers registered by the nested `fs` scope, by event name. */
@@ -114,7 +116,9 @@ function mount(options: { fs?: boolean } = {}): Mounted {
     on: (event: string, handler: (...args: never[]) => unknown) => { handlers.set(event, handler); return () => {} },
     logger,
     commands: {
-      register: (definition: { name: string; description?: string; handler: (invocation: unknown) => Promise<unknown> }) => {
+      register: (definition: { name: string; description?: string; input?: { hint: string }; handler: (invocation: unknown) => Promise<unknown> }) => {
+        // Like the real registry: one name is unique per layer.
+        if (commands.has(definition.name)) throw new Error(`command "${definition.name}" is already registered`)
         commands.set(definition.name, definition)
         return () => {}
       },
@@ -137,6 +141,9 @@ function mount(options: { fs?: boolean } = {}): Mounted {
     toolHandlers,
     settingsWrites: () => [...settingsWrites],
     setEntryId: (id: string) => { fiber.entry = { id } },
+    occupyCommand: (name: string) => {
+      commands.set(name, { name, description: 'third-party', handler: async () => ({ kind: 'success' }) })
+    },
     setLocaleRows: (rows) => { localeRows.splice(0, localeRows.length, ...rows) },
     describeCalls: () => [...describeCalls],
     breakDescribe: (mode) => {
@@ -391,9 +398,37 @@ describe('host language preference', () => {
     // The mount-time read covers the descriptions, which register once.
     expect(mounted.commands.get('rewind')!.description).toBe(zhLocale['command.description'])
     expect(mounted.commands.get('undo')!.description).toBe(zhLocale['command.undoDescription'])
+    expect(mounted.commands.get(ENGINE_COMMAND)!.description).toBe(zhLocale['engine.description'])
+    expect(mounted.commands.get(ENGINE_COMMAND)!.input!.hint).toBe(zhLocale['engine.inputHint'])
     expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(zhLocale['cleanup.description'])
     // A command result renders in the same language.
     expect((await cleanupStatus(mounted)).text).toContain(zhStatus)
+    await mounted.dispose()
+  })
+
+  it('costs only the colliding name when a third-party plugin already owns it', async () => {
+    const mounted = mount()
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    mounted.occupyCommand('rewind')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+
+    // The occupant's row is untouched, and every other command registered.
+    expect(mounted.commands.get('rewind')!.description).toBe('third-party')
+    expect(mounted.commands.get('undo')).toBeDefined()
+    expect(mounted.commands.get(ENGINE_COMMAND)).toBeDefined()
+    expect(mounted.commands.get('snapshot-auto-cleanup')).toBeDefined()
+    expect(mounted.logger.warn).toHaveBeenCalledWith(expect.stringContaining('"rewind" is already registered'))
+    await mounted.dispose()
+  })
+
+  it('refuses an empty engine invocation instead of rewinding', async () => {
+    const mounted = mount()
+    mounted.setEntryId('include:dsh-rewind-plugin')
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+
+    const result = await mounted.commands.get(ENGINE_COMMAND)!.handler({ rawInput: '   ' }) as { kind: string; text?: string }
+    expect(result.kind).toBe('error')
+    expect(result.text).toBe(enLocale['engine.rejected'])
     await mounted.dispose()
   })
 

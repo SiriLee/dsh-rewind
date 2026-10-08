@@ -34,7 +34,7 @@ import { copyFile, rm, stat, unlink } from 'node:fs/promises'
 import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { preferredLocale, translate, type HostKey, type HostLocaleId } from './locales.ts'
-import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan, type RewindTarget } from './rewind.ts'
+import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan } from './rewind.ts'
 import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome, type UncoveredPath } from './snapshot.ts'
 import {
@@ -55,6 +55,13 @@ export type { CheckpointEntry, FileImpact, PruneStaleReport, RestoreOutcome, Res
 
 export const name = 'dsh-rewind'
 export const inject = ['commands', 'tools', 'settings']
+
+/**
+ * The internal engine channel the client drives, so the rewind surface never
+ * depends on a name a third-party plugin can take. Mirrored by `ENGINE_COMMAND`
+ * in `src/client/hidden.ts` — the two bundles share no module.
+ */
+export const ENGINE_COMMAND = 'rewind-plugin'
 
 /** Plugin config. */
 export interface RewindConfig {
@@ -166,14 +173,18 @@ function t(key: HostKey, params?: Record<string, string | number>): string {
   return translate(activeLocale, key, params)
 }
 
-/** Render the `/rewind` usage block in the active locale. */
-function usage(): string {
-  return [
-    t('usage.title'),
-    t('usage.noArgs'),
-    t('usage.seq'),
-    t('usage.blocked'),
-  ].join('\n')
+/**
+ * Report one command name this plugin could not register, without failing the
+ * plugin. The host logs stay English, like every other line here.
+ * @param ctx - host context carrying the logger.
+ * @param name - the command name that could not be registered.
+ * @param error - the error the registry raised (usually a duplicate name).
+ */
+function warnCommandUnavailable(ctx: Context, name: string, error: unknown): void {
+  ctx.logger.warn(`[dsh-rewind] command "${name}" was not registered: ${error instanceof Error ? error.message : String(error)}`)
+  if (name === ENGINE_COMMAND) {
+    ctx.logger.warn(`[dsh-rewind] the internal "${ENGINE_COMMAND}" engine channel is unavailable; the rewind button and picker will not work.`)
+  }
 }
 
 /** Before-state captured for one in-flight tool call, keyed by agent+callId. */
@@ -426,13 +437,6 @@ function buildMarker(): UserMessage {
     content: REWIND_MARKER_CONTENT,
     source: REWIND_MARKER_SOURCE,
   })
-}
-
-/** Render a parsed target for the step-2 hint. */
-function describeTarget(target: RewindTarget): string {
-  return target.kind === 'seq'
-    ? t('describeTarget.seq', { seq: target.seq })
-    : t('describeTarget.index', { index: target.index })
 }
 
 /** Human-readable size for the report lines (binary units, whole numbers). */
@@ -801,7 +805,7 @@ async function handleRewind(
   const parts = input.split(/\s+/)
   if (parts[0] === 'preview') {
     const target = parts[1]
-    if (target === undefined) return { kind: 'error', text: usage() }
+    if (target === undefined) return { kind: 'error', text: t('engine.rejected') }
     let plan: RewindPlan
     try {
       plan = resolveOrError(session.snapshotEvents(), session.surface.nodes, target)
@@ -823,7 +827,7 @@ async function handleRewind(
     return { kind: 'success', text: formatPlan(plan, impacts, uncovered, store.fileCapBytes) }
   }
 
-  // Internal machine channel: `/rewind __candidates` returns the FULL
+  // Internal machine channel: `__candidates` returns the FULL
   // candidate list (host surface + full event log) so the client popupSelect
   // can render every reachable rewind target — not just the already-loaded
   // history window. Side-effect free: no event is appended, nothing rewound.
@@ -835,16 +839,11 @@ async function handleRewind(
   const target = parts[0]!
   const mode = parts[1]
   if (mode !== undefined && mode !== 'chat' && mode !== 'both') {
-    return { kind: 'error', text: usage() }
+    return { kind: 'error', text: t('engine.rejected') }
   }
-  if (mode === undefined) {
-    const parsed = parseRewindTarget(target)
-    if (parsed === undefined) return { kind: 'error', text: usage() }
-    return {
-      kind: 'success',
-      text: t('chooseMode', { target: describeTarget(parsed) }),
-    }
-  }
+  // A target without a mode is the blocked human two-step flow; the engine
+  // channel answers every human-shaped input the same way.
+  if (mode === undefined) return { kind: 'error', text: t('engine.rejected') }
   return executeRewind(ctx, store, fs, invocation, target, mode, inflight)
 }
 
@@ -1190,26 +1189,58 @@ export function apply(ctx: Context, config?: Config): void {
         activeLocale = readHostLocale(ctx)
         return handler(invocation)
       }
-    // One handler serves both `/rewind` and its alias `/undo`.
+    // One handler serves `/rewind` and its alias `/undo`.
     const rewindHandler = withHostLocale(
       (invocation: CommandInvocation) => handleRewind(ctx, store, fsService, invocation, inflight),
     )
-    yield ctx.commands.register({
-      name: 'rewind',
-      description: t('command.description'),
-      handler: rewindHandler,
-    })
-    yield ctx.commands.register({
-      name: 'undo',
-      description: t('command.undoDescription'),
-      handler: rewindHandler,
-    })
-    yield ctx.commands.register({
-      name: 'snapshot-auto-cleanup',
-      description: t('cleanup.description'),
-      input: { hint: t('cleanup.inputHint') },
-      handler: withHostLocale(invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession)),
-    })
+    // The engine channel is machine-driven: a human reaching it (menu pick or
+    // typed line) is sent to the front doors instead of shown its grammar.
+    const engineHandler = withHostLocale(
+      (invocation: CommandInvocation) => invocation.rawInput.trim() === ''
+        ? Promise.resolve<CommandResult>({ kind: 'error', text: t('engine.rejected') })
+        : handleRewind(ctx, store, fsService, invocation, inflight),
+    )
+    // Each registration is isolated so a name another plugin owns costs only
+    // that name (issue #49). Cordis rolls a failed effect back, so one
+    // unguarded throw would also take the checkpoint pipeline below down.
+    try {
+      yield ctx.commands.register({
+        name: 'rewind',
+        description: t('command.description'),
+        handler: rewindHandler,
+      })
+    } catch (error) {
+      warnCommandUnavailable(ctx, 'rewind', error)
+    }
+    try {
+      yield ctx.commands.register({
+        name: 'undo',
+        description: t('command.undoDescription'),
+        handler: rewindHandler,
+      })
+    } catch (error) {
+      warnCommandUnavailable(ctx, 'undo', error)
+    }
+    try {
+      yield ctx.commands.register({
+        name: ENGINE_COMMAND,
+        description: t('engine.description'),
+        input: { hint: t('engine.inputHint') },
+        handler: engineHandler,
+      })
+    } catch (error) {
+      warnCommandUnavailable(ctx, ENGINE_COMMAND, error)
+    }
+    try {
+      yield ctx.commands.register({
+        name: 'snapshot-auto-cleanup',
+        description: t('cleanup.description'),
+        input: { hint: t('cleanup.inputHint') },
+        handler: withHostLocale(invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession)),
+      })
+    } catch (error) {
+      warnCommandUnavailable(ctx, 'snapshot-auto-cleanup', error)
+    }
   }, 'dsh-rewind command')
 
   // Session-format-version guard: after DSH migrates/loads a session, clear

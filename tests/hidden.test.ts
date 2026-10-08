@@ -28,34 +28,34 @@ function turnProcess(key: string, anchorSeq: number, turn: number, turnStart?: n
   )
 }
 
-/** A `/rewind` command row with an explicit settled outcome. */
-function rewindCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome'], args: string | null = null): ChatConversationViewNode {
+/** One engine command row with an explicit settled outcome (`rewind` = legacy name). */
+function rewindCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome'], args: string | null = null, name = 'rewind'): ChatConversationViewNode {
   return viewNode(key, 'command', anchorSeq, {
-    kind: 'command', seq, time: 0, commandId: 'cid', name: 'rewind', args, outcome,
+    kind: 'command', seq, time: 0, commandId: 'cid', name, args, outcome,
   } as unknown as CommandNode)
 }
 
 /** A real executed rewind (marker seq = sourceEventSeq), target N. */
-function executed(key: string, anchorSeq: number, seq: number, target: number): ChatConversationViewNode {
+function executed(key: string, anchorSeq: number, seq: number, target: number, name = 'rewind'): ChatConversationViewNode {
   return rewindCommand(key, anchorSeq, seq, {
     kind: 'success',
     text: `Withdrawn seq ${target} and everything after it (conversation returned to earlier).`,
     sourceEventSeq: seq,
-  }, `@${target} both`)
+  }, `@${target} both`, name)
 }
 
 /** A preview-only rewind: success but no marker appended. */
-function preview(key: string, anchorSeq: number, seq: number, target: number): ChatConversationViewNode {
+function preview(key: string, anchorSeq: number, seq: number, target: number, name = 'rewind'): ChatConversationViewNode {
   return rewindCommand(key, anchorSeq, seq, {
     kind: 'success',
     text: `Rewind to seq ${target}, removing 1 node(s) from the model context (conversation log kept).`,
     sourceEventSeq: undefined,
-  }, `preview @${target} both`)
+  }, `preview @${target} both`, name)
 }
 
-/** The internal candidate-list probe (`/rewind __candidates`). */
-function candidateCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome']): ChatConversationViewNode {
-  return rewindCommand(key, anchorSeq, seq, outcome, '__candidates')
+/** The internal candidate-list probe (`__candidates`). */
+function candidateCommand(key: string, anchorSeq: number, seq: number, outcome: CommandNode['outcome'], name = 'rewind'): ChatConversationViewNode {
+  return rewindCommand(key, anchorSeq, seq, outcome, '__candidates', name)
 }
 
 function snap(nodes: readonly ChatConversationViewNode[], turns?: ReadonlyMap<number, readonly string[]>): HiddenChat {
@@ -80,6 +80,21 @@ describe('hiddenSeqsOf', () => {
       executed('cmd', 10, 10, 2),
     ]
     expect(sorted(hiddenSeqsOf(snap(nodes)))).toEqual([2, 3, 4, 5, 10])
+  })
+
+  it('recognizes rows of the internal engine channel, not just the legacy name', () => {
+    const nodes = [
+      viewNode('u0', 'user', 0),
+      viewNode('a1', 'assistant', 1),
+      viewNode('u2', 'user', 2),
+      viewNode('a3', 'assistant', 3),
+      executed('cmd', 10, 10, 2, 'rewind-plugin'),
+      preview('pv', 11, 11, 2, 'rewind-plugin'),
+      candidateCommand('cd', 12, 12, { kind: 'success', text: 'x' }, 'rewind-plugin'),
+    ]
+    // The executed row is hidden and cuts [2, 10]; both probes are hidden and
+    // contribute no range.
+    expect(sorted(hiddenSeqsOf(snap(nodes)))).toEqual([2, 3, 10, 11, 12])
   })
 
   it('keeps rows cut by an earlier rewind hidden after a second rewind to a LATER point', () => {

@@ -54,7 +54,7 @@ import {
 import { createPortal } from 'react-dom'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { UserMessageNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { hiddenSeqsOf, isExecutedRewindCommand, messageAttachmentsAt, messageTextAt, type ChatOf, type ChatWatch, type HiddenChat, type MessageImageRef } from './hidden.ts'
+import { ENGINE_COMMAND, hiddenSeqsOf, isExecutedRewindCommand, messageAttachmentsAt, messageTextAt, type ChatOf, type ChatWatch, type HiddenChat, type MessageImageRef } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { messagePreviewOf } from './candidates.ts'
 import { knownCommandSeqs, openPopover, waitForCommand } from './popover.ts'
@@ -273,7 +273,7 @@ export async function runRewindAndFill(
   const known = knownCommandSeqs(session, chatOf, node => isExecutedRewindCommand(node, seq))
   let result: Awaited<ReturnType<SessionFace['command']>>
   try {
-    result = await session.command(`/rewind @${seq} ${mode}`)
+    result = await session.command(`/${ENGINE_COMMAND} @${seq} ${mode}`)
   } catch (error) {
     // A command/teardown throw must never become a silent unhandled rejection
     // on the `void runRewindAndFill(...)` call site.
@@ -777,7 +777,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
       // targets stay collectible).
       const chat = chatOf(session)
       const hiddenSeqs = chat === undefined ? new Set<number>() : hiddenSeqsOf(chat)
-      // Hide withdrawn rows (rewind markers, /rewind command rows, and every
+      // Hide withdrawn rows (rewind markers, engine command rows, and every
       // message inside any executed rewind's [target, marker] span — the spans
       // stay separate, never one collapsed range) so the rendered transcript
       // matches the agent's context. React re-renders recreate rows, so this

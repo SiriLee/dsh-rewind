@@ -51,12 +51,6 @@ export function preferredLocale(preference: unknown): HostLocaleId {
 
 /** English dictionary — the key-set source of truth (neutral default). */
 export const en = {
-  'usage.title': 'Usage:',
-  'usage.noArgs': '  /rewind                       (no args) withdraw the most recent user message',
-  'usage.seq': '  /rewind @<seq> chat|both      rewind to the given message (chat = conversation only / both = conversation + files)',
-  'usage.blocked': '  /rewind or /undo               open the rewind picker',
-  'describeTarget.seq': 'seq {seq}',
-  'describeTarget.index': 'message {index}',
   'plan.rewinding': 'Rewind to seq {targetSeq}, removing {count} node(s) from the model context (conversation log kept).',
   'plan.affects': 'Affects {count} file(s):',
   'plan.restore': 'restore {path}',
@@ -81,9 +75,11 @@ export const en = {
   'storeUnsupported': 'file restore unavailable: these snapshots use a newer store format (v{version}) than this plugin understands; nothing was changed. Update the plugin or clear this session\'s snapshots.',
   'success': 'Withdrawn seq {targetSeq} and everything after it (conversation returned to earlier){restore}.',
   'noUserMessages': 'This session has no rewindable user messages yet.',
-  'chooseMode': 'Rewind to {target}. Choose a mode:\n  /rewind {target} chat  conversation only\n  /rewind {target} both  conversation + file restore',
   'command.description': 'Rewind the conversation and/or code to a previous point',
   'command.undoDescription': 'Alias of /rewind',
+  'engine.description': 'dsh-rewind internal command',
+  'engine.rejected': 'Internal command: use /rewind or /undo.',
+  'engine.inputHint': '@<seq> chat|both',
   'cleanup.description': 'Manage automatic cleanup of session snapshot backups',
   'cleanup.inputHint': 'on | off | max-age <days> | run [--apply] [--current]',
   'cleanup.status': 'Auto-cleanup: {state}. Max age: {days} day(s).',
@@ -111,12 +107,6 @@ export type HostKey = keyof typeof en
 
 /** Chinese dictionary, checked complete against the en key set. */
 export const zh: Record<HostKey, string> = {
-  'usage.title': '用法：',
-  'usage.noArgs': '  /rewind                       （无参数）撤回最近一条用户消息',
-  'usage.seq': '  /rewind @<seq> chat|both      回退到指定消息（chat 仅对话 / both 对话+文件）',
-  'usage.blocked': '  /rewind 或 /undo               打开回退选择面板',
-  'describeTarget.seq': 'seq {seq}',
-  'describeTarget.index': '第 {index} 条消息',
   'plan.rewinding': '将回退到 seq {targetSeq}，从模型上下文移除 {count} 个节点（对话日志保留）。',
   'plan.affects': '将影响 {count} 个文件：',
   'plan.restore': '还原 {path}',
@@ -141,9 +131,11 @@ export const zh: Record<HostKey, string> = {
   'storeUnsupported': '文件还原不可用：这些快照使用了比本插件更新的存储格式（v{version}）；工作区未做任何改动。请更新插件，或清除该会话的快照。',
   'success': '已撤回 seq {targetSeq} 及之后内容（对话已回到此前）{restore}。',
   'noUserMessages': '当前会话还没有可回退的用户消息。',
-  'chooseMode': '将回退到 {target}。选择模式：\n  /rewind {target} chat  仅回退对话\n  /rewind {target} both  回退对话并还原文件',
   'command.description': '回退对话和/或代码到之前的某条消息',
   'command.undoDescription': '/rewind 的别名',
+  'engine.description': 'dsh-rewind 内部命令',
+  'engine.rejected': '内部命令：请使用 /rewind 或 /undo。',
+  'engine.inputHint': '@<seq> chat|both',
   'cleanup.description': '管理会话快照备份的自动清理',
   'cleanup.inputHint': 'on | off | max-age <天数> | run [--apply] [--current]',
   'cleanup.status': '自动清理：{state}。最大保留天数：{days} 天。',
