@@ -14,7 +14,33 @@ and the release steps are documented in
 
 > DSH `>=0.2.1-alpha.2` supported
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.3...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.16.0-alpha.1...vNEXT
+
+## [0.16.0-alpha.1] - 2026-10-09
+
+> 适配 DSH `>=0.2.1-alpha.2`（内测版）
+
+### 问题修复
+
+- **快照基准改从会话的当前目录读取。** DSH `0.2.1-alpha.2` 起，相对路径由会话的**当前**目录解析（新的 `working-directory` 服务，会话中途可经 `working_directory` 工具变更）；本版据此读取快照基准——中途切换目录后的写入也能被正确记录与还原，此前固定用不可变的 `header.cwd`。@SiriLee
+
+### 其他变更
+
+- **适配 DSH `0.2.1-alpha.2`（线切换）。** 本版只支持这一条线：声明下限抬到提供 `working-directory` 服务的内测版。DSH `0.2.0-rc.x`（当前 `latest`）会被启动校验整包跳过，请继续留在 `0.15.3`。@SiriLee
+
+---
+
+> DSH `>=0.2.1-alpha.2` supported. Internal alpha.
+
+### Bug Fixes
+
+- **The snapshot base is read from the Session's current directory.** From DSH `0.2.1-alpha.2`, a relative path resolves against the Session's *current* directory (the new `working-directory` service, changeable mid-session through the `working_directory` tool); this release reads the capture base from it, so writes after a mid-session directory change are captured and restored correctly — the immutable `header.cwd` was used before. @SiriLee
+
+### Chores
+
+- **Adapted to DSH `0.2.1-alpha.2` (a line change).** This release supports that line only: the declared floor rises to the alpha that provides the `working-directory` service. DSH `0.2.0-rc.x` (the current `latest`) is skipped whole by the startup check — stay on `0.15.3`. @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.3...v0.16.0-alpha.1
 
 ## [0.15.3] - 2026-10-09
 
