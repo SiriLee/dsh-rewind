@@ -31,13 +31,12 @@ them at runtime, so the published tarball does not carry them.
 - `src/rewind.ts` — pure planning: target resolution, surface range, candidate listing
 - `src/snapshot.ts` — checkpoint store (on-disk before-backups, restore/preview, bounded prune)
 - `src/snapshot-cleanup.ts` — cleanup policy + plugin-entry config persistence + auto-sweep throttle
-- `src/session-cwd.ts` — session working-directory resolution (fs-tools rule)
 - `src/locales.ts` — host i18n (`t()` renderer, `HostKey`)
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation
 - `scripts/` — `build.mjs` (artifacts), `update-badge.mjs` (badge), `verify-host.mjs` (host verification),
   `session-decode.mjs` / `session-encode.mjs` (log codec)
 - `docs/` — organized: `contract/` (client contract), `compat/` (audit + compatibility notes), `release/`, plus `harness-reference.md`, `format.md`, `architecture.md`; repo root holds `SECURITY.md` and `CONTRIBUTING.md`
-- `tests/` — vitest suites (rewind / snapshot / hidden / session-cwd / integration)
+- `tests/` — vitest suites (rewind / snapshot / hidden / integration)
 
 ## Conventions
 - Code comments are written in English; git history uses conventional commits with

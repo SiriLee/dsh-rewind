@@ -127,6 +127,8 @@ function mount(options: { fs?: boolean } = {}): Mounted {
       if (services.includes('fs') && options.fs === true) {
         callback({
           fs: fakeFs(),
+          // Absolute file_paths here: the base value only has to exist.
+          workingDirectory: { ensure: async () => root },
           on: (event: string, handler: (...args: never[]) => unknown) => { toolHandlers.set(event, handler); return () => {} },
         })
       }

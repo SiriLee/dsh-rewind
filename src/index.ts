@@ -30,12 +30,12 @@ import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
 import { copyFile, rm, stat, unlink } from 'node:fs/promises'
 import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { preferredLocale, translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { formatCandidateList, listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan } from './rewind.ts'
-import { execSessionCwd } from './session-cwd.ts'
 import { reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type PendingBackup, type PruneStaleReport, type RestoreOutcome, type UncoveredPath } from './snapshot.ts'
 import {
   DEFAULT_CLEANUP_CONFIG,
@@ -250,18 +250,15 @@ function anchorSeqOf(session: Session, cache: WeakMap<Session, AnchorCacheEntry>
   return anchor
 }
 
-/** Resolve a path against the session cwd (fs-tools rule), or undefined on resolution failure. */
+/** Resolve a path against the session's current directory, or undefined on resolution failure. */
 async function resolveTarget(
   fs: FileSystem,
   path: string,
-  cwd: string | undefined,
+  cwd: string,
   signal?: AbortSignal,
 ): Promise<Awaited<ReturnType<FileSystem['resolve']>> | undefined> {
   try {
-    return await fs.resolve(path, {
-      ...cwd !== undefined ? { cwd } : {},
-      signal,
-    })
+    return await fs.resolve(path, { cwd, signal })
   } catch {
     return undefined
   }
@@ -297,22 +294,30 @@ function isNotFoundError(error: unknown): boolean {
  */
 async function captureBefore(
   fs: FileSystem,
+  workingDirectory: WorkingDirectoryService,
   store: SnapshotStore,
   exec: ToolExecution,
   pending: Map<string, PendingCapture>,
 ): Promise<void> {
   if (!TRACKED_TOOLS.has(exec.name)) return
+  // A call without an agent Session can never be checkpointed — the commit
+  // stage needs the session id and the turn anchor — so resolving a base for
+  // it would only stage bytes nothing consumes.
+  const agent = exec.agent
+  if (agent === undefined) return
   // Claude Code alignment: subagent edits are NOT tracked (official
   // checkpointing limitation). A subagent runs its own session, so a backup
   // recorded under the subagent session id could never be restored by a
   // rewind of the parent session — it would only leak on disk (the subagent
   // log is short, so the per-session 100-group prune never fires for it).
   // Skipping the capture here mirrors Claude Code's behavior exactly.
-  const session = exec.agent?.session
-  if (session !== undefined && isSubagentSession(session)) return
+  if (isSubagentSession(agent.session)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
-  const cwd = execSessionCwd(exec)
+  // The fs tools resolve a relative path against the Session's CURRENT
+  // directory — the working-directory service, which also recovers a vanished
+  // one. Snapshot tracking must resolve against the same base the tool writes to.
+  const cwd = await workingDirectory.ensure(agent, exec.signal)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
   const info = await fs.stat(target, exec.signal).catch((error: unknown) => {
@@ -323,7 +328,6 @@ async function captureBefore(
     if (isNotFoundError(error)) return undefined
     throw error
   })
-  if (session === undefined) return
   // The SERVICE decides whether the file exists. Only `undefined` (no file)
   // records a creation; a non-regular target (directory / FIFO / device) is
   // never copied — it would either hang the copy or produce a meaningless
@@ -341,7 +345,7 @@ async function captureBefore(
     pending.set(key, { path: target.displayPath, backup: null })
     return
   }
-  const staged = await store.stageCapture(session.id, key)
+  const staged = await store.stageCapture(agent.session.id, key)
   let backup: PendingBackup
   try {
     await copyFile(target.displayPath, staged)
@@ -1321,14 +1325,15 @@ export function apply(ctx: Context, config?: Config): void {
     })()
   }, { global: true })
 
-  ctx.inject(['fs'], (scope) => {
+  ctx.inject(['fs', 'workingDirectory'], (scope) => {
     const fs = scope.fs
+    const workingDirectory = scope.workingDirectory
     // Expose the fs service to the command path (restore observation sync).
     // Undefined before the service mounts: the sync then degrades to a no-op.
     fsService = fs
     scope.on('tools/execute', async (exec: ToolExecution, next): Promise<ToolExecutionResult> => {
       try {
-        await captureBefore(fs, store, exec, pending)
+        await captureBefore(fs, workingDirectory, store, exec, pending)
       } catch (error) {
         ctx.logger.warn(`[dsh-rewind] before-capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }

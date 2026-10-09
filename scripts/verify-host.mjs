@@ -112,6 +112,10 @@ class FakeFs extends FileSystem {
 
 const fs = new FakeFs(new Context())
 
+/** Working-directory double the fs doubles resolve through — the same value the plugin reads. */
+let sessionDirectory = wsDir
+const fakeWorkingDirectory = { ensure: async () => sessionDirectory }
+
 // The plugin's own `Config` schema resolves the live cleanup references (the
 // same call the Loader makes), and `tmpRoot` stays unrouted: `snapshotDir` /
 // `dshHome` are pinned by the config below.
@@ -252,6 +256,7 @@ ctx.provide('commands', {
   },
 })
 ctx.provide('fs', fs)
+ctx.provide('workingDirectory', fakeWorkingDirectory)
 // The entry-write port the plugin's cleanup store addresses; the policy itself
 // resolves through the config the plugin is mounted with.
 ctx.provide('settings', fakeSettings)
@@ -283,9 +288,11 @@ const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: 
 async function runWrite(agentOf, callId, filePath, content) {
   const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
   await ctx.waterfall('tools/execute', exec, async () => {
-    const cwd = agentOf?.session?.header?.cwd
+    // Resolve through the same service the real fs tools use, so the write and
+    // the plugin agree on the base.
+    const cwd = await fakeWorkingDirectory.ensure()
     // isAbsolute: Windows-absolute paths (`C:\...`) must not be re-joined.
-    const resolved = cwd !== undefined && !isAbsolute(filePath) ? join(cwd, filePath) : filePath
+    const resolved = !isAbsolute(filePath) ? join(cwd, filePath) : filePath
     await fs.writeText({ targetKey: FsTargetKey(resolved), displayPath: resolved }, content)
     return { isError: false, content: [] }
   })
@@ -801,6 +808,24 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   check('relative path resolved via session cwd', preview.kind === 'success' && preview.text.includes(relPath), preview.text)
   const both = await call(cwdAgent, '@4 both')
   check('both restores cwd-resolved file', both.kind === 'success' && await readFile(relPath, 'utf8') === 'relative original', both.text)
+
+  // The base follows the working-directory service, not the immutable header:
+  // after a `cd`, a relative write must be backed up under the NEW directory.
+  const movedDir = join(wsDir, 'moved')
+  await mkdir(movedDir, { recursive: true })
+  const movedPath = join(movedDir, 'moved.txt')
+  await writeFile(movedPath, 'moved original', 'utf8')
+  sessionDirectory = movedDir
+  const afterCd = cwdSession.append('user/message', user('after a cd'), { surfaceOp: 'append' })
+  await runWrite(cwdAgent, 'c5', 'moved.txt', 'moved new') // relative, after the cd
+
+  const movedPreview = await call(cwdAgent, `preview @${afterCd.seq} both`)
+  check('relative path resolved via the working-directory service',
+    movedPreview.kind === 'success' && movedPreview.text.includes(movedPath), movedPreview.text)
+  const movedBoth = await call(cwdAgent, `@${afterCd.seq} both`)
+  check('both restores the file under the changed directory',
+    movedBoth.kind === 'success' && await readFile(movedPath, 'utf8') === 'moved original', movedBoth.text)
+  sessionDirectory = wsDir
 }
 
 // 7. preview on a message with no recorded changes reports none

@@ -20,7 +20,7 @@
   "license": "MIT",
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": ">=0.2.0-rc.1"
+    "dsh": ">=0.2.1-alpha.2"
   },
   "type": "module",
   "main": "lib/index.js",
@@ -74,20 +74,21 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-client-locale": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-commands": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-settings": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-commands": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-fs": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-home-paths": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-sandbox": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-session": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-settings": "^0.2.0-rc.1",
-    "@deepseek-ai/dsh-tools": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-client-locale": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-client-ui-commands": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-client-ui-settings": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-commands": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-fs": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-home-paths": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-llm": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-sandbox": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-session": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-settings": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-tools": "^0.2.1-alpha.2",
+    "@deepseek-ai/dsh-working-directory": "^0.2.1-alpha.2",
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "peerDependenciesMeta": {
@@ -134,6 +135,9 @@
       "optional": true
     },
     "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/dsh-working-directory": {
       "optional": true
     },
     "@deepseek-ai/schemastery": {

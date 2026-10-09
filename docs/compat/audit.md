@@ -8,7 +8,7 @@
 > compatibility invariants. A probe failure is a finding; it enters the
 > fix/pin/record loop.
 >
-> Targeted version: npm `@deepseek-ai/*@0.2.1-alpha.1` (the last verified release).
+> Targeted version: npm `@deepseek-ai/*@0.2.1-alpha.2` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 >
 > Version alignment: see `docs/release/release.md`.
@@ -22,6 +22,7 @@ legacy branch).
 | Seam | Implementation at the targeted version |
 | --- | --- |
 | Host session log | `session.snapshotEvents()` |
+| Host working directory | `ctx.workingDirectory.ensure(agent)` — the base the fs tools resolve against |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
 | Client composer refill | `conversation.input.setDraft` facade |
 | Client image restore | `SessionFace.readAttachment` (decoded bytes) |
@@ -57,7 +58,7 @@ legacy branch).
 - **`agent/created` lifecycle guard**: the session-format reconcile runs on the alpha line's `agent/created` (fire-and-forget); pin: `verify-host` 4e dispatches it.
 - **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
 - **`image/offload` projection**: the alpha line's first `SessionMessageProjection` changes derived content without touching surface node membership; candidate listing and target resolution tolerate it. Pin: `tests/image-offload-projection.test.ts`.
-- **session-cwd**: `src/session-cwd.ts` returns `header.cwd` verbatim — the base the fs tools resolve against whenever the session has a cwd. A session without one is not mirrored (tools: `sandbox-policy.workspaceRoot`; plugin: the backend default). Pin: `tests/session-cwd.test.ts`.
+- **session-cwd**: the fs tools resolve a relative path against the Session's current directory (`ctx.workingDirectory.ensure(agent)`, which also recovers a vanished one); snapshot tracking reads that same service and nothing else. Pin: `verify-host` (`relative path resolved via the working-directory service`, `both restores the file under the changed directory`).
 - **startup admission (`0.1.7-rc.1`)**: the gate reads the manifest's own `@deepseek-ai/dsh-*` peers and requires each to satisfy the runtime with `includePrerelease`; it runs for a profile bundle and again for every row its patch inserts, and a denial skips the bundle or disables the row. This plugin's declarations all satisfy the targeted version above, so it is admitted with no exemption — a skipped bundle on a later line is a peer mismatch, not a load failure.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)
@@ -71,6 +72,7 @@ legacy branch).
 - **Files written but uncommitted in a cancelled turn**: a `both` rewind cannot restore them (tool side-effect timing; same as Claude Code).
 - **Attachment files left after a message is shadowed**: attachment storage is not cleaned with the surface (`dsh-attachment-local` not installed, not automatically verified).
 - **Rewind leaves plan mode untouched**: `/plan text` is two independent actions (enter plan mode + steer the message). Rewinding the message undoes only the message — the log-only `plan/mode` state stays active, and the user leaves plan mode with `/plan off`, which still commits after a rewind (the marker creates no open turn). Pin: `verify-host` plan checks (`plan rewind leaves plan mode active`, `/plan off after rewind turns plan mode off`), `tests/hidden.test.ts` `messageTextAt`.
+- **Rewind leaves the working directory untouched**: `working-directory/change` is log-only (not a surface node), so withdrawing the message that caused a `cd` does not restore the previous directory — a rewind restores files, not the session's current directory.
 - **Bundle card metadata is declared by the plugin, not by the manager (`0.1.7-alpha.1`)**: the manager still titles a bundle with `shortName(pkg.name)` and its raw `package.json` description when nothing else is declared, but it now reads plugin-owned resources first — `locale/<lang>.json` (`meta.title`/`meta.description`) through the package exports map, and an `icon` file relative to the manifest. This plugin declares both, so its card shows an icon and copy that follows the active language; only the fallback description remains mixed-language. Pin: `tests/package-layout.test.ts` (icon path/media/size and both dictionaries).
 - **Synchronous Session history reads are deprecated** on this line (`snapshotEvents` / `eventAt` / `ownEvents`): existing calls may remain, new calls are prohibited. The plugin keeps its existing reads (turn anchor + candidate listing); the migration path is a `ctx.sessionProjections` projection unit or the async paged history read this line has not shipped yet — not a plugin-side index.
 - **A peer version range is never enforced at runtime**, and a physical copy nearer than the host still wins (upstream profile-resolution lookup order: "a peer version range is not an additional resolver filter"; "a nearer physical candidate wins"). So the `@deepseek-ai/schemastery` peer floor *is* the availability guarantee for `.volatile()` (#40): a plugin directory or linked checkout left holding an older copy (e.g. the pre-3.18.2 devDependency) shadows the host's 3.18.4 and fails the top-level `Config` evaluation before the plugin loads. Floor pinned at `^3.18.4`.
