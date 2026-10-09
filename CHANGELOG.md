@@ -14,7 +14,25 @@ and the release steps are documented in
 
 > DSH `>=0.2.0-rc.1` supported
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.2...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.3...vNEXT
+
+## [0.15.3] - 2026-10-09
+
+> 适配 DSH `>=0.2.0-rc.1`
+
+### 其他变更
+
+- **插件不再包含 `fetch(` 调用。** 回退图片改由会话面的 `readAttachment` 直接取字节，行为不变；静态能力扫描不再把它读成 `network`（`dsh-trust-check` 的误报，liuwenji007/dsh-trust-check#9）。@SiriLee
+
+---
+
+> DSH `>=0.2.0-rc.1` supported.
+
+### Chores
+
+- **The plugin no longer contains a `fetch(` call.** Restored images are read through the session face's `readAttachment`, with the same behavior; a static capability scan no longer reads it as `network` (a false positive confirmed in liuwenji007/dsh-trust-check#9). @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.15.2...v0.15.3
 
 ## [0.15.2] - 2026-10-08
 
