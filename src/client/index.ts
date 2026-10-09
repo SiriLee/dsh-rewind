@@ -16,6 +16,8 @@
  */
 
 import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
+// Type-only: the branded attachment id `SessionFace.readAttachment` takes.
+import type { AttachmentIdType } from '@deepseek-ai/dsh-attachment'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
@@ -217,26 +219,25 @@ export function apply(ctx: ClientContext): void {
 
     /**
      * The composer image restorer: puts a withdrawn message's durable image
-     * references back into that session's composer draft. Round-trip through
-     * the harness's own services, resolved lazily like `composerFacade`:
-     * `uiConversation.imageUrl` resolves session-authorized bytes
-     * (content-verified by the host attachment store), and
-     * `conversation.createDrafts` + `input.addAttachments` run the same
-     * intake a dragged-in image takes — so a rewind of an image-bearing
-     * message loses nothing. Best-effort and never throws: one image's
-     * failure skips that image, and absent services degrade to the
-     * text-only refill of the previous versions.
+     * references back into that session's composer draft. Bytes come from the
+     * session face's own `readAttachment` verb — the same read the harness's
+     * image URL loader performs before wrapping the result in a `blob:` URL —
+     * and `conversation.createDrafts` + `input.addAttachments` run the same
+     * intake a dragged-in image takes, so a rewind of an image-bearing message
+     * loses nothing. Best-effort and never throws: one image's failure skips
+     * that image, and absent services degrade to the text-only refill of the
+     * previous versions.
      */
     const restoreImages = async (sessionId: string, images: readonly MessageImageRef[]): Promise<void> => {
       if (images.length === 0) return
-      const ui = uiConversation() as (UiConversationLike & { imageUrl?: (id: SessionId, ref: MessageImageRef) => Promise<string> }) | undefined
+      const session = sessionOf(sessionId)
       const conversation = (ctx as { get(name: string): unknown }).get('conversation') as {
         input?: { for(actx: unknown): { addAttachments(ids: readonly string[]): boolean } }
         createDrafts?: (id: SessionId, files: readonly File[]) => readonly { id: string }[]
         releaseDraftAttachments?: (drafts: readonly { id: string }[]) => void
       } | undefined
       const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
-      if (ui?.imageUrl === undefined || conversation?.input === undefined || conversation.createDrafts === undefined || scope === undefined) {
+      if (session === undefined || conversation?.input === undefined || conversation.createDrafts === undefined || scope === undefined) {
         rewindLog.warn('refill', 'image restore unavailable (conversation services not ready)')
         return
       }
@@ -248,11 +249,15 @@ export function apply(ctx: ClientContext): void {
           continue
         }
         try {
-          const url = await ui.imageUrl(sessionId as SessionId, ref)
-          const blob = await (await fetch(url)).blob()
-          files.push(new File([blob], ref.name ?? `image-${index + 1}.${extension}`, { type: ref.mediaType }))
+          const result = await session.readAttachment(ref.attachmentId as AttachmentIdType)
+          if (!result.ok) throw result.error
+          // The face types its bytes as a plain `Uint8Array`, which newer TS
+          // lib types widen to `ArrayBufferLike`; the host always hands over an
+          // ArrayBuffer-backed view, so `File` takes it without a copy.
+          const bytes = result.value.data as Uint8Array<ArrayBuffer>
+          files.push(new File([bytes], ref.name ?? `image-${index + 1}.${extension}`, { type: ref.mediaType }))
         } catch (error) {
-          rewindLog.warn('refill', `image fetch threw for ${ref.attachmentId}`, error)
+          rewindLog.warn('refill', `image read threw for ${ref.attachmentId}`, error)
         }
       }
       if (files.length === 0) return

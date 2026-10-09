@@ -24,6 +24,7 @@ legacy branch).
 | Host session log | `session.snapshotEvents()` |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
 | Client composer refill | `conversation.input.setDraft` facade |
+| Client image restore | `SessionFace.readAttachment` (decoded bytes) |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
 | Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
 
