@@ -280,15 +280,14 @@ const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: 
 
 /**
  * Simulate one tracked tool call: before-capture, dispatch writes the file,
- * post-execute commits. The dispatched write resolves the path against the
- * calling agent's session cwd first — exactly what the real fs service does —
- * so a relative `filePath` lands on the resolved file (never in the process
- * cwd), keeping the harness free of stray artifacts.
+ * post-execute commits. The dispatched write resolves through the same
+ * working-directory double the plugin reads, so a relative `filePath` lands on
+ * the resolved file (never in the process cwd), keeping the harness free of
+ * stray artifacts.
  */
 async function runWrite(agentOf, callId, filePath, content) {
   const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
   await ctx.waterfall('tools/execute', exec, async () => {
-    // Resolve through the service the plugin reads, like the real fs tools.
     const cwd = await fakeWorkingDirectory.ensure()
     // isAbsolute: Windows-absolute paths (`C:\...`) must not be re-joined.
     const resolved = !isAbsolute(filePath) ? join(cwd, filePath) : filePath
