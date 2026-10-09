@@ -452,10 +452,13 @@ describe('resolveSeatAnchorSeq (withdrawn-seat hiding)', () => {
 
     hideWithdrawnSeats(chat, seats, new Set([6]), hidden)
     const writes: string[] = []
+    // jsdom brand-checks the style receiver; forward both traps with `target`
+    // so a Proxy read does not pass the proxy itself as `this`.
     const spy = new Proxy(shell.style, {
+      get: (target, prop) => Reflect.get(target, prop, target),
       set: (target, prop, value: unknown) => {
         writes.push(`${String(prop)}=${String(value)}`)
-        return Reflect.set(target, prop, value)
+        return Reflect.set(target, prop, value, target)
       },
     })
     Object.defineProperty(shell, 'style', { value: spy, configurable: true })
