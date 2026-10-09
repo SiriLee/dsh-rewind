@@ -57,7 +57,7 @@ legacy branch).
 - **`agent/created` lifecycle guard**: the session-format reconcile runs on the alpha line's `agent/created` (fire-and-forget); pin: `verify-host` 4e dispatches it.
 - **marker vs `/compact`**: the checkpoint shape is unchanged on this line — a `user/message` replace (`surfaceOp {replace, startSeq, endSeq}` + `sourceEventSeqs`); `assistant/message` still cannot carry `sourceEventSeqs`.
 - **`image/offload` projection**: the alpha line's first `SessionMessageProjection` changes derived content without touching surface node membership; candidate listing and target resolution tolerate it. Pin: `tests/image-offload-projection.test.ts`.
-- **session-cwd**: the fs tools no longer canonicalize a parent-traversing cwd, so `src/session-cwd.ts` returns `header.cwd` verbatim. Pin: `tests/session-cwd.test.ts`.
+- **session-cwd**: `src/session-cwd.ts` returns `header.cwd` verbatim — the base the fs tools resolve against whenever the session has a cwd. A session without one is not mirrored (tools: `sandbox-policy.workspaceRoot`; plugin: the backend default). Pin: `tests/session-cwd.test.ts`.
 - **startup admission (`0.1.7-rc.1`)**: the gate reads the manifest's own `@deepseek-ai/dsh-*` peers and requires each to satisfy the runtime with `includePrerelease`; it runs for a profile bundle and again for every row its patch inserts, and a denial skips the bundle or disables the row. This plugin's declarations all satisfy the targeted version above, so it is admitted with no exemption — a skipped bundle on a later line is a peer mismatch, not a load failure.
 
 ## Known behavior boundaries (deterministic differences, non-crash, documented)

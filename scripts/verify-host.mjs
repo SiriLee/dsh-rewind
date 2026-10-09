@@ -16,7 +16,7 @@
  *  4. a successful write through the tools pipeline commits a before-backup
  *     under the turn's anchor seq;
  *  5. a denied call never commits (no phantom entry in the store);
- *  6. relative file paths resolve against the session cwd (fs-tools rule);
+ *  6. relative file paths resolve against the session cwd;
  *  7. `/rewind preview @<seq> both` reports the checkpoint impact;
  *  8. `/rewind @<seq> both` restores the real file to its pre-edit content
  *     and deletes files created after the target;
@@ -788,7 +788,7 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
     `pending=${pendingNames.join(',')} anchors=${anchorDirs.join(',')}`)
 }
 
-// 6. relative paths resolve against the session cwd (fs-tools rule)
+// 6. relative paths resolve against the session cwd
 {
   const cwdSession = buildSession('verify-cwd', wsDir)
   const cwdAgent = makeAgent(cwdSession.id, cwdSession)
