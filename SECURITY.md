@@ -120,8 +120,8 @@ hides the `[target, marker]` span from the rendered transcript.
 - **Restores name only recorded paths**: the store contains resolved display
   paths of the session's own write-class tool calls (plus boundary re-checks
   over that same tracked set) — a restore can never write an arbitrary path.
-- **Path resolution rule**: relative paths resolve against the session
-  workspace cwd, mirroring the fs tools' own rule (`src/session-cwd.ts`).
+- **Path resolution rule**: relative paths resolve against the session's current
+  working directory, read from the same service the fs tools resolve through.
 - **Bounded backups**: `prune` keeps the newest 100 anchor groups per session
   (`MAX_ANCHOR_GROUPS`), except groups a non-terminal restore journal still
   references (pinned so the op can be finished), so backup accumulation stays

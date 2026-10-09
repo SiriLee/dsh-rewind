@@ -288,8 +288,7 @@ const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: 
 async function runWrite(agentOf, callId, filePath, content) {
   const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
   await ctx.waterfall('tools/execute', exec, async () => {
-    // Resolve through the same service the real fs tools use, so the write and
-    // the plugin agree on the base.
+    // Resolve through the service the plugin reads, like the real fs tools.
     const cwd = await fakeWorkingDirectory.ensure()
     // isAbsolute: Windows-absolute paths (`C:\...`) must not be re-joined.
     const resolved = !isAbsolute(filePath) ? join(cwd, filePath) : filePath

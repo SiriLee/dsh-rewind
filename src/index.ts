@@ -300,9 +300,7 @@ async function captureBefore(
   pending: Map<string, PendingCapture>,
 ): Promise<void> {
   if (!TRACKED_TOOLS.has(exec.name)) return
-  // A call without an agent Session can never be checkpointed — the commit
-  // stage needs the session id and the turn anchor — so resolving a base for
-  // it would only stage bytes nothing consumes.
+  // No agent Session → no anchor to commit the capture under (see `commitEntry`).
   const agent = exec.agent
   if (agent === undefined) return
   // Claude Code alignment: subagent edits are NOT tracked (official
@@ -314,9 +312,8 @@ async function captureBefore(
   if (isSubagentSession(agent.session)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
-  // The fs tools resolve a relative path against the Session's CURRENT
-  // directory — the working-directory service, which also recovers a vanished
-  // one. Snapshot tracking must resolve against the same base the tool writes to.
+  // The fs tools' own base: the Session's current directory (`ensure` also
+  // recovers a vanished one).
   const cwd = await workingDirectory.ensure(agent, exec.signal)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
