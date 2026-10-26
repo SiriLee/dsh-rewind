@@ -65,7 +65,7 @@ scripts/update-badge.mjs       regenerate the tests badge (CI only)
 scripts/verify-host.mjs end-to-end host verification (full check suite)
 scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)
 tests/                  vitest suites (rewind / snapshot / hidden / integration)
-docs/                   maintainer docs: contract/, compat/, release/ subdirectories
+docs/                   maintainer docs: compat/, release/ subdirectories
 assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
 package.json            dsh.bundle + dsh.client manifests, optional peerDependencies

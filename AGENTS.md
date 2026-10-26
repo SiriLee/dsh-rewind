@@ -33,7 +33,7 @@ them at runtime, so the published tarball does not carry them.
 - `src/client/` — client plugin: per-message ↶ button, mode popover, hidden-span computation
 - `scripts/` — `build.mjs` (artifacts), `update-badge.mjs` (badge), `verify-host.mjs` (host verification),
   `session-decode.mjs` / `session-encode.mjs` (log codec)
-- `docs/` — organized: `contract/` (client contract), `compat/` (audit + compatibility notes), `release/`, plus `harness-reference.md`, `format.md`, `architecture.md`; repo root holds `SECURITY.md` and `CONTRIBUTING.md`
+- `docs/` — organized: `compat/` (audit + compatibility notes), `release/`, plus `harness-reference.md`, `format.md`, `architecture.md`; repo root holds `SECURITY.md` and `CONTRIBUTING.md`
 - `tests/` — vitest suites (rewind / snapshot / hidden / integration)
 
 ## Conventions
