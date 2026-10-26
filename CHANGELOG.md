@@ -14,7 +14,25 @@ and the release steps are documented in
 
 > DSH `>=0.2.1-rc.1 <0.3.0-0` supported
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.0...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...vNEXT
+
+## [0.19.1] - 2026-10-26
+
+> 适配 DSH `>=0.2.1-rc.1 <0.3.0-0`
+
+### 新增功能
+
+- **新增日语（日本語）。** 宿主命令文案、客户端弹窗与设置卡、插件卡片元数据都跟随宿主语言；此前只有中文与英文。DSH 本身不提供日语，需另装日语语言包（如 `@fang2hou/dsh-locale-ja`）才可选用。(#61) @2001Y @SiriLee
+
+---
+
+> DSH `>=0.2.1-rc.1 <0.3.0-0` supported.
+
+### New Features
+
+- **Japanese (日本語) is now available.** Host command copy, the client popover and settings card, and the plugin card metadata all follow the host language; only Chinese and English were available before. DSH does not ship Japanese itself — install a Japanese language pack (e.g. `@fang2hou/dsh-locale-ja`) to select it. (#61) @2001Y @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.0...v0.19.1
 
 ## [0.19.0] - 2026-10-24
 
