@@ -2,9 +2,7 @@
 
 > dsh-rewind — a DeepSeek Harness (DSH) plugin that rewinds a conversation in place
 > to any earlier user message, optionally restoring workspace files along with it.
-> This is the shared spec for every developer and agent working on this repo; it is
-> intentionally minimal. Machine-specific local details live in `AGENTS.local.md`
-> (git-ignored — do not commit).
+> This is the shared spec for every developer and agent working on this repo.
 
 ## Positioning & principles
 - **Focused on purpose**: it does exactly one thing — rewind to any earlier user
