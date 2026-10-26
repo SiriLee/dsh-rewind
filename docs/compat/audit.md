@@ -144,9 +144,9 @@ the shim when upstream fixes it.
 
 ## Coverage gaps
 
-- **Real browser rendering replay**: the contract's logic layer is covered in tests, but DOM
-  hiding is verified in a real engine manually, not in CI — and this line reworked the chat
-  viewport and collapse motion, so re-check the hide + scroll behavior there.
+- **Real browser rendering replay**: the visibility wrapper's logic is covered in tests, but the
+  rendered result is verified in a real engine manually, not in CI — and this line reworked the
+  chat viewport and collapse motion, so re-check the hide + scroll behavior there.
 - **Workflow/jobs cancelled by a rewind**: statically confirmed only. This line makes it
   observable — log-only `job/registered` / `job/settled` carry the creating `toolCall` and a
   termination `cause`.
