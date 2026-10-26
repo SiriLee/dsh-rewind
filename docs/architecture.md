@@ -133,7 +133,8 @@ Ideas under consideration, not commitments:
 - **Multi-process identity/lock**: the current in-flight guard is
   per-process; a cross-process exclusive lock (like the change-ledger
   competitors) would cover multiple host processes on one worktree.
-- **Locale expansion**: client/host copy is zh/en today; the copy layer
-  (`src/locales.ts`, `src/client/locales.ts`) is already keyed for more.
+- **Locale expansion**: copy lives in per-language dictionaries registered through
+  `HOST_DICTS` / `CLIENT_DICTS`; adding a language is a dictionary plus its
+  `locale/<tag>.json` metadata, with no wiring or test edits.
 - **Composer re-send polish**: the target text is already refilled after a
   rewind; a first-class "edit and re-send" affordance is a small extension.

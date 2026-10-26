@@ -10,7 +10,7 @@
  *  - metadata that installers and the DSH registry read (main/types/dsh
  *    bundle patch/peer range) stays intact.
  */
-import { access, readFile } from 'node:fs/promises'
+import { access, readdir, readFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -89,12 +89,19 @@ describe('package layout', () => {
     expect(icon).toMatch(/^\.\/(?!.*\.\.).*\.(svg|png|jpe?g|webp)$/)
     const bytes = await readFile(join(root, icon!.slice(2)))
     expect(bytes.byteLength).toBeLessThanOrEqual(256 * 1024)
-    for (const language of ['en', 'zh']) {
-      const locale = JSON.parse(await readFile(join(root, 'locale', `${language}.json`), 'utf8')) as {
-        meta?: { title?: string; description?: string }
-      }
-      expect(locale.meta?.title, `${language} title`).toBeTruthy()
-      expect(locale.meta?.description, `${language} description`).toBeTruthy()
+
+    // Every shipped locale file is discovered from disk, so adding a language
+    // needs no edit here. The two baseline locales must always be present.
+    const localeDir = join(root, 'locale')
+    const files = (await readdir(localeDir)).filter(file => file.endsWith('.json')).sort()
+    expect(files).toEqual(expect.arrayContaining(['en.json', 'zh.json']))
+    for (const file of files) {
+      const raw = await readFile(join(localeDir, file), 'utf8')
+      const locale = JSON.parse(raw) as { meta?: { title?: string; description?: string } }
+      expect(locale.meta?.title, `${file} title`).toBeTruthy()
+      expect(locale.meta?.description, `${file} description`).toBeTruthy()
+      // Keep the shipped metadata uniform: two-space JSON plus a final newline.
+      expect(raw, `${file} formatting`).toBe(`${JSON.stringify(locale, null, 2)}\n`)
     }
   })
 

@@ -42,7 +42,7 @@ import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type Mes
 import { candidatesOverRpc, previewOverRpc, type ConnectionLike } from './host-rpc.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
-import { en, zh } from './locales.ts'
+import { CLIENT_DICTS } from './locales.ts'
 import { STYLE } from './styles.ts'
 import {
   SettingsCard,
@@ -137,7 +137,7 @@ export function apply(ctx: ClientContext): void {
   rewindLog.info('boot', `loaded v${PLUGIN_VERSION} (build ${BUILD_HASH})`)
 
   ctx.effect(function* () {
-    yield ctx.locale.register(NS, { zh, en })
+    yield ctx.locale.register(NS, CLIENT_DICTS)
     const t = ctx.locale.bind(NS)
 
     const connection = ctx.get('connection') as ConnectionLike | undefined
