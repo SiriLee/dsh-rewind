@@ -4,9 +4,6 @@
     "noEmit": true,
     "emitDeclarationOnly": false,
     "rootDir": ".",
-    // Client test files also read repository metadata (package.json) to pin
-    // cross-config literals; the client BUILD config deliberately stays without
-    // node types, so the shipped declarations cannot pick up node globals.
     "types": ["node"]
   },
   "include": ["src/client/**/*.ts", "src/client/**/*.tsx", "tests/support/**/*.ts", "tests/client-*.test.ts", "tests/chat-channel.test.ts", "tests/log.test.ts"]
