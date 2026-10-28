@@ -17,7 +17,7 @@ and the release steps are documented in
 ### 体验优化
 
 - **插件页新增功能配图。** 详情区用一张中英双语 SVG 展示核心操作，配置卡紧随其后。
-- **新增西班牙语、法语、德语、俄语、巴西葡萄牙语界面。** 跟随 DSH 上游支持的语言；原有的日语译文自然生效，无需额外安装语言包。宿主命令文案、客户端弹层与设置卡、插件卡片元数据都跟随宿主语言；详情配图仍为中英双语，其他语言回退英文图。
+- **新增西班牙语、法语、德语、俄语、巴西葡萄牙语界面。** 跟随 DSH 上游支持的语言；原有的日语译文自然生效，无需额外安装语言包。宿主命令文案、客户端弹层与设置卡、插件卡片元数据都跟随宿主语言；详情配图仍为中英双语，其他语言回退英文图。译文由 AI 生成，欢迎母语者更正。
 
 ### 其他变更
 
@@ -34,7 +34,7 @@ and the release steps are documented in
 ### Improvements
 
 - **The plugin page now shows a feature preview.** The detail area uses a localized SVG image for the core action, keeping the configuration card close.
-- **Spanish, French, German, Russian, and Brazilian Portuguese are now available, following the DSH upstream languages.** The existing Japanese copy takes effect naturally with no extra language pack. Host command copy, the client popover and settings card, and the plugin card metadata all follow the host language; bundle detail images stay Chinese/English and the new locales fall back to the English image.
+- **Spanish, French, German, Russian, and Brazilian Portuguese are now available, following the DSH upstream languages.** The existing Japanese copy takes effect naturally with no extra language pack. Host command copy, the client popover and settings card, and the plugin card metadata all follow the host language; bundle detail images stay Chinese/English and the new locales fall back to the English image. The translations are AI-generated; corrections from native speakers are welcome.
 
 ### Chores
 
