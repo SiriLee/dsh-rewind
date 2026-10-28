@@ -12,16 +12,16 @@ and the release steps are documented in
 
 ### 问题修复
 
-- **图片回填适配 DSH 0.2.2。** 撤回带图消息时按宿主校验的完整图片引用读取，图片在进入输入框时上传，不再因引用校验而丢失。
+- **图片回填适配 DSH 0.2.2。** 撤回带图消息时按宿主校验的完整图片引用读取，图片在进入输入框时上传，不再因引用校验而丢失。 @SiriLee
 
 ### 体验优化
 
-- **插件页新增功能配图。** 详情区用一张中英双语 SVG 展示核心操作，配置卡紧随其后。
-- **新增西班牙语、法语、德语、俄语、巴西葡萄牙语界面。** 跟随 DSH 上游支持的语言；原有的日语译文自然生效，无需额外安装语言包。宿主命令文案、客户端弹层与设置卡、插件卡片元数据都跟随宿主语言；详情配图仍为中英双语，其他语言回退英文图。译文由 AI 生成，欢迎母语者更正。
+- **插件页新增功能配图。** 详情区用中英各一张 SVG 配图展示核心操作，配置卡紧随其后。 @SiriLee
+- **新增西班牙语、法语、德语、俄语、巴西葡萄牙语界面。** 跟随 DSH 上游支持的语言；原有的日语译文自然生效，无需额外安装语言包。宿主命令文案、客户端弹层与设置卡、插件卡片元数据都跟随宿主语言；详情配图仍为中英双语，其他语言回退英文图。译文由 AI 生成，欢迎母语者更正。 (#63) @SiriLee
 
 ### 其他变更
 
-- **适配 DSH `0.2.2-alpha.2`。** 最低 Node.js 提升到 24.9；0.19.1 继续支持 0.2.1 线。
+- **适配 DSH `0.2.2-alpha.2`。** 最低 Node.js 提升到 24.9；0.19.1 继续支持 0.2.1 线。 @SiriLee
 
 ---
 
@@ -29,16 +29,16 @@ and the release steps are documented in
 
 ### Bug Fixes
 
-- **Image restore on DSH 0.2.2.** Rewinding an image-bearing message reads the complete image reference the host verifies and uploads the image as it enters the composer, so the reference check no longer drops it.
+- **Image restore on DSH 0.2.2.** Rewinding an image-bearing message reads the complete image reference the host verifies and uploads the image as it enters the composer, so the reference check no longer drops it. @SiriLee
 
 ### Improvements
 
-- **The plugin page now shows a feature preview.** The detail area uses a localized SVG image for the core action, keeping the configuration card close.
-- **Spanish, French, German, Russian, and Brazilian Portuguese are now available, following the DSH upstream languages.** The existing Japanese copy takes effect naturally with no extra language pack. Host command copy, the client popover and settings card, and the plugin card metadata all follow the host language; bundle detail images stay Chinese/English and the new locales fall back to the English image. The translations are AI-generated; corrections from native speakers are welcome.
+- **The plugin page now shows a feature preview.** The detail area uses English and Chinese SVG images for the core action, keeping the configuration card close. @SiriLee
+- **Spanish, French, German, Russian, and Brazilian Portuguese are now available, following the DSH upstream languages.** The existing Japanese copy takes effect naturally with no extra language pack. Host command copy, the client popover and settings card, and the plugin card metadata all follow the host language; bundle detail images stay Chinese/English and the new locales fall back to the English image. The translations are AI-generated; corrections from native speakers are welcome. (#63) @SiriLee
 
 ### Chores
 
-- **Adapt to DSH `0.2.2-alpha.2`.** Minimum Node.js is now 24.9; 0.19.1 keeps supporting the 0.2.1 line.
+- **Adapt to DSH `0.2.2-alpha.2`.** Minimum Node.js is now 24.9; 0.19.1 keeps supporting the 0.2.1 line. @SiriLee
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...vNEXT
 
