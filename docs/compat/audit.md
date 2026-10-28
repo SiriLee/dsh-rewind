@@ -11,7 +11,7 @@
 > is not restated (the probes pin it; [Deliberate semantics](#deliberate-semantics-no-entry-kept)
 > names it). Upstream references use symbols and file names, never line numbers — they rot.
 >
-> Targeted version: npm `@deepseek-ai/*@0.2.1-rc.3` (the last verified release).
+> Targeted version: npm `@deepseek-ai/*@0.2.2-alpha.2` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 > Version alignment: see `docs/release/release.md`.
 
@@ -26,7 +26,7 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | Host working directory | `ctx.workingDirectory.ensure(agent)` — the base the fs tools resolve against |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
 | Client composer refill | `conversation.input.setDraft` facade |
-| Client image restore | `SessionFace.readAttachment` (decoded bytes) |
+| Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
 | Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
 
@@ -145,15 +145,15 @@ the shim when upstream fixes it.
 ## Coverage gaps
 
 - **Real browser rendering replay**: the visibility wrapper's logic is covered in tests, but the
-  rendered result is verified in a real engine manually, not in CI — and this line reworked the
+  rendered result is verified in a real engine manually, not in CI — and 0.2.2 reworked the
   chat viewport and collapse motion, so re-check the hide + scroll behavior there.
-- **Workflow/jobs cancelled by a rewind**: statically confirmed only. This line makes it
-  observable — log-only `job/registered` / `job/settled` carry the creating `toolCall` and a
-  termination `cause`.
-- **Providers outside the verification dependencies**: `dsh-attachment-local`,
-  `dsh-session-telemetry-otel`, `dsh-session-query-sqlite` (mounted in the shipped profile; its
-  index is configured `openAt: never`, so it is never opened) and `dsh-session-persistence-jsonl`
-  (a real JSONL write round-trip needs the platform prebuilt `node-addon-system` flock addon).
+- **Workflow/jobs cancelled by a rewind**: statically confirmed only; log-only
+  `job/registered` / `job/settled` carry the creating `toolCall` and a termination `cause`.
+- **Providers outside the verification dependencies**: `dsh-attachment-local` (so image refill is
+  manual), `dsh-session-telemetry-otel`, `dsh-session-query-sqlite` (mounted in the shipped
+  profile; its index is configured `openAt: never`, so it is never opened) and
+  `dsh-session-persistence-jsonl` (a real JSONL write round-trip needs the platform prebuilt
+  `node-addon-system` flock addon).
 - **Real LLM streaming / auto title (L2 stubbed)**, and
   **`session-reference`'s `SessionReferenceResolver.prepare`** (needs a full session-query
   service; its data base is already covered by the G1 probe).

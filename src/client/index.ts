@@ -232,14 +232,12 @@ export function apply(ctx: ClientContext): void {
 
     /**
      * The composer image restorer: puts a withdrawn message's durable image
-     * references back into that session's composer draft. Bytes come from the
-     * session face's own `readAttachment` verb with the complete durable image
-     * reference the host verifies — and `conversation.createDrafts` +
-     * `input.addAttachments` run the same intake a dragged-in image takes
-     * (including the entry-time upload), so a rewind of an image-bearing
-     * message loses nothing. Best-effort and never throws: one image's failure
-     * skips that image, and absent services degrade to the text-only refill of
-     * the previous versions.
+     * references back into that session's composer draft. `readAttachment`
+     * takes the complete reference the host verifies; `createDrafts` +
+     * `addAttachments` run the same intake a dragged-in image takes (including
+     * the entry-time upload), so a rewind of an image-bearing message loses
+     * nothing. Best-effort and never throws: one image's failure skips that
+     * image, and absent services degrade to the text-only refill.
      */
     const restoreImages = async (sessionId: string, images: readonly MessageImageRef[]): Promise<void> => {
       if (images.length === 0) return

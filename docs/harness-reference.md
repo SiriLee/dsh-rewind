@@ -13,7 +13,7 @@
 - [session-query.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-query.md) — session query / `foldSurface` read-only interfaces
 - [token-meter.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/token-meter.md) — replay-aware token meter (`TokenMeter.measure`, surface pricing)
 - [compaction.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/compaction.md) — compaction seam / `compaction/*` events / `BasicCompactionEngine` (`summarize()` hook)
-- [session-projection.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-projection.md) — projection registry (`SessionProjectionRegistry.snapshot/checkpoint`)
+- [session-projection.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-projection.md) — projection registry (async `register` / `ProjectionHandle` / `snapshot` / `checkpoint`)
 - [session-stats](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/session/session-stats) — whole-log stats projection (folds ALL events; rewind does not roll back counts)
 - [session-title.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/session-title.md) — durable title state (`foldSessionTitle`)
 - [goal.md](https://github.com/deepseek-ai/deepseek-harness/blob/main/docs/subsystems/goal.md) — goal fold (`foldGoal`) and round admission
@@ -39,7 +39,7 @@ Also in the harness repo's `docs/`: `persistence-catalog.md` (full
 | `tools/pre-execute` / `execute` / `post-execute` | [packages/core/tools/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/index.ts) |
 | Client DOM anchors (`data-chat-flow-kind` / `data-chat-anchor-key`) | [packages/client/ui-chat/src/client/chat/ChatNodeSeat.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/ChatNodeSeat.tsx) |
 | User bubble rendering | [packages/client/ui-chat/src/client/chat/MessageItem.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/MessageItem.tsx) |
-| Client `SessionFace` (`command` / `cancel`) | [packages/api/session-controller/src/client/contract/session.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/api/session-controller/src/client/contract/session.ts) |
+| Client `SessionFace` (`command` / `cancel` / `readAttachment(ImageAttachmentRef)`) | [packages/api/session-controller/src/client/contract/session.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/api/session-controller/src/client/contract/session.ts) |
 | Client pending interaction (SessionPendingInteraction) | [packages/client/ui-session/src/client/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-session/src/client/index.ts) |
 
 ## Plugin source layout

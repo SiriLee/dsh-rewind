@@ -10,9 +10,25 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`
 
+### 问题修复
+
+- **图片回填适配 DSH 0.2.2。** 撤回带图消息时按宿主校验的完整图片引用读取，图片在进入输入框时上传，不再因引用校验而丢失。
+
+### 其他变更
+
+- **适配 DSH `0.2.2-alpha.2`。** 最低 Node.js 提升到 24.9；0.19.1 继续支持 0.2.1 线。
+
 ---
 
 > DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **Image restore on DSH 0.2.2.** Rewinding an image-bearing message reads the complete image reference the host verifies and uploads the image as it enters the composer, so the reference check no longer drops it.
+
+### Chores
+
+- **Adapt to DSH `0.2.2-alpha.2`.** Minimum Node.js is now 24.9; 0.19.1 keeps supporting the 0.2.1 line.
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...vNEXT
 

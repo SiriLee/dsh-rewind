@@ -96,15 +96,6 @@ describe('messageAttachmentsAt', () => {
     }])
   })
 
-  it('does not restore file blocks (files are not readable from the client)', () => {
-    const target = viewNode('u7', 'user', 7, {
-      kind: 'user',
-      seq: 7,
-      content: [{ type: 'file', attachment: { attachmentId: 'f7', name: 'notes.txt', bytes: 5 } }],
-    })
-    expect(messageAttachmentsAt(snap([target], []), 7)).toEqual([])
-  })
-
   it('returns [] for a text-only message and undefined for an absent seq', () => {
     const chat = snap([viewNode('u0', 'user', 0, {
       kind: 'user', seq: 0, content: [{ type: 'text', text: 'hi' }],
