@@ -14,7 +14,7 @@ first), and the docs live under `docs/` with an index in `docs/README.md`.
 
 ## Prerequisites
 
-- Node `^22.19.0 || >=24.0.0` (see `engines` in `package.json`), npm.
+- Node `>=24.9.0` (see `engines` in `package.json`), npm.
 
 ## Setup and commands
 

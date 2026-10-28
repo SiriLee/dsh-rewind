@@ -139,7 +139,7 @@ rm <dsh home>/snapshot-cleanup-last-sweep.json
 
 ## 兼容性
 
-- Node.js `^22.19.0 || >=24.0.0`。
+- Node.js `>=24.9.0`。
 - 兼容性定义、验证方法与版本对齐详见 [docs/compat/audit.md](docs/compat/audit.md)；支持的 DSH 版本由 `package.json` 的 `engines.dsh` 声明。
 
 > [!WARNING]
