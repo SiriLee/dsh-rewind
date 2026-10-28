@@ -139,7 +139,7 @@ describe('package layout', () => {
   })
 
   it('keeps the engines range aligned with the CI matrix', () => {
-    expect(pkg.engines?.node).toMatch(/\^22\.19\.0 \|\| >=24\.0\.0/)
+    expect(pkg.engines?.node).toBe('>=24.9.0')
   })
 
   it('declares the adapted DSH range on the peer tuple', () => {
@@ -170,7 +170,7 @@ describe('package layout', () => {
     const devs: Record<string, string> = pkg.devDependencies ?? {}
     for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/schemastery']) {
       const peer = peers[name]
-      expect(peer, `${name} must declare a peer floor`).toMatch(/^\^\d+\.\d+\.\d+$/u)
+      expect(peer, `${name} must declare a peer floor`).toMatch(/^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u)
       expect(devs[name], `${name} must be installed at that floor`).toBe(peer?.slice(1))
     }
   })

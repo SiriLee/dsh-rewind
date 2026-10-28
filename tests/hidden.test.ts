@@ -82,6 +82,29 @@ describe('messageAttachmentsAt', () => {
     expect(messageAttachmentsAt(snap([target], []), 5)).toEqual([{ attachmentId: 'a1', mediaType: 'image/png' }])
   })
 
+  it('keeps the complete durable reference the session image read verifies', () => {
+    const target = viewNode('u6', 'user', 6, {
+      kind: 'user',
+      seq: 6,
+      content: [{
+        type: 'image',
+        attachment: { attachmentId: 'a6', mediaType: 'image/webp', bytes: 42, width: 7, height: 9, name: 'shot.webp' },
+      }],
+    })
+    expect(messageAttachmentsAt(snap([target], []), 6)).toEqual([{
+      attachmentId: 'a6', mediaType: 'image/webp', bytes: 42, width: 7, height: 9, name: 'shot.webp',
+    }])
+  })
+
+  it('does not restore file blocks (files are not readable from the client)', () => {
+    const target = viewNode('u7', 'user', 7, {
+      kind: 'user',
+      seq: 7,
+      content: [{ type: 'file', attachment: { attachmentId: 'f7', name: 'notes.txt', bytes: 5 } }],
+    })
+    expect(messageAttachmentsAt(snap([target], []), 7)).toEqual([])
+  })
+
   it('returns [] for a text-only message and undefined for an absent seq', () => {
     const chat = snap([viewNode('u0', 'user', 0, {
       kind: 'user', seq: 0, content: [{ type: 'text', text: 'hi' }],

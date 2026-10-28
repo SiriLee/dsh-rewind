@@ -278,11 +278,12 @@ ctx.provide('connection', {
 // resolves through the config the plugin is mounted with.
 ctx.provide('settings', fakeSettings)
 ctx.provide('sessions', { flush: async () => {} })
-// The real token-meter service (registers itself as ctx.tokenMeter) and a
-// real compaction backend whose ONLY hook is a stubbed summarize() — the
-// manual `/compact` command path needs no LLM.
+// The real token-meter service, activated so its asynchronous projection
+// registrations settle before the manual `/compact` path, and a real
+// compaction backend whose ONLY hook is a stubbed summarize() — the manual
+// `/compact` command path needs no LLM.
 new SessionProjectionRegistry(ctx)
-new TokenMeter(ctx)
+await ctx.plugin(TokenMeter)
 class StubCompactionEngine extends BasicCompactionEngine {
   constructor() { super(ctx, { summarizationProvider: 'test', summarizationModel: 'test-model' }) }
   async summarize(input, agent, signal) {

@@ -12,7 +12,7 @@ jobs:
   quality:
     strategy:
       matrix:
-        node: [22.19.0, 24]
+        node: [24.9.0, 24]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -31,7 +31,7 @@ jobs:
         # still reflects the result). The repository/ref gates keep the step in
         # the canonical repo's main branch only: forks lack the GIST_TOKEN
         # secret, and the node matrix would otherwise write the badge twice.
-        if: ${{ always() && github.repository == 'SiriLee/dsh-rewind' && github.ref == 'refs/heads/main' && matrix.node == '22.19.0' }}
+        if: ${{ always() && github.repository == 'SiriLee/dsh-rewind' && github.ref == 'refs/heads/main' && matrix.node == '24.9.0' }}
         env:
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           GIST_ID: db3b9260351c2b26eb3d201c2ed29df1

@@ -8,11 +8,11 @@ and the release steps are documented in
 
 ## [Unreleased]
 
-> 适配 DSH `>=0.2.1-rc.1 <0.3.0-0`
+> 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`
 
 ---
 
-> DSH `>=0.2.1-rc.1 <0.3.0-0` supported
+> DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...vNEXT
 

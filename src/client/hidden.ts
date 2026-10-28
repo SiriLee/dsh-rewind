@@ -134,8 +134,8 @@ export function messageTextAt(chat: HiddenChat | undefined, seq: number): string
  * A durable image reference carried by an `image` content block in the chat
  * snapshot, read structurally (the harness's `ImageAttachmentRef` from
  * dsh-attachment, without importing it, so the plugin survives harness
- * drift). Fields beyond `attachmentId`/`mediaType` pass through to the
- * durable image URL loader unchanged.
+ * drift). The fields are optional here so the reader tolerates older or
+ * partial snapshots; the image read only runs for a complete reference.
  */
 export interface MessageImageRef {
   readonly attachmentId: string
@@ -156,7 +156,7 @@ export interface MessageImageRef {
  * Reads the same node kinds as `messageTextAt` (`user` and `steering`).
  * Blocks tolerate malformed or missing references (skipped, never a throw),
  * and `image/offload` projections leave the durable reference in place —
- * which is all the URL loader needs. `file` blocks are intentionally
+ * which is all the host image read needs. `file` blocks are intentionally
  * excluded: the harness exposes no client-side file-bytes loader (file
  * uploads go one-way), so a file is not restorable.
  * State absent → undefined; a message without images → [].

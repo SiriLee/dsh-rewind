@@ -15,8 +15,6 @@
  */
 
 import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-// Type-only: the branded attachment id `SessionFace.readAttachment` takes.
-import type { AttachmentIdType } from '@deepseek-ai/dsh-attachment'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
 import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
@@ -68,6 +66,9 @@ export const name = 'dsh-rewind'
 export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms', 'connection']
 
 const NS = 'rewind'
+
+/** The complete durable image reference the session face's image read verifies. */
+type DurableImageRef = Parameters<SessionFace['readAttachment']>[0]
 
 /**
  * Structural face of the `uiConversation` service: per-session
@@ -232,20 +233,20 @@ export function apply(ctx: ClientContext): void {
     /**
      * The composer image restorer: puts a withdrawn message's durable image
      * references back into that session's composer draft. Bytes come from the
-     * session face's own `readAttachment` verb — the same read the harness's
-     * image URL loader performs before wrapping the result in a `blob:` URL —
-     * and `conversation.createDrafts` + `input.addAttachments` run the same
-     * intake a dragged-in image takes, so a rewind of an image-bearing message
-     * loses nothing. Best-effort and never throws: one image's failure skips
-     * that image, and absent services degrade to the text-only refill of the
-     * previous versions.
+     * session face's own `readAttachment` verb with the complete durable image
+     * reference the host verifies — and `conversation.createDrafts` +
+     * `input.addAttachments` run the same intake a dragged-in image takes
+     * (including the entry-time upload), so a rewind of an image-bearing
+     * message loses nothing. Best-effort and never throws: one image's failure
+     * skips that image, and absent services degrade to the text-only refill of
+     * the previous versions.
      */
     const restoreImages = async (sessionId: string, images: readonly MessageImageRef[]): Promise<void> => {
       if (images.length === 0) return
       const session = sessionOf(sessionId)
       const conversation = (ctx as { get(name: string): unknown }).get('conversation') as {
         input?: { for(actx: unknown): { addAttachments(ids: readonly string[]): boolean } }
-        createDrafts?: (id: SessionId, files: readonly File[]) => readonly { id: string }[]
+        createDrafts?: (id: SessionId, files: readonly File[], uploadImages: boolean) => readonly { id: string }[]
         releaseDraftAttachments?: (drafts: readonly { id: string }[]) => void
       } | undefined
       const scope = (ctx.sessions as { scope?: (id: SessionId) => unknown }).scope?.(sessionId as SessionId)
@@ -260,8 +261,19 @@ export function apply(ctx: ClientContext): void {
           rewindLog.warn('refill', `skipping image with unsupported type ${ref.mediaType}`)
           continue
         }
+        if (typeof ref.bytes !== 'number' || typeof ref.width !== 'number' || typeof ref.height !== 'number') {
+          rewindLog.warn('refill', `skipping image ${ref.attachmentId}: incomplete durable reference`)
+          continue
+        }
         try {
-          const result = await session.readAttachment(ref.attachmentId as AttachmentIdType)
+          const result = await session.readAttachment({
+            attachmentId: ref.attachmentId as DurableImageRef['attachmentId'],
+            mediaType: ref.mediaType as DurableImageRef['mediaType'],
+            bytes: ref.bytes,
+            width: ref.width,
+            height: ref.height,
+            ...(ref.name === undefined ? {} : { name: ref.name }),
+          })
           if (!result.ok) throw result.error
           // The face types its bytes as a plain `Uint8Array`, which newer TS
           // lib types widen to `ArrayBufferLike`; the host always hands over an
@@ -274,7 +286,7 @@ export function apply(ctx: ClientContext): void {
       }
       if (files.length === 0) return
       try {
-        const drafts = conversation.createDrafts(sessionId as SessionId, files)
+        const drafts = conversation.createDrafts(sessionId as SessionId, files, session.getSnapshot().subagent === null)
         const admitted = conversation.input.for(scope).addAttachments(drafts.map(draft => draft.id))
         if (!admitted) {
           // A busy admission locks the composer; release what it refused, as the
