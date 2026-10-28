@@ -172,11 +172,11 @@ describe('I3 step/turn structure (probe: client ordering + step pairing)', () =>
 })
 
 describe('I4 fold-service safety (probe: stats / title / goal)', () => {
-  it('session-stats folds a rewound log without throwing and without a phantom turn', () => {
+  it('session-stats folds a rewound log without throwing and without a phantom turn', async () => {
     const session = buildTurnedSession() // turns 1 and 2, both closed
     const ctx = new Context()
     new SessionProjectionRegistry(ctx)
-    applySessionStats(ctx)
+    await applySessionStats(ctx)
     const registry = ctx.sessionProjections
 
     // Fold the baseline log through a fresh registry cell (as a resume would).

@@ -98,13 +98,13 @@ describe('G1 surface classification (probe: foldSurface transitions)', () => {
 })
 
 describe('G2 projection checkpoint (probe: SessionProjectionRegistry.checkpoint)', () => {
-  it('checkpoint rows over a rewound log pass schema and report the watermark', () => {
+  it('checkpoint rows over a rewound log pass schema and report the watermark', async () => {
     const session = buildTurnedSession()
     applyRewind(session, firstUserSeq(session))
 
     const ctx = new Context()
     new SessionProjectionRegistry(ctx)
-    applySessionStats(ctx)
+    await applySessionStats(ctx)
     // Rebuild from the log so the registry folds a fresh cell (as a resume
     // or persisted-cache restore would). A seeded rebuild appends its own
     // `session/end-seed` marker, so the watermark is measured on the rebuilt
@@ -140,7 +140,7 @@ describe('G3 token-meter usage anchor (probe: baseline behavior around rewind)',
 })
 
 describe('G4 token-meter projections (probe: registry fold over a rewound log)', () => {
-  it('folds the marker log and does not roll the figures back to the cut surface', () => {
+  it('folds the marker log and does not roll the figures back to the cut surface', async () => {
     const session = buildUsageSession()
     const markerSeq = applyRewind(session, firstUserSeq(session))
     const events = session.snapshotEvents()
@@ -149,7 +149,7 @@ describe('G4 token-meter projections (probe: registry fold over a rewound log)',
     // appended last), as a resume would from the durable log.
     const ctx = new Context()
     new SessionProjectionRegistry(ctx)
-    new TokenMeter(ctx)
+    await ctx.plugin(TokenMeter)
     const after = ctx.sessionProjections.snapshot(Session.create(session.id, events))
     const before = ctx.sessionProjections.snapshot(Session.create(session.id, events.slice(0, markerSeq)))
 
