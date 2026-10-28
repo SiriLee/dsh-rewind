@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Rembobinage de la conversation",
+    "description": "Rembobinez jusqu’à un message antérieur, avec restauration facultative des fichiers de l’espace de travail.",
+    "detail": "docs/DETAIL.md"
+  }
+}

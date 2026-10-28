@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Rebobinar conversa",
+    "description": "Rebobine até uma mensagem anterior e, opcionalmente, restaure os arquivos do espaço de trabalho.",
+    "detail": "docs/DETAIL.md"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Unterhaltung zurückspulen",
+    "description": "Spulen Sie zu einer früheren Nachricht zurück und stellen Sie optional Arbeitsbereichsdateien wieder her.",
+    "detail": "docs/DETAIL.md"
+  }
+}
