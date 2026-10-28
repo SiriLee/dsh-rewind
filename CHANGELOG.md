@@ -10,6 +10,16 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`
 
+---
+
+> DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.1...vNEXT
+
+## [0.20.0-alpha.1] - 2026-10-28
+
+> 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`（内测版）
+
 ### 问题修复
 
 - **图片回填适配 DSH 0.2.2。** 撤回带图消息时按宿主校验的完整图片引用读取，图片在进入输入框时上传，不再因引用校验而丢失。 @SiriLee
@@ -25,7 +35,7 @@ and the release steps are documented in
 
 ---
 
-> DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
+> DSH `>=0.2.2-alpha.2 <0.3.0-0` supported. Internal alpha.
 
 ### Bug Fixes
 
@@ -40,7 +50,7 @@ and the release steps are documented in
 
 - **Adapt to DSH `0.2.2-alpha.2`.** Minimum Node.js is now 24.9; 0.19.1 keeps supporting the 0.2.1 line. @SiriLee
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...v0.20.0-alpha.1
 
 ## [0.19.1] - 2026-10-26
 
