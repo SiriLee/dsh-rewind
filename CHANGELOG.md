@@ -14,6 +14,10 @@ and the release steps are documented in
 
 - **图片回填适配 DSH 0.2.2。** 撤回带图消息时按宿主校验的完整图片引用读取，图片在进入输入框时上传，不再因引用校验而丢失。
 
+### 体验优化
+
+- **插件页新增功能配图。** 详情区用一张中英双语 SVG 展示核心操作，配置卡紧随其后。
+
 ### 其他变更
 
 - **适配 DSH `0.2.2-alpha.2`。** 最低 Node.js 提升到 24.9；0.19.1 继续支持 0.2.1 线。
@@ -25,6 +29,10 @@ and the release steps are documented in
 ### Bug Fixes
 
 - **Image restore on DSH 0.2.2.** Rewinding an image-bearing message reads the complete image reference the host verifies and uploads the image as it enters the composer, so the reference check no longer drops it.
+
+### Improvements
+
+- **The plugin page now shows a feature preview.** The detail area uses a localized SVG image for the core action, keeping the configuration card close.
 
 ### Chores
 

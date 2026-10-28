@@ -54,10 +54,11 @@ describe('package layout', () => {
     for (const entry of [
       'lib',
       'cordis.patch.yml',
-      'README.md',
-      'README.en.md',
+      'docs/DETAIL.md',
+      'docs/DETAIL.zh.md',
+      'docs/preview.svg',
+      'docs/preview.zh.svg',
       'SECURITY.md',
-      'LICENSE',
       // Read by the harness as package resources, not only by the repository.
       'locale/*.json',
       'assets/icon.svg',
