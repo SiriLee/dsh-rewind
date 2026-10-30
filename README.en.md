@@ -1,7 +1,7 @@
 # dsh-rewind
 
-Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window** —<br />
-no new branch, no window switch, with optional workspace-file restore (full Claude Code `/rewind` semantics).
+Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window**.<br />
+No new branch, no window switch, with optional workspace-file restore — the full Claude Code `/rewind` semantics.
 
 English | [中文](README.md)
 
@@ -9,7 +9,7 @@ English | [中文](README.md)
 [![npm downloads](https://img.shields.io/npm/dt/dsh-rewind-plugin.svg)](https://www.npmjs.com/package/dsh-rewind-plugin)
 [![tests](https://img.shields.io/endpoint?url=https%3A%2F%2Fgist.githubusercontent.com%2FSiriLee%2Fdb3b9260351c2b26eb3d201c2ed29df1%2Fraw%2Fbadge.json)](https://github.com/SiriLee/dsh-rewind/actions/workflows/ci.yml)
 
-![Back to any earlier message: the ↶ rewind button and the conversation-only / conversation-and-files mode popover](docs/preview.svg)
+![Rewind to an earlier message, with optional file restore](docs/preview.svg)
 
 A deliberately focused plugin with one job: **rewind to any user message, no matter how far back, in place** — and conveniently **restore the files it changed** along the way.
 
@@ -43,14 +43,10 @@ Check your local DSH version, then find the matching plugin version in
 dsh plugin --profile <name> add dsh-rewind-plugin@<version>
 ```
 
-**Graphical interface**: the **Plugins** page in the sidebar → **Add plugin** → enter `dsh-rewind-plugin@<version>` → install → restart DSH and refresh the browser.
+**Graphical interface**: the **Plugins** page in the sidebar → **Add plugin** → enter `dsh-rewind-plugin@<version>` → install → restart DSH.
 
 <img src="assets/screenshots/add-plugin.png" width="600" alt="Add plugin dialog: enter dsh-rewind-plugin@version in the field"><br>
 <sub>The screenshot is an example only — use the version that matches your DSH version.</sub>
-
-**Updating**: the command line overwrites the installed version directly; the
-graphical interface rejects a re-install, so uninstall the old version first,
-then install the new one.
 
 > [!WARNING]
 > The npm name `dsh-rewind` belongs to another author's package — install with `dsh-rewind-plugin`.
@@ -66,8 +62,8 @@ then install the new one.
 <details>
 <summary><b>Edge notes</b></summary>
 
-- Rewinds can be repeated — with no limit on stage or count.
-- A rewind itself **cannot be undone**, but the withdrawn content stays in the session log.
+- **The withdrawn content is preserved** — it stays in the session log and can be inspected in the **Trajectory** panel; you can also disable the plugin to show it again (display only).
+- **A rewind cannot be undone in place** — to carry the content forward, first disable the plugin so the withdrawn content shows again, then click **Branch into a new conversation** on the message just before the rewind; the new conversation's context will include it.
 - **Interruptions rewind too** — a `steering` message the model hasn't read yet is also a valid rewind target, and withdrawing it does not interrupt the current run.
 - **Rewinding a read message interrupts the running turn** — to ensure the rewind runs safely.
 
@@ -79,17 +75,16 @@ then install the new one.
 switched off in this plugin's configuration card. When off, no new snapshots
 are created; file changes made while off cannot be restored. Snapshots (the
 before-write backups) are stored under `<dsh home>/rewind-snapshots/`
-(the default is `~/.dsh/rewind-snapshots/`). For the **same session**, the plugin
-deduplicates snapshots by content and keeps the newest 100 anchor groups.
+(the default is `~/.dsh/rewind-snapshots/`).
 **Deleting that directory manually** only clears the file backups (chat rewinds are
-unaffected); the plugin can rebuild them automatically.
+unaffected); the plugin can rebuild that directory automatically.
 
-A **global auto-cleanup** (off by default) removes the snapshot directories of
+A **snapshot auto-cleanup** (off by default) removes the snapshot directories of
 long-inactive sessions, leaving the active session and chat log untouched. Configure
 and review it on the **Plugins** page, in this plugin's configuration card (the
 auto-cleanup switch and the idle-day cutoff), or use the
 `/snapshot-auto-cleanup` command to **view, configure, and run** it. See:
-[Snapshot cleanup](docs/snapshot-auto-cleanup.md).
+[Snapshot auto-cleanup](docs/snapshot-auto-cleanup.md).
 
 <img src="assets/screenshots/plugin-setting.png" alt="Plugin configuration card: snapshot backups and auto cleanup" width="600">
 
@@ -104,19 +99,19 @@ rm -rf <dsh home>/rewind-snapshots
 rm <dsh home>/snapshot-cleanup-last-sweep.json
 ```
 
-The plugin's auto-cleanup settings live in the current Profile's plugin
-configuration. To remove them completely, delete this plugin entry's configuration.
+The plugin's configuration entries are stored in the current Profile's config
+file `cordis.patch.yml`. To clean up completely, delete the corresponding entries
+manually.
 
-## Why it stands out
+## What this plugin changes
 
-Compared with the common approaches, here is the trade-off this plugin makes on "rewind":
+Compared with the default behavior:
 
-| Dimension | Common approach | This plugin |
+| Dimension | Default behavior | This plugin |
 | --- | --- | --- |
-| Conversation rewind | Fork / branch a new conversation | **In-place rewind** — no new session, no window switch |
-| File restore | No restore feature / git-managed or whole-tree snapshot | **Lightweight before-backups** — auto-captured before writes, one-click restore |
-| Dependencies | Often needs a Git repo or a full snapshot engine | **None** — no git required, works on any directory |
-| Storage footprint | Whole-tree snapshots take space | **Lightweight** — nothing is stored unless it changed, and only files touched by write tools are tracked |
+| Conversation rewind | Branch into a new conversation | **In-place rewind** — no new session branch, no window switch, no leftover session copies, and rewinding is more convenient |
+| File restore | Manual restore / Git management | **One-click restore** — lightweight before-write backups; optionally restore files together with the conversation, fitting agent workflows |
+| Restore dependencies | Often needs a Git repository or a full snapshot engine | **None** — no Git repository and no code project required; works in any directory |
 
 ## How it works
 
@@ -131,7 +126,7 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 - **The replacement is imperceptible** — the model ignores the marker, with no effect (verified empirically). Together with the plugin's UI handling, what you and the model see is exactly how the conversation looked at the target;
 - **Content is preserved** — because this is "masking, not deleting", the withdrawn content stays in the log — auditable, traceable, and in principle manually recoverable.
 
-> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics. The compatibility subtleties with DSH (replicating `/compact`, the empty-message mask) are where this plugin is genuinely professional.
+> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics.
 
 ### 2. File restore: lightweight checkpointing, "before-write backup"
 
@@ -156,7 +151,8 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 ## Compatibility
 
 - Node.js `>=24.9.0`.
-- Compatibility definition, verification method, and version alignment: see [docs/compat/audit.md](docs/compat/audit.md); supported DSH versions are declared by `package.json` `engines.dsh`.
+- Supported DSH versions are declared by `package.json` `engines.dsh`.
+- Compatibility definition, verification method, and version alignment: see [docs/compat/audit.md](docs/compat/audit.md).
 
 > [!WARNING]
 > This project and DeepSeek Harness are both in developer preview. Pin exact
@@ -164,16 +160,17 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 
 ## Known issues
 
-1. **Exported logs are complete** — a rewind only removes messages from the model context and the view; the exported session log (`/export`) still contains **withdrawn messages**. This plugin cannot alter exports.
+1. **Exported logs are complete** — `/export` exports the whole session log (raw JSONL), **withdrawn content included**; this plugin cannot alter exports.
 2. **Lightweight file rewind has a cost** — in specific cases not all changes can be rewound. Consistent with Claude Code. See: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
-3. **The turn-rail shows rewound turns** — the right-side rail added in DSH `v0.1.2` keeps ticks for withdrawn messages, and hovering shows the withdrawn text. Only a display difference; no functional impact.
+3. **Turn navigation keeps rewound turns** — the right-side turn navigation keeps an "unloaded" tick for each rewound turn, and hovering previews the withdrawn content. Only a display difference; no functional impact.
+4. **A far rewind may show a blank transcript** — when the target predates the loaded history, the conversation area goes blank; click **Load earlier** to page back until the history appears.
 
 > [!NOTE]
 > Browser diagnostics are available; see [Browser diagnostics](docs/compat/diagnostics.md).
 
 ## Security
 
-This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and files"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. For sessions you've left inactive for a long time, a global auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
+This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and files"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. For sessions you've left inactive for a long time, a snapshot auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [SECURITY.md](SECURITY.md).
 
 ## Development
 

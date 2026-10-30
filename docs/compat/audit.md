@@ -142,6 +142,14 @@ plugin loads. **Stance:** keep the floor; never treat the range as enforcement.
 plugin scope. **Stance:** register from the root context and dispose with the plugin; remove
 the shim when upstream fixes it.
 
+### U11 — history pagination ignores rewind-hidden rows
+
+`paginate` counts append-origin messages, not `visibility`; when the target predates the loaded
+window, hidden rows keep `hasMore` true, so Chat shows only “Load earlier” until the user pages
+back (also after a cold open). **Ask:** a transcript-visibility input to `paginate` (hidden rows
+returned, not counted). **Stance:** no Host patch or pagination compensation; the user pages
+back manually.
+
 ## Coverage gaps
 
 - **Real browser rendering replay**: the visibility wrapper's logic is covered in tests, but the
