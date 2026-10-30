@@ -169,7 +169,7 @@ npm run build          # esbuild：lib/index.js（host ESM）+ lib/client.js（l
 node scripts/verify-host.mjs   # 端到端验证构建产物
 ```
 
-`prepare` 执行完整构建，所以 git 安装与 `npm pack` / `npm publish` 总会产出完整的 `lib/` 与 `LICENSE`。
+`prepack` 在打包前执行完整构建，所以 `npm pack` / `npm publish` 总会产出完整的 `lib/`。请从 npm 或打好的 tarball 安装——git 检出的源码里没有构建好的 `lib/`。
 
 维护者：模块地图与 harness 接口参考见 [docs/harness-reference.md](docs/harness-reference.md)
 

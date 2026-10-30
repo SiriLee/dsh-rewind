@@ -183,7 +183,7 @@ npm run build          # esbuild: lib/index.js (host ESM) + lib/client.js (loade
 node scripts/verify-host.mjs   # end-to-end verification of the built artifact
 ```
 
-`prepare` runs the full build, so git installs and `npm pack` / `npm publish` always produce a complete `lib/` and the `LICENSE`.
+`prepack` runs the full build, so `npm pack` / `npm publish` always ship a complete `lib/`. Install from npm or a packed tarball — a git checkout has no built `lib/`.
 
 Maintainers: the module map and harness interface reference live in [docs/harness-reference.md](docs/harness-reference.md).
 

@@ -27,8 +27,8 @@ npm test               # vitest: unit + compatibility suites
 npm run verify:host    # end-to-end host verification (full check suite)
 ```
 
-`prepare` runs the build, so `npm pack` / `npm publish` always carry a fresh
-`lib/` and `LICENSE`.
+`prepack` runs the build, so `npm pack` / `npm publish` always carry a fresh
+`lib/`; installs never trigger a build.
 
 ## Before you open a PR
 
