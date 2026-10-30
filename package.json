@@ -17,6 +17,9 @@
     "url": "git+https://github.com/SiriLee/dsh-rewind.git"
   },
   "homepage": "https://github.com/SiriLee/dsh-rewind#readme",
+  "bugs": {
+    "url": "https://github.com/SiriLee/dsh-rewind/issues"
+  },
   "license": "MIT",
   "engines": {
     "node": ">=24.9.0",
