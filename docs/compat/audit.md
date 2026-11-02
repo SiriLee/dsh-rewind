@@ -26,7 +26,7 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | Host working directory | `ctx.workingDirectory.ensure(agent)` — the base the fs tools resolve against |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
 | Client composer refill | `conversation.input.setDraft` facade |
-| Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
+| Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)`; pending refs come from the `inbox` projection's `next-step` content |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
 | Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
 

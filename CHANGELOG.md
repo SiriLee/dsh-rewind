@@ -10,9 +10,17 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`
 
+### 问题修复
+
+- **撤回未读插话时，插话自己的图片也会回到输入框。** 此前只回填文字，重发会丢掉图片；沿用已读消息的图片回填通道。 (#66)
+
 ---
 
 > DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **Withdrawing an unread steering message now restores its own images to the composer.** Only the text came back before, so re-sending silently dropped the pictures; the existing image-restore path is reused. (#66)
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.1...vNEXT
 

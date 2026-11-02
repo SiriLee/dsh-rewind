@@ -18,6 +18,8 @@
  * @module dsh-rewind/client/pending
  */
 
+import { imageRefsOf, type ImageBlockLike, type MessageImageRef } from './hidden.ts'
+
 /** One rendered pending-steering bubble row (only the fields matching reads). */
 export interface PendingRow {
   /** The bubble's message text, excluding the actions container (see module doc). */
@@ -26,8 +28,8 @@ export interface PendingRow {
   readonly attachments: number
 }
 
-/** One wire content block of an inbox row (only the fields the derivation reads). */
-export interface InboxBlockLike {
+/** One wire content block of an inbox row. */
+export interface InboxBlockLike extends ImageBlockLike {
   /** Wire block type (`text` | `image` | `file` | …). */
   readonly type: string
   /** The block's text, on a `text` block. */
@@ -62,6 +64,8 @@ export interface PendingSteeringItem {
   readonly text: string | null
   /** Non-text blocks (image/file/…) the message carries, in prompt order. */
   readonly attachments: number
+  /** Image references the message carries, in prompt order. */
+  readonly images: readonly MessageImageRef[]
   /** Space-collapsed preview with image/file blocks excluded (the harness QueueDock rule). */
   readonly preview: string
 }
@@ -128,6 +132,7 @@ export function steeringItemsOf(nextStep: readonly InboxMessageLike[] | undefine
         id: item.id,
         text,
         attachments: attachmentsCountOf(item.content),
+        images: imageRefsOf(item.content),
         preview: previewOf(text),
       }
     })

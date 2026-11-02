@@ -748,6 +748,7 @@ export function RewindPortals({ sessionId, sessionOf, chatOf, isMainViewSession,
           sessionId={sessionId}
           sessionOf={sessionOf}
           setComposerText={setComposerText}
+          restoreImages={restoreImages}
           t={t}
         />
       )
@@ -842,9 +843,8 @@ export function composerText(): string {
  *
  * 1. Remove the target and its future (steering only; queued stays) through
  *    the session's own `updateQueue` channel, oldest first.
- * 2. Put the target's text back in the composer ONLY when the target was
- *    actually removed and the composer is empty (Claude Code's auto-restore
- *    guard, so a draft the user is typing is never clobbered).
+ * 2. Put the target's own images back, then its text when the composer is
+ *    empty (the empty-composer guard, so a draft is never clobbered).
  *
  * The realistic failure is `queue-item-not-found`: a step boundary claimed
  * the whole next-step batch a moment ago, so the message is now durable and
@@ -857,11 +857,13 @@ export async function retractPending(
   itemId: string,
   text: string | null,
   setComposerText: (sessionId: string, text: string) => boolean,
+  restoreImages?: (sessionId: string, images: readonly MessageImageRef[]) => Promise<void>,
 ): Promise<void> {
   // The item id comes from the inbox occurrence, which the harness brands as
   // MessageId; cast at this single boundary to avoid a new type dependency on
   // the branding package.
   const steering = steeringItemsOf(inboxOf(session)?.['next-step'])
+  const images = steering.find(item => item.id === itemId)?.images ?? []
   let removedTarget = false
   for (const id of retractSpan(steering, itemId)) {
     let accepted = false
@@ -883,7 +885,15 @@ export async function retractPending(
     if (id === itemId) removedTarget = true
   }
   // Refill only on a confirmed removal (see the failure note above).
-  if (removedTarget && text !== null && text !== '' && composerText().trim() === '') {
+  if (!removedTarget) return
+  if (images.length > 0 && restoreImages !== undefined) {
+    try {
+      await restoreImages(session.sessionId, images)
+    } catch (error) {
+      rewindLog.warn('retract', `image restore for ${itemId} threw`, error)
+    }
+  }
+  if (text !== null && text !== '' && composerText().trim() === '') {
     setComposerText(session.sessionId, text)
   }
 }
@@ -893,11 +903,12 @@ interface RetractButtonProps {
   readonly sessionId: string
   readonly sessionOf: (sessionId: string) => SessionFace | undefined
   readonly setComposerText: (sessionId: string, text: string) => boolean
+  readonly restoreImages?: (sessionId: string, images: readonly MessageImageRef[]) => Promise<void>
   readonly t: Translate
 }
 
 /** The per-pending-message ↶ button (same visual family as the durable button). */
-function RetractButton({ target, sessionId, sessionOf, setComposerText, t }: RetractButtonProps): ReactNode {
+function RetractButton({ target, sessionId, sessionOf, setComposerText, restoreImages, t }: RetractButtonProps): ReactNode {
   const onClick = (event: ReactMouseEvent<HTMLButtonElement>): void => {
     event.stopPropagation()
     const session = sessionOf(sessionId)
@@ -908,7 +919,7 @@ function RetractButton({ target, sessionId, sessionOf, setComposerText, t }: Ret
       anchor: event.currentTarget,
       t,
       retract: { itemId: target.itemId, text: target.text },
-      onRetract: () => { void retractPending(session, target.itemId, target.text, setComposerText) },
+      onRetract: () => { void retractPending(session, target.itemId, target.text, setComposerText, restoreImages) },
     })
   }
 
