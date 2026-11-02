@@ -4,17 +4,27 @@
  * Pending-retract probes (`retractPending` in `portals.tsx`): withdrawing an
  * unread steering message must NOT stop the run (SiriLee/dsh-rewind#27), must
  * remove the target and its steering future through `updateQueue`, and must
- * refill the composer only when the target was actually removed. The session
- * face is a hand fake; `session.cancel` is asserted to stay untouched.
+ * restore its own images and text only when the target was actually removed.
+ * The session face is a hand fake; `session.cancel` is asserted to stay
+ * untouched.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { retractPending } from '../src/client/portals.tsx'
 
+/** One inbox image reference (the fields the retract reads). */
+interface ImageRef {
+  readonly attachmentId: string
+  readonly mediaType: string
+  readonly bytes: number
+  readonly width: number
+  readonly height: number
+}
+
 /** The inbox projection row shape the retract reads (alpha.2). */
 interface Row {
   readonly id: string
-  readonly content: readonly { readonly type: string; readonly text?: string }[]
+  readonly content: readonly { readonly type: string; readonly text?: string; readonly attachment?: ImageRef }[]
   readonly source?: { readonly kind?: string } | undefined
 }
 
@@ -46,6 +56,17 @@ const steering = (ids: readonly string[]): Row[] =>
 /** One injected (non-user) next-step row, which the host called `context`. */
 const injected = (id: string): Row =>
   ({ id, source: { kind: 'plugin' }, content: [{ type: 'text', text: `injected ${id}` }] })
+
+/** One image reference in the shape the host admits into an inbox row. */
+const imageRef = (attachmentId: string): ImageRef =>
+  ({ attachmentId, mediaType: 'image/png', bytes: 10, width: 2, height: 3 })
+
+/** One user-sourced image-bearing steering row. */
+const imageRow = (id: string): Row => ({
+  id,
+  source: { kind: 'user' },
+  content: [{ type: 'image', attachment: imageRef(`${id}-image`) }],
+})
 
 afterEach(() => {
   document.body.innerHTML = ''
@@ -81,9 +102,11 @@ describe('retractPending (unread steering withdraw)', () => {
   it('does not refill when the target was already claimed (queue-item-not-found)', async () => {
     const { session, updateQueue } = fakeSession(steering(['a', 'b']))
     updateQueue.mockResolvedValueOnce({ ok: false, error: { code: 'session/queue-item-not-found' } })
+    const restoreImages = vi.fn(async () => {})
     const setComposerText = vi.fn(() => true)
-    await retractPending(session, 'a', 'text a', setComposerText)
+    await retractPending(session, 'a', 'text a', setComposerText, restoreImages)
     // A refill here would invite a duplicate send of an already-read message.
+    expect(restoreImages).not.toHaveBeenCalled()
     expect(setComposerText).not.toHaveBeenCalled()
     // The batch was claimed atomically: no futile follow-up removals.
     expect(updateQueue).toHaveBeenCalledTimes(1)
@@ -101,14 +124,44 @@ describe('retractPending (unread steering withdraw)', () => {
     expect(setComposerText).not.toHaveBeenCalled()
   })
 
-  it('honours the empty-composer guard', async () => {
+  it('keeps the empty-composer guard for text while restoring images', async () => {
     const editable = document.createElement('div')
     editable.setAttribute('data-composer-input', '')
     editable.textContent = 'draft in progress'
     document.body.appendChild(editable)
-    const { session } = fakeSession(steering(['a']))
+    const { session } = fakeSession([imageRow('a')])
+    const restoreImages = vi.fn(async () => {})
     const setComposerText = vi.fn(() => true)
-    await retractPending(session, 'a', 'text a', setComposerText)
+    await retractPending(session, 'a', 'text a', setComposerText, restoreImages)
+    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef('a-image')])
     expect(setComposerText).not.toHaveBeenCalled()
   })
+
+  it('restores the target images after a confirmed removal', async () => {
+    const { session } = fakeSession([imageRow('a')])
+    const restoreImages = vi.fn(async () => {})
+    const setComposerText = vi.fn(() => true)
+    await retractPending(session, 'a', 'text a', setComposerText, restoreImages)
+    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef('a-image')])
+    expect(setComposerText).toHaveBeenCalledWith('s1', 'text a')
+  })
+
+  it('keeps the text refill when the image restore fails', async () => {
+    const { session } = fakeSession([imageRow('a')])
+    const restoreImages = vi.fn(async () => { throw new Error('image store down') })
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
+    const setComposerText = vi.fn(() => true)
+    await expect(retractPending(session, 'a', 'text a', setComposerText, restoreImages)).resolves.toBeUndefined()
+    expect(setComposerText).toHaveBeenCalledWith('s1', 'text a')
+    expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores only the target images, not the retracted future', async () => {
+    const { session, updateQueue } = fakeSession([imageRow('a'), imageRow('b')])
+    const restoreImages = vi.fn(async () => {})
+    await retractPending(session, 'a', 'text a', vi.fn(), restoreImages)
+    expect(updateQueue.mock.calls.map(call => call[0])).toEqual(['a', 'b'])
+    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef('a-image')])
+  })
+
 })

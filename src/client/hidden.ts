@@ -146,6 +146,43 @@ export interface MessageImageRef {
   readonly name?: string
 }
 
+/** One wire content block that may carry a durable image reference. */
+export interface ImageBlockLike {
+  readonly type?: string
+  readonly attachment?: {
+    readonly attachmentId?: unknown
+    readonly mediaType?: unknown
+    readonly bytes?: unknown
+    readonly width?: unknown
+    readonly height?: unknown
+    readonly name?: unknown
+  }
+}
+
+/**
+ * Image references carried by a message's content blocks, in order.
+ * Malformed and non-image blocks are skipped; `file` blocks are not restorable.
+ * @param content - one message's content blocks.
+ * @returns the image references, in message order.
+ */
+export function imageRefsOf(content: readonly ImageBlockLike[] | undefined): readonly MessageImageRef[] {
+  const images: MessageImageRef[] = []
+  for (const block of content ?? []) {
+    if (block.type !== 'image') continue
+    const attachment = block.attachment
+    if (typeof attachment?.attachmentId !== 'string' || typeof attachment.mediaType !== 'string') continue
+    images.push({
+      attachmentId: attachment.attachmentId,
+      mediaType: attachment.mediaType,
+      bytes: typeof attachment.bytes === 'number' ? attachment.bytes : undefined,
+      width: typeof attachment.width === 'number' ? attachment.width : undefined,
+      height: typeof attachment.height === 'number' ? attachment.height : undefined,
+      name: typeof attachment.name === 'string' ? attachment.name : undefined,
+    })
+  }
+  return images
+}
+
 /**
  * The durable image references of the human message at `seq` in the chat
  * snapshot, in message order. The composer-refill counterpart of
@@ -167,34 +204,10 @@ export function messageAttachmentsAt(chat: HiddenChat | undefined, seq: number):
     if (node.kind !== 'user' && node.kind !== 'steering') continue
     const data = node.data as {
       seq?: number
-      content?: readonly {
-        type?: string
-        attachment?: {
-          attachmentId?: unknown
-          mediaType?: unknown
-          bytes?: unknown
-          width?: unknown
-          height?: unknown
-          name?: unknown
-        }
-      }[]
+      content?: readonly ImageBlockLike[]
     }
     if (data.seq !== seq) continue
-    const images: MessageImageRef[] = []
-    for (const block of data.content ?? []) {
-      if (block.type !== 'image') continue
-      const attachment = block.attachment
-      if (typeof attachment?.attachmentId !== 'string' || typeof attachment.mediaType !== 'string') continue
-      images.push({
-        attachmentId: attachment.attachmentId,
-        mediaType: attachment.mediaType,
-        bytes: typeof attachment.bytes === 'number' ? attachment.bytes : undefined,
-        width: typeof attachment.width === 'number' ? attachment.width : undefined,
-        height: typeof attachment.height === 'number' ? attachment.height : undefined,
-        name: typeof attachment.name === 'string' ? attachment.name : undefined,
-      })
-    }
-    return images
+    return imageRefsOf(data.content)
   }
   return undefined
 }
