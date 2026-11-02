@@ -64,7 +64,7 @@ dsh plugin --profile <name> add dsh-rewind-plugin@<version>
 
 - **The withdrawn content is preserved** — it stays in the session log and can be inspected in the **Trajectory** panel; you can also disable the plugin to show it again (display only).
 - **A rewind cannot be undone in place** — to carry the content forward, first disable the plugin so the withdrawn content shows again, then click **Branch into a new conversation** on the message just before the rewind; the new conversation's context will include it.
-- **Interruptions rewind too** — a `steering` message the model hasn't read yet is also a valid rewind target, and withdrawing it does not interrupt the current run; its own images return to the composer.
+- **Interruptions rewind too** — a `steering` message the model hasn't read yet is also a valid rewind target, and withdrawing it does not interrupt the current run.
 - **Rewinding a read message interrupts the running turn** — to ensure the rewind runs safely.
 
 </details>
