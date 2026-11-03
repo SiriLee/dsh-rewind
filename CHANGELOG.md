@@ -14,7 +14,33 @@ and the release steps are documented in
 
 > DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.3...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.4...vNEXT
+
+## [0.20.0-alpha.4] - 2026-11-03
+
+> 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`（内测版）
+
+### 问题修复
+
+- **在 DSH `0.2.2-alpha.3` 上，回退的影响预览与候选列表恢复正常。** 该版本的通用 Connection RPC 通道无法从插件作用域挂载路由，两个只读查询会落到 SPA 回退并返回 405；本版改用 `/api/dsh-rewind/preview` 与 `/api/dsh-rewind/candidates` 两个精确路由，读取不再依赖该通道。(#74) @slev-agent @SiriLee
+
+### 其他变更
+
+- **验证目标移到 DSH `0.2.2-alpha.3`。** 它落在已声明的范围内，因此兼容声明不变。 @SiriLee
+
+---
+
+> DSH `>=0.2.2-alpha.2 <0.3.0-0` supported. Internal alpha.
+
+### Bug Fixes
+
+- **On DSH `0.2.2-alpha.3`, the rewind impact preview and candidate list work again.** That release's generic Connection RPC channel cannot mount its route from a plugin scope, so the two read-only queries fell through to the SPA fallback with HTTP 405; this release uses two exact routes, `/api/dsh-rewind/preview` and `/api/dsh-rewind/candidates`, and the reads no longer depend on that channel. (#74) @slev-agent @SiriLee
+
+### Chores
+
+- **The verification target moves to DSH `0.2.2-alpha.3`.** It sits inside the declared range, so the compatibility declaration is unchanged. @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.3...v0.20.0-alpha.4
 
 ## [0.20.0-alpha.3] - 2026-11-03
 

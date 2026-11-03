@@ -1,6 +1,6 @@
 {
   "name": "dsh-rewind-plugin",
-  "version": "0.20.0-alpha.3",
+  "version": "0.20.0-alpha.4",
   "description": "In-window conversation rewind with workspace file restore",
   "icon": "./assets/icon.svg",
   "keywords": [
