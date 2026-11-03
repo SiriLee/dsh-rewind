@@ -11,7 +11,7 @@
 > is not restated (the probes pin it; [Deliberate semantics](#deliberate-semantics-no-entry-kept)
 > names it). Upstream references use symbols and file names, never line numbers — they rot.
 >
-> Targeted version: npm `@deepseek-ai/*@0.2.2-alpha.2` (the last verified release).
+> Targeted version: npm `@deepseek-ai/*@0.2.2-alpha.3` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 > Version alignment: see `docs/release/release.md`.
 
@@ -44,7 +44,7 @@ adapted line: a runtime outside it is refused at load rather than admitted into 
 | I3 step/turn structure | Client turn-tail ordering, unique `step/start` (real turns), no ghost turns; the `user/message` rewind marker adds no step frame | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
 | I4 fold-service safety | stats / title / goal / projection fold a marker-bearing log without throwing, with predictable values | `compat-invariants` I4, `compat-gaps` G4 |
 | I5 compact interop | A tool call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is refused; rewind-then-compact stays legal | `compat-interop` I5, `verify-host` 12/14 |
-| I6 tool pipeline | before-snapshot capture/commit/restore is correct for `write` / `edit`, and cancellation timing never hangs. (`str_replace_editor` is an optional DSH package that stopped being a default tool in DSH 0.1.3, so it is not tracked) | `verify-host` 4–9 |
+| I6 tool pipeline | before-snapshot capture/commit/restore is correct for `write` / `edit`, and cancellation timing never hangs. (`str_replace_editor` and `apply_patch` are optional and off in every shipped composition, so neither is tracked; enabling either leaves its edits outside restore coverage) | `verify-host` 4–9 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
 | I8 runtime safety | `rewind` / `compact` combinations never leave a dangling step/turn frame | `verify-host` 13 |
 | I9 tool-update projection | `Session.toolHistory()` folds the whole log, so a withdrawn `tool-addition` stays recorded; after a withdrawal no `tool-addition` / `tool-removal` block reaches the provider and the current declarations stay complete | `compat-tool-updates` I9 |
@@ -96,11 +96,11 @@ period; no plugin-side index. **Ask:** an in-process paged read, or document the
 ### U5 — no supported file write-back primitive
 
 A restore writes through plain `node:fs` (it must reach paths the fs service would refuse as
-stale/absent), which the host's observation/version layer cannot see, so the next write of the
-same file is judged stale (`FS_STALE_VERSION`); the plugin re-emits `fs/observed` to
-compensate. **Ask:** a supported write-and-sync primitive. **Stance:** keep the compensation,
-best-effort and per-file — it heals only what a restore itself broke, and `fs/observed`
-semantics remain the risk to watch.
+stale/absent), which the host's observation/version layer cannot see. `dsh-base` now ships
+`fs-observation-policy` disabled, so only a profile that re-enables it judges the next write
+stale (`FS_STALE_VERSION`); the plugin re-emits `fs/observed` to compensate. **Ask:** a
+supported write-and-sync primitive. **Stance:** keep the compensation, best-effort and
+per-file — it heals only what a restore itself broke.
 
 ### U6 — the attachment bytes behind a withdrawn message (open question)
 
@@ -168,6 +168,8 @@ back manually.
 - **Real Connection route registration**: `verify-host` uses a fake `connection` and calls the
   RPC handler directly, so the real `webServer` registration path is verified manually on a
   live Web host, not in CI.
+- **Policy-enabled restore sync**: the compensation is checked by its `fs/observed` emissions,
+  not by a following write under the re-enabled policy.
 
 ## Deliberate semantics (no entry kept)
 

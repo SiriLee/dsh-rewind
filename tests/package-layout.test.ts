@@ -163,16 +163,23 @@ describe('package layout', () => {
     expect(parsed?.[2]).toBe(ceiling)
   })
 
-  it('verifies the cordis family at the version its peer floor names', () => {
-    // The host bundles these itself, so they bind like a dsh package does: one
-    // version on both sides, and the suite runs against exactly that version
-    // instead of a nearby older copy.
-    const peers: Record<string, string> = pkg.peerDependencies ?? {}
-    const devs: Record<string, string> = pkg.devDependencies ?? {}
+  it('installs the cordis family inside the peer range', () => {
+    // release.md: a peer names the adapted range while devDependencies track the
+    // latest verified release, so the suite must prove a version the peer admits
+    // — never a different caret line, never below the named floor.
+    const numeric = (version: string): number[] =>
+      version.replace(/^\^/u, '').split('-')[0]!.split('.').map(Number)
     for (const name of ['@deepseek-ai/cordis', '@deepseek-ai/schemastery']) {
-      const peer = peers[name]
-      expect(peer, `${name} must declare a peer floor`).toMatch(/^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u)
-      expect(devs[name], `${name} must be installed at that floor`).toBe(peer?.slice(1))
+      const peer = pkg.peerDependencies?.[name]
+      const dev = pkg.devDependencies?.[name]
+      expect(peer, `${name} must declare a peer range`).toMatch(/^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u)
+      expect(dev, `${name} must pin one version`).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u)
+      const [peerMajor, peerMinor, peerPatch] = numeric(peer!) as [number, number, number]
+      const [devMajor, devMinor, devPatch] = numeric(dev!) as [number, number, number]
+      const sameLine = peerMajor === 0 ? devMajor === 0 && devMinor === peerMinor : devMajor === peerMajor
+      expect(sameLine, `${name} dev must stay on the peer's caret line`).toBe(true)
+      const behind = devMajor - peerMajor || devMinor - peerMinor || devPatch - peerPatch
+      expect(behind, `${name} dev must not precede the peer floor`).toBeGreaterThanOrEqual(0)
     }
   })
 })
