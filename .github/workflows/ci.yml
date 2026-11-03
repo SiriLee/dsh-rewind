@@ -38,3 +38,17 @@ jobs:
         run: |
           npx vitest run --reporter=json --outputFile=.tmp/vitest-results.json || true
           node scripts/update-badge.mjs .tmp/vitest-results.json
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run check
