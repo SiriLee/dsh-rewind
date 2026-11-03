@@ -46,7 +46,7 @@ describe('previewOverApi', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]!
-    expect(url).toBe('api/dsh-rewind/preview')
+    expect(url).toBe('./api/dsh-rewind/preview')
     expect(init).toMatchObject({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -72,7 +72,7 @@ describe('previewOverApi', () => {
 
     await expect(previewOverApi('s1', 7)).resolves.toEqual({
       kind: 'error',
-      text: 'transport failure for /api/dsh-rewind/preview: HTTP 405',
+      text: 'transport failure for preview: HTTP 405',
     })
   })
 
@@ -96,7 +96,7 @@ describe('previewOverApi', () => {
 
     await expect(previewOverApi('s1', 7)).resolves.toEqual({
       kind: 'error',
-      text: 'invalid response for /api/dsh-rewind/preview',
+      text: 'invalid response for preview',
     })
   })
 })
@@ -109,7 +109,7 @@ describe('candidatesOverApi', () => {
     await expect(candidatesOverApi('s1')).resolves.toEqual(candidates)
 
     const [url, init] = fetchMock.mock.calls[0]!
-    expect(url).toBe('api/dsh-rewind/candidates')
+    expect(url).toBe('./api/dsh-rewind/candidates')
     expect(init).toMatchObject({
       method: 'POST',
       body: JSON.stringify({ sessionId: 's1' }),

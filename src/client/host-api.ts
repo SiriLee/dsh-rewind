@@ -8,10 +8,10 @@
 import type { RewindCandidate } from './candidates.ts'
 import { rewindLog } from './log.ts'
 
-/** Absolute route paths; requests use their document-relative form. */
-const PREVIEW_PATH = '/api/dsh-rewind/preview'
-const CANDIDATES_PATH = '/api/dsh-rewind/candidates'
 const TIMEOUT_MS = 8000
+
+/** The query a transport failure belongs to. */
+type QueryRoute = 'preview' | 'candidates'
 
 /** One file affected by a rewind. */
 export interface PreviewFileImpact {
@@ -64,27 +64,31 @@ function isAbort(error: unknown): boolean {
   return name === 'AbortError' || name === 'TimeoutError'
 }
 
-/**
- * POST one flat payload to its route. The request stays document-relative so a
- * `--public-url` prefix proxy keeps working.
- */
-async function postQuery(path: string, payload: unknown, signal: AbortSignal): Promise<QueryResult> {
-  const response = await fetch(path.slice(1), {
+// Each endpoint owns its document-relative route literal at the fetch call;
+// these helpers only build the request and decode the response.
+/** Build one JSON POST request for a query payload. */
+function init(payload: unknown, signal: AbortSignal): RequestInit {
+  return {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
     signal,
-  })
-  if (!response.ok) throw new Error(`transport failure for ${path}: HTTP ${response.status}`)
+  }
+}
+
+/** Decode one query envelope; `route` labels a transport failure. */
+async function settleQuery(response: Response, route: QueryRoute): Promise<QueryResult> {
+  if (!response.ok) throw new Error(`transport failure for ${route}: HTTP ${response.status}`)
   const result: unknown = await response.json()
-  if (!isResult(result)) throw new Error(`invalid response for ${path}`)
+  if (!isResult(result)) throw new Error(`invalid response for ${route}`)
   return result
 }
 
 /** Resolve one target's file impact through the host query route. */
 export async function previewOverApi(sessionId: string, seq: number): Promise<PreviewOutcome> {
   try {
-    const result = await postQuery(PREVIEW_PATH, { sessionId, seq }, AbortSignal.timeout(TIMEOUT_MS))
+    const response = await fetch('./api/dsh-rewind/preview', init({ sessionId, seq }, AbortSignal.timeout(TIMEOUT_MS)))
+    const result = await settleQuery(response, 'preview')
     if (!result.ok) {
       rewindLog.warn('preview', `preview request failed for @${seq}`, result.error)
       return { kind: 'error', text: result.error.message }
@@ -109,7 +113,8 @@ export async function previewOverApi(sessionId: string, seq: number): Promise<Pr
 /** Fetch the full rewind candidate list through the host query route. */
 export async function candidatesOverApi(sessionId: string): Promise<readonly RewindCandidate[] | undefined> {
   try {
-    const result = await postQuery(CANDIDATES_PATH, { sessionId }, AbortSignal.timeout(TIMEOUT_MS))
+    const response = await fetch('./api/dsh-rewind/candidates', init({ sessionId }, AbortSignal.timeout(TIMEOUT_MS)))
+    const result = await settleQuery(response, 'candidates')
     if (!result.ok) {
       rewindLog.warn('preview', 'candidate request failed', result.error)
       return undefined
