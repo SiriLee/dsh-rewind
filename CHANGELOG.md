@@ -10,9 +10,17 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`
 
+### 问题修复
+
+- **Windows 上回退中断后不再丢失恢复记录。** 快照引用统一为正斜杠分隔，恢复日志、去重链接和清理时的引用校验不再因反斜杠失败。 (#70) @slev-agent @SiriLee
+
 ---
 
 > DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **An interrupted rewind no longer loses its recovery record on Windows.** Snapshot refs are written POSIX-separated, so journal, dedup-link and prune ref checks no longer fail on backslashes. (#70) @slev-agent @SiriLee
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.2...vNEXT
 

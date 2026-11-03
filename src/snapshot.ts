@@ -588,11 +588,20 @@ function refToSource(raw: unknown, sessionDir: string): ByteSource | null | unde
   return undefined
 }
 
+/**
+ * Format a store-relative filesystem path as a serialized ref. Refs are always
+ * POSIX-separated (`13/call.before`) even on Windows, where `relative()`
+ * returns backslashes; the journal and link validators only accept `/`.
+ */
+function sessionRelativeRef(sessionDir: string, file: string): string {
+  return relative(sessionDir, file).split(sep).join('/')
+}
+
 /** Serialize one byte source as a session-relative journal reference. */
 function sourceToRef(source: ByteSource | null, sessionDir: string, entryPath: string): unknown {
   if (source === null) return null
   if (source.kind === 'blob') {
-    const blob = relative(sessionDir, source.path)
+    const blob = sessionRelativeRef(sessionDir, source.path)
     if (!isSafeBackupRef(blob)) throw new Error(`unsafe backup ref ${blob} for ${entryPath}`)
     return { blob }
   }
@@ -1147,7 +1156,7 @@ export class SnapshotStore {
    * the call id would produce a dangling reference.
    */
   private refOfRead(sessionId: string, entry: StoredEntry): string {
-    if (entry.file !== undefined) return relative(this.sessionDir(sessionId), entry.file)
+    if (entry.file !== undefined) return sessionRelativeRef(this.sessionDir(sessionId), entry.file)
     return this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
   }
 
@@ -2453,7 +2462,7 @@ export class SnapshotStore {
       for (const action of journal.actions) {
         const source = action.before
         if (source === null || source.kind !== 'blob') continue
-        const ref = relative(sessionDir, source.path)
+        const ref = sessionRelativeRef(sessionDir, source.path)
         // A byte reference (`<seq>/<base>.before`), not a link ref (`*.json`).
         if (!isSafeBackupRef(ref)) continue
         const anchor = refAnchorOf(ref)
