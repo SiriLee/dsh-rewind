@@ -16,7 +16,7 @@
  *
  * The client half (`src/client/locales.ts`) owns all interactive UI copy via
  * `ctx.locale` + `t()`; the client never parses host prose (the popover reads
- * travel over the RPC channel).
+ * travel over the host `/api` query routes).
  *
  * DSH localizes only its OWN command descriptions via the client locale — a
  * closed `HOST_FACES` allowlist; third-party plugin descriptions are

@@ -226,7 +226,7 @@ export function isLinkEntry(entry: StoredEntry): entry is LinkEntry {
   return 'ref' in entry
 }
 
-/** Per-file restore impact preview (served by the host RPC channel). */
+/** Per-file restore impact preview (served by the host preview route). */
 export interface FileImpact {
   readonly path: string
   /** `restore` = write the before content back; `delete` = remove the file. */

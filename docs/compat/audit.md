@@ -135,12 +135,14 @@ plugin loads. **Stance:** keep the floor; never treat the range as enforcement.
 
 ### U10 — generic RPC route registration fails from a plugin scope
 
-`connection.rpc.handle` registers its route inside
-`owner.effect(() => owner.webServer.register(route))`; a plugin-scoped `owner` loses the
-`webServer` inject inside that effect (`cannot get property "webServer" without inject`).
-**Ask:** capture `webServer` outside the effect so RPC/Fetch registration works from a normal
-plugin scope. **Stance:** register from the root context and dispose with the plugin; remove
-the shim when upstream fixes it.
+`connection.rpc.handle` registers its route through
+`owner.effect(() => owner.webServer.register(route))`, where `owner` is the Connection
+service's own context; that context injects only `credentials`, so the read throws
+`cannot get property "webServer" without inject`. Cordis 4.0.6-alpha.2 resolves the read
+against that owner, so registering from the root context no longer avoids it. **Ask:** capture
+the web server outside the effect (or keep the channel registry carrier-neutral). **Stance:**
+no compensation: the two read-only queries use exact `/api` Fetch routes and never read
+`owner.webServer`.
 
 ### U11 — history pagination ignores rewind-hidden rows
 
@@ -165,9 +167,10 @@ back manually.
 - **Real LLM streaming / auto title (L2 stubbed)**, and
   **`session-reference`'s `SessionReferenceResolver.prepare`** (needs a full session-query
   service; its data base is already covered by the G1 probe).
-- **Real Connection route registration**: `verify-host` uses a fake `connection` and calls the
-  RPC handler directly, so the real `webServer` registration path is verified manually on a
-  live Web host, not in CI.
+- **Real HTTP carrier and browser authentication**: `verify-host` mounts the real
+  `HostConnectionService` and drives the exact `/api` routes through its shared Fetch handler;
+  the HTTP bridge, browser cookie authentication and the served page are verified manually on
+  a live Web host, not in CI.
 - **Policy-enabled restore sync**: the compensation is checked by its `fs/observed` emissions,
   not by a following write under the re-enabled policy.
 

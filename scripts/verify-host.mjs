@@ -17,7 +17,9 @@
  *     under the turn's anchor seq;
  *  5. a denied call never commits (no phantom entry in the store);
  *  6. relative file paths resolve against the session cwd;
- *  7. the `preview` RPC endpoint reports the checkpoint impact;
+ *  7. the `/api/dsh-rewind/preview` route reports the checkpoint impact;
+ *  7b. bad requests use the `/api` bridge's 415/400 statuses; business
+ *      failures stay in the HTTP 200 result envelope;
  *  8. `/rewind @<seq> both` restores the real file to its pre-edit content
  *     and deletes files created after the target;
  *  9. a running agent is force-stopped before the rewind (not refused);
@@ -40,6 +42,7 @@
  *     (never deleted, never clobbered by an older smaller version).
  */
 import { Context } from '@deepseek-ai/cordis'
+import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -189,7 +192,7 @@ function makeInbox(initial = []) {
   }
 }
 
-/** Agents by session id: the RPC handler resolves the live session through this. */
+/** Agents by session id: the query handler resolves the live session through this. */
 const agentRegistry = new Map()
 
 /** Minimal Agent double carrying the fields executeRewind reads today. */
@@ -262,18 +265,29 @@ ctx.provide('commands', {
 })
 ctx.provide('fs', fs)
 ctx.provide('workingDirectory', fakeWorkingDirectory)
-// Live-agent lookup and the generic RPC registration seat the plugin uses for
-// its windowed queries.
-const rpcHandlers = new Map()
 ctx.provide('agents', { get: id => agentRegistry.get(id) })
-ctx.provide('connection', {
-  rpc: {
-    handle: (channel, handler) => {
-      rpcHandlers.set(channel, handler)
-      return async () => { rpcHandlers.delete(channel) }
-    },
-  },
+// The real Connection service with `webServer` on a sibling row, like the
+// shipped Web composition; the exact Fetch registry registers through it.
+const webServerFiber = ctx.plugin(inner => {
+  inner.provide('webServer', {
+    host: '127.0.0.1',
+    protocol: 'http:',
+    register: () => async () => {},
+  })
 })
+await webServerFiber
+const browserAuth = {
+  isAuthenticated: () => true,
+  authenticateApi: () => undefined,
+  authorizeConnect: () => {},
+  authorizeIndex: () => {},
+  authenticatedUrl: url => url,
+}
+let connection
+const connectionFiber = ctx.plugin(inner => {
+  connection = new HostConnectionService(inner, [], browserAuth)
+})
+await connectionFiber
 // The entry-write port the plugin's cleanup store addresses; the policy itself
 // resolves through the config the plugin is mounted with.
 ctx.provide('settings', fakeSettings)
@@ -296,20 +310,34 @@ applyCommandCompact(ctx)
 
 const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: CommandId('cid'), agent: agentOf, rawInput, signal: aborted() })
 
-/** Drive one rewind RPC endpoint the way the browser client does. */
-const rpc = (agentOf, endpoint, payload) => {
-  const handler = rpcHandlers.get('/dsh-rewind')
-  if (handler === undefined) throw new Error('rewind RPC channel is not registered')
-  return handler(endpoint, payload, aborted(), {})
+/** The shared Fetch handler the real `/api` bridge dispatches through. */
+const api = connection.createSharedFetchHandler('/api')
+const ownerPeer = { principal: { kind: 'owner' } }
+
+/** Send one request the way the browser half does (document-relative POST). */
+const apiRequest = (path, init) => api.fetch(new Request(`http://localhost${path}`, init), ownerPeer)
+
+/** POST one flat query payload and decode its JSON envelope. */
+const apiPost = async (path, payload) => {
+  const response = await apiRequest(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return { status: response.status, result: await response.json() }
 }
 
 /** The structured impact preview; `error` carries the host reason. */
 const previewOf = async (agentOf, seq) => {
-  const result = await rpc(agentOf, 'preview', { sessionId: agentOf.id, seq })
+  const { status, result } = await apiPost('/api/dsh-rewind/preview', { sessionId: agentOf.id, seq })
+  if (status !== 200) throw new Error(`preview route returned HTTP ${status}`)
   return result.ok
     ? { kind: 'success', value: result.value }
     : { kind: 'error', text: result.error.message }
 }
+
+/** The full candidate list envelope the picker reads. */
+const candidatesOf = async agentOf => apiPost('/api/dsh-rewind/candidates', { sessionId: agentOf.id })
 
 /** Files in a successful preview (empty for an error). */
 const filesOf = preview => preview.kind === 'success' ? preview.value.files : []
@@ -412,13 +440,59 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
   await runWrite(agent, 'c2', createdPath, 'new') // file did not exist: before-capture = created
   await writeFile(aPath, 'v3', 'utf8') // later edit lands after the backups
 
+  const logLengthBeforeReads = session.snapshotEvents().length
   const preview = await previewOf(agent, anchorSeq)
   check('preview reports the file impact', preview.kind === 'success' && hasFile(preview, aPath) && filesOf(preview).length === 2, JSON.stringify(preview))
   check('preview carries the restore/delete actions', hasFile(preview, aPath, 'restore'), JSON.stringify(preview))
-  const candidates = await rpc(agent, 'candidates', { sessionId: agent.id })
-  check('candidates RPC lists reachable user messages',
-    candidates.ok === true && candidates.value.candidates.some(candidate => candidate.seq === anchorSeq),
+  const candidates = await candidatesOf(agent)
+  check('the candidate route lists reachable user messages',
+    candidates.status === 200 && candidates.result.ok === true
+      && candidates.result.value.candidates.some(candidate => candidate.seq === anchorSeq),
     JSON.stringify(candidates))
+
+  // Bad requests use the bridge statuses; business failures keep the envelope.
+  const noSession = await apiPost('/api/dsh-rewind/preview', {})
+  check('a missing sessionId stays in the bad-request envelope',
+    noSession.status === 200 && noSession.result.ok === false
+      && noSession.result.error.code === 'rewind/bad-request'
+      && noSession.result.error.message === 'sessionId must be a non-empty string',
+    JSON.stringify(noSession))
+  const noSeq = await apiPost('/api/dsh-rewind/preview', { sessionId: agent.id })
+  check('a missing seq stays in the bad-request envelope',
+    noSeq.status === 200 && noSeq.result.ok === false
+      && noSeq.result.error.message === 'seq must be an integer',
+    JSON.stringify(noSeq))
+  const wrongType = await apiRequest('/api/dsh-rewind/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain' },
+    body: '{}',
+  })
+  check('a non-JSON content type answers 415',
+    wrongType.status === 415 && await wrongType.text() === 'content type must be application/json',
+    `HTTP ${wrongType.status}`)
+  const badJson = await apiRequest('/api/dsh-rewind/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{',
+  })
+  check('a non-JSON body answers 400',
+    badJson.status === 400 && await badJson.text() === 'body is not JSON',
+    `HTTP ${badJson.status}`)
+  const nonPost = await apiRequest('/api/dsh-rewind/preview', { method: 'GET' })
+  check('an undeclared method falls through to 404', nonPost.status === 404, `HTTP ${nonPost.status}`)
+  const stranger = await api.fetch(new Request('http://localhost/api/dsh-rewind/preview', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  }), { principal: { kind: 'user' } })
+  check('a non-owner peer is forbidden', stranger.status === 403, `HTTP ${stranger.status}`)
+
+  // Issue #55: both reads are pure queries.
+  const readEvents = session.snapshotEvents().slice(logLengthBeforeReads)
+  check('the query routes append no session events', readEvents.length === 0, `events=${readEvents.length}`)
+  check('the query routes emit no command events',
+    readEvents.every(event => !event.type.startsWith('command/')),
+    JSON.stringify(readEvents.map(event => event.type)))
 
   // The both-mode restore must re-sync the harness fs-observation policy:
   // record every fs/observed emission around the restore, then assert the
