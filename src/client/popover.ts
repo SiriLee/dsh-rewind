@@ -2,7 +2,7 @@
  * The rewind mode-selection popover (plain DOM, no React). Step two of the
  * interaction: the target is already fixed (the clicked message); the popover
  * offers the two modes. Choosing "both" fetches the impact list over the host
- * RPC channel and shows it before confirming.
+ * `/api` preview route and shows it before confirming.
  *
  * Keyboard: ↑/↓ move focus across the step's ACTION buttons only (the two
  * modes, or the confirm button on the impact step), Enter activates the
@@ -17,7 +17,7 @@
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { chatNodesOf, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
-import type { PreviewCall, PreviewOutcome } from './host-rpc.ts'
+import type { PreviewCall, PreviewOutcome } from './host-api.ts'
 import type { RewindKey } from './locales.ts'
 import { CLASS } from './styles.ts'
 
@@ -172,17 +172,21 @@ export function waitForCommand(
   })
 }
 
-/** The registered host call; tests and the client plugin set it once. */
-let previewCall: PreviewCall | null = null
+/** The preview transport before registration and after unload. */
+const UNAVAILABLE: PreviewCall = () =>
+  Promise.resolve({ kind: 'error', text: 'host query is unavailable' })
 
-/** Register the host RPC preview call (null clears it on unload). */
+/** The registered host call; the unavailable default until apply registers one. */
+let previewCall: PreviewCall = UNAVAILABLE
+
+/** Register the host preview call; null restores the unavailable default. */
 export function registerPreviewCall(call: PreviewCall | null): void {
-  previewCall = call
+  previewCall = call ?? UNAVAILABLE
 }
 
-/** Resolve one target's impact through the host RPC channel. */
+/** Resolve one target's impact through the host preview route. */
 function previewImpact(sessionId: string, seq: number): Promise<PreviewOutcome> {
-  return previewCall?.(sessionId, seq) ?? Promise.resolve({ kind: 'error', text: 'host RPC is unavailable' })
+  return previewCall(sessionId, seq)
 }
 
 /** Element factory helpers (kept local so no framework is involved). */

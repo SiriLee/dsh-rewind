@@ -3,7 +3,7 @@
  *
  * Modes-step probes for `openPopover` (SiriLee/dsh-rewind#26). The background
  * impact probe resolves the "rewind conversation and files" entry: it must
- * ALWAYS settle the step. A failed RPC call has to surface the reason — never
+ * ALWAYS settle the step. A failed host preview has to surface the reason — never
  * leave the step showing "checking file changes…" forever with a permanently
  * disabled entry, which is the invisible failure the issue reported.
  *
@@ -13,7 +13,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { PreviewOutcome } from '../src/client/host-rpc.ts'
+import type { PreviewOutcome } from '../src/client/host-api.ts'
 import { closePopover, openPopover, registerComposerFocuser, registerPreviewCall, type PopoverOptions } from '../src/client/popover.ts'
 import { CLASS } from '../src/client/styles.ts'
 
@@ -30,9 +30,9 @@ function fakeSession(): SessionFace {
 const t = ((key: string, params?: Record<string, unknown>) =>
   params === undefined ? key : `${key}:${String(params['path'] ?? params['message'])}`) as unknown as PopoverOptions['t']
 
-/** Open the durable popover with `preview` as its host RPC answer. */
-function open(preview: () => Promise<PreviewOutcome> = async () => ({ kind: 'success', files: [], backupOff: false })): void {
-  registerPreviewCall(() => preview())
+/** Open the durable popover; `preview`, when given, answers the host query. */
+function open(preview?: () => Promise<PreviewOutcome>): void {
+  if (preview !== undefined) registerPreviewCall(() => preview())
   openPopover({
     session: fakeSession(),
     seq: 5,
@@ -64,7 +64,7 @@ afterEach(() => {
 })
 
 describe('openPopover (a failed impact probe settles the modes step)', () => {
-  it('shows the host reason when the RPC preview fails', async () => {
+  it('shows the host reason when the preview request fails', async () => {
     open(async () => ({ kind: 'error', text: 'owned by subagent routing' }))
     await settle()
     expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
@@ -76,6 +76,14 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
   it('keeps the pending entry disabled while the probe is still in flight', () => {
     open(() => new Promise(() => {}))
     expect(optionHints()).toContain('popover.checking')
+  })
+
+  it('settles with the unavailable default when no preview call is registered', async () => {
+    open()
+    await settle()
+    expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
+      .toContain('host query is unavailable')
+    expect(optionHints()).not.toContain('popover.checking')
   })
 })
 

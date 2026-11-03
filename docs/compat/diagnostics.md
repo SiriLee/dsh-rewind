@@ -33,7 +33,7 @@ console filter:
 | --- | --- |
 | `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
 | `refill` | The composer refill after a rewind (command/wait/refill throws, a rejected or unmatched command, an outcome that never settles) |
-| `preview` | The preview / candidate RPC queries behind the mode popover and the `/rewind` picker (RPC failure, invalid result, or timeout) |
+| `preview` | The preview / candidate host queries behind the mode popover and the `/rewind` picker (request failure, invalid result, or timeout) |
 | `portals` | Per-message button mount issues (e.g. no session binding) |
 | `retract` | The pending-steering retract path (the remove lost the race, or the remove threw) |
 | `settings` | The snapshot-cleanup settings card |

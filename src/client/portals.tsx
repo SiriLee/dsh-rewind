@@ -293,7 +293,7 @@ export async function runRewindAndFill(
     return
   }
   // The executed rewind lands as a CommandNode with a marker-carrying
-  // success outcome; wait for exactly that (longer than the preview RPC
+  // success outcome; wait for exactly that (longer than the preview route
   // timeout: a running turn is cancelled first, which can take seconds).
   let outcome: Awaited<ReturnType<typeof waitForCommand>>
   try {

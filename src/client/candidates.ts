@@ -108,7 +108,8 @@ export function rewindCandidatesOfChat(snap: CandidateChat): RewindCandidate[] {
 
 /**
  * Map typed candidates to popupSelect rows. The list comes from the host over
- * RPC, so it covers the FULL host surface rather than the windowed chat snapshot.
+ * the host query route, so it covers the FULL host surface rather than the
+ * windowed chat snapshot.
  */
 export function rewindOptionsFromCandidates(candidates: readonly RewindCandidate[], t: Translate): SelectOption[] {
   return candidates.map(candidate => ({

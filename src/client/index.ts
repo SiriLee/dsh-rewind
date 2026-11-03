@@ -9,7 +9,7 @@
  * The command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or
  * its alias `/undo`) open the harness's own popupSelect instead of executing;
  * the parameterized `@<seq>` form stays the execution channel, while the
- * popover's impact and candidate reads go over the host RPC channel.
+ * popover's impact and candidate reads go over the host's exact `/api` routes.
  *
  * @module dsh-rewind/client
  */
@@ -37,7 +37,7 @@ import { closePopover, openPopover, registerPreviewCall, registerComposerFocuser
 import { installChatViewVisibility } from './visibility.ts'
 import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
-import { candidatesOverRpc, previewOverRpc, type ConnectionLike } from './host-rpc.ts'
+import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
 import { CLIENT_DICTS } from './locales.ts'
@@ -60,10 +60,7 @@ export const name = 'dsh-rewind'
 // it, but the configuration card is addressed through it, and the web profile
 // always composes `ui-settings` (the same dependency the official settings
 // pages declare).
-//
-// `connection` carries the read-only host queries (impact preview and the
-// candidate list); both must not travel over the command channel.
-export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms', 'connection']
+export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms']
 
 const NS = 'rewind'
 
@@ -141,8 +138,7 @@ export function apply(ctx: ClientContext): void {
     yield ctx.locale.register(NS, CLIENT_DICTS)
     const t = ctx.locale.bind(NS)
 
-    const connection = ctx.get('connection') as ConnectionLike | undefined
-    registerPreviewCall((sessionId, seq) => previewOverRpc(connection, sessionId, seq))
+    registerPreviewCall(previewOverApi)
     yield () => { registerPreviewCall(null) }
 
     const style = document.createElement('style')
@@ -403,13 +399,11 @@ export function apply(ctx: ClientContext): void {
     }
 
     /**
-     * Fetch the FULL candidate list over RPC. The host derives it from its
-     * complete surface + event log, so it lists every reachable rewind target —
-     * not just the already-loaded history window. Returns undefined when the
-     * query fails.
+     * Fetch the FULL candidate list over the host query route, covering the host
+     * surface rather than the loaded window. Undefined when the query fails.
      */
     const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[] | undefined> =>
-      candidatesOverRpc(connection, face.sessionId)
+      candidatesOverApi(face.sessionId)
 
     // Cache the last-fetched candidate list per session: `options` fills it,
     // `onSelect` reads it to resolve the picked seq's time/preview without a

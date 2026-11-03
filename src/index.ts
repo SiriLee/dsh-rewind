@@ -65,8 +65,9 @@ export const inject = ['commands', 'tools', 'settings']
  */
 export const ENGINE_COMMAND = 'rewind-plugin'
 
-/** The browser RPC channel that replaces the old preview/candidates commands. */
-const REWIND_RPC_CHANNEL = '/dsh-rewind'
+/** Exact POST routes for the preview/candidates queries, below Connection's `/api` channel. */
+const REWIND_PREVIEW_PATH = '/api/dsh-rewind/preview'
+const REWIND_CANDIDATES_PATH = '/api/dsh-rewind/candidates'
 
 /** Plugin config. */
 export interface RewindConfig {
@@ -499,7 +500,7 @@ function resolveOrError(events: readonly SessionEvent[], surface: readonly numbe
   return planRewind(events, surface, target)
 }
 
-/** The file impact of a rewind target, served over the RPC channel. */
+/** The file impact of a rewind target, served by the preview route. */
 interface PreviewImpact {
   readonly files: readonly FileImpact[]
   /** Recorded paths whose current size is over the backup cap. */
@@ -527,20 +528,31 @@ async function previewImpact(
   return { files: impacts, uncovered, backupOff: !checkpointingEnabled }
 }
 
-/** Result envelope of one rewind RPC endpoint. */
-type RewindRpcResult =
+/** JSON result envelope of one rewind query route. */
+type RewindQueryResult =
   | { readonly ok: true; readonly value: unknown }
   | { readonly ok: false; readonly error: { readonly code: string; readonly message: string; readonly details: object } }
 
-/** Handler shape of the Host Connection generic RPC registry. */
-type RewindRpcHandler = (endpoint: string, payload: unknown, signal: AbortSignal, peer: unknown) => Promise<RewindRpcResult>
+/** Handler shape of the Host Connection exact Fetch registry. */
+type RewindFetchHandler = (request: Request) => Promise<Response>
 
-/** The slice of `ctx.connection` this plugin registers on. */
-interface RewindRpcHost {
-  readonly rpc: { handle(channel: string, handler: RewindRpcHandler): () => Promise<void> }
+/** One exact Fetch route this plugin registers on `ctx.connection`. */
+interface RewindFetchRoute {
+  readonly path: string
+  readonly methods: readonly 'POST'[]
+  readonly requestBody: 'buffered'
+  readonly fetch: RewindFetchHandler
 }
 
-/** The slice of `ctx.agents` the RPC handler resolves a session through. */
+/** The slice of `ctx.connection` this plugin registers on. */
+interface RewindFetchHost {
+  readonly fetch: { register(route: RewindFetchRoute): () => Promise<void> }
+}
+
+/** The read-only query one route serves. */
+type RewindQuery = 'preview' | 'candidates'
+
+/** The slice of `ctx.agents` the query handler resolves a session through. */
 interface AgentLookup {
   get(sessionId: SessionId): { readonly session: Session } | undefined
 }
@@ -550,43 +562,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Build one failed RPC result. */
-function rpcFailure(code: string, message: string): RewindRpcResult {
+/** Build one failed query result. */
+function queryFailure(code: string, message: string): RewindQueryResult {
   return { ok: false, error: { code, message, details: {} } }
 }
 
-/** Serve the impact preview and the candidate list over Connection RPC. */
-function createRewindRpcHandler(
+/** Encode one query result as the route's JSON response. */
+function queryResponse(result: RewindQueryResult): Response {
+  return Response.json(result)
+}
+
+/** Build the exact-route handler for one read-only query. */
+function createRewindQueryHandler(
   store: SnapshotStore,
   agentsOf: () => AgentLookup | undefined,
   checkpointingEnabled: () => boolean,
-): RewindRpcHandler {
-  return async (endpoint, payload) => {
+  query: RewindQuery,
+): RewindFetchHandler {
+  return async (request) => {
     try {
-      if (!isRecord(payload)) return rpcFailure('rewind/bad-request', 'invalid payload')
+      if (request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+        return new Response('content type must be application/json', { status: 415 })
+      }
+      let payload: unknown
+      try {
+        payload = await request.json()
+      } catch {
+        return new Response('body is not JSON', { status: 400 })
+      }
+      if (!isRecord(payload)) return queryResponse(queryFailure('rewind/bad-request', 'invalid payload'))
       const sessionId = payload['sessionId']
       if (typeof sessionId !== 'string' || sessionId.length === 0) {
-        return rpcFailure('rewind/bad-request', 'sessionId must be a non-empty string')
+        return queryResponse(queryFailure('rewind/bad-request', 'sessionId must be a non-empty string'))
       }
       const agents = agentsOf()
-      if (agents === undefined) return rpcFailure('rewind/agents-unavailable', 'agent registry is unavailable')
+      if (agents === undefined) return queryResponse(queryFailure('rewind/agents-unavailable', 'agent registry is unavailable'))
       const agent = agents.get(sessionId as SessionId)
-      if (agent === undefined) return rpcFailure('rewind/session-not-found', `session ${sessionId} is not attached`)
+      if (agent === undefined) return queryResponse(queryFailure('rewind/session-not-found', `session ${sessionId} is not attached`))
       const session = agent.session
-      if (endpoint === 'preview') {
+      if (query === 'preview') {
         const seq = payload['seq']
-        if (!Number.isSafeInteger(seq)) return rpcFailure('rewind/bad-request', 'seq must be an integer')
-        return { ok: true, value: await previewImpact(store, session, seq as number, checkpointingEnabled()) }
+        if (!Number.isSafeInteger(seq)) return queryResponse(queryFailure('rewind/bad-request', 'seq must be an integer'))
+        return queryResponse({ ok: true, value: await previewImpact(store, session, seq as number, checkpointingEnabled()) })
       }
-      if (endpoint === 'candidates') {
-        return {
-          ok: true,
-          value: { candidates: listRewindCandidates(session.snapshotEvents(), session.surface.nodes) },
-        }
-      }
-      return rpcFailure('rewind/unknown-endpoint', `unknown endpoint: ${endpoint}`)
+      return queryResponse({
+        ok: true,
+        value: { candidates: listRewindCandidates(session.snapshotEvents(), session.surface.nodes) },
+      })
     } catch (error) {
-      return rpcFailure('rewind/failed', error instanceof Error ? error.message : String(error))
+      return queryResponse(queryFailure('rewind/failed', error instanceof Error ? error.message : String(error)))
     }
   }
 }
@@ -1398,26 +1422,27 @@ export function apply(ctx: Context, config?: Config): void {
     })()
   }, { global: true })
 
-  // `rpc.handle` registers its route inside an effect that re-reads
-  // `owner.webServer`; that read loses the inject set on a plugin-scoped
-  // owner, so register from the root context and dispose the route with this
-  // plugin instead. See docs/compat/audit.md#u10.
+  // Read-only queries travel over exact `/api` routes; the Fetch registry does
+  // not read `webServer` from Connection's own context. See audit U10.
   ctx.inject(['connection'], (scope) => {
-    try {
-      const connection = (scope.root as unknown as { readonly connection?: RewindRpcHost }).connection
-      if (connection === undefined) return
-      const dispose = connection.rpc.handle(
-        REWIND_RPC_CHANNEL,
-        createRewindRpcHandler(
-          store,
-          () => scope.get('agents') as AgentLookup | undefined,
-          () => isFileCheckpointingEnabled(config),
-        ),
-      )
-      scope.effect(() => dispose, 'dsh-rewind RPC channel')
-    } catch (error) {
-      ctx.logger.warn(`[dsh-rewind] RPC channel registration failed: ${error instanceof Error ? error.message : String(error)}`)
+    const connection = (scope as unknown as { readonly connection?: RewindFetchHost }).connection
+    if (connection === undefined) return
+    const agentsOf = (): AgentLookup | undefined => scope.get('agents') as AgentLookup | undefined
+    const checkpointingEnabled = (): boolean => isFileCheckpointingEnabled(config)
+    const register = (path: string, query: RewindQuery): void => {
+      try {
+        scope.effect(() => connection.fetch.register({
+          path,
+          methods: ['POST'],
+          requestBody: 'buffered',
+          fetch: createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query),
+        }), `dsh-rewind ${path} route`)
+      } catch (error) {
+        ctx.logger.error(`[dsh-rewind] route registration failed for ${path}: ${error instanceof Error ? error.message : String(error)}`)
+      }
     }
+    register(REWIND_PREVIEW_PATH, 'preview')
+    register(REWIND_CANDIDATES_PATH, 'candidates')
   })
 
   ctx.inject(['fs', 'workingDirectory'], (scope) => {

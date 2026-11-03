@@ -239,16 +239,16 @@ export function isExecutedRewindCommand(node: CommandNode, seq: number): boolean
 }
 
 /** True when an engine command node is a legacy impact preview — the old
- * `preview @seq both` command probe. New previews travel over RPC, so this
- * only keeps probe rows in historical sessions hidden. */
+ * `preview @seq both` command probe. New previews travel over the host query
+ * route, so this only keeps probe rows in historical sessions hidden. */
 function isPreviewCommand(command: CommandNode): boolean {
   return (command.args ?? '').includes('preview')
 }
 
 /**
  * True when an engine command node is a legacy candidate-list probe
- * (`__candidates`). New candidate lists travel over RPC; this only keeps
- * probe rows in historical sessions hidden.
+ * (`__candidates`). New candidate lists travel over the host query route;
+ * this only keeps probe rows in historical sessions hidden.
  */
 function isCandidateCommand(command: CommandNode): boolean {
   return (command.args ?? '').includes('__candidates')
