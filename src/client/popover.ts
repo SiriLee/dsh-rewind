@@ -172,18 +172,21 @@ export function waitForCommand(
   })
 }
 
-/** The registered host call; tests and the client plugin set it once. */
-let previewCall: PreviewCall | null = null
+/** The preview transport before registration and after unload. */
+const UNAVAILABLE: PreviewCall = () =>
+  Promise.resolve({ kind: 'error', text: 'host query is unavailable' })
 
-/** Register the host preview call (null clears it on unload). */
+/** The registered host call; the unavailable default until apply registers one. */
+let previewCall: PreviewCall = UNAVAILABLE
+
+/** Register the host preview call; null restores the unavailable default. */
 export function registerPreviewCall(call: PreviewCall | null): void {
-  previewCall = call
+  previewCall = call ?? UNAVAILABLE
 }
 
 /** Resolve one target's impact through the host preview route. */
 function previewImpact(sessionId: string, seq: number): Promise<PreviewOutcome> {
-  // Registered during apply, before any trigger can open the popover.
-  return previewCall!(sessionId, seq)
+  return previewCall(sessionId, seq)
 }
 
 /** Element factory helpers (kept local so no framework is involved). */

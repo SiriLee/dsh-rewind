@@ -30,9 +30,9 @@ function fakeSession(): SessionFace {
 const t = ((key: string, params?: Record<string, unknown>) =>
   params === undefined ? key : `${key}:${String(params['path'] ?? params['message'])}`) as unknown as PopoverOptions['t']
 
-/** Open the durable popover with `preview` as its host query answer. */
-function open(preview: () => Promise<PreviewOutcome> = async () => ({ kind: 'success', files: [], backupOff: false })): void {
-  registerPreviewCall(() => preview())
+/** Open the durable popover; `preview`, when given, answers the host query. */
+function open(preview?: () => Promise<PreviewOutcome>): void {
+  if (preview !== undefined) registerPreviewCall(() => preview())
   openPopover({
     session: fakeSession(),
     seq: 5,
@@ -76,6 +76,14 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
   it('keeps the pending entry disabled while the probe is still in flight', () => {
     open(() => new Promise(() => {}))
     expect(optionHints()).toContain('popover.checking')
+  })
+
+  it('settles with the unavailable default when no preview call is registered', async () => {
+    open()
+    await settle()
+    expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
+      .toContain('host query is unavailable')
+    expect(optionHints()).not.toContain('popover.checking')
   })
 })
 
