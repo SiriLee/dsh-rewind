@@ -10,19 +10,57 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
-### 其他变更
-
-- **验证目标与兼容下限移到 DSH `0.2.2-rc.1`。** rc.1 相对 alpha.3 只有版本号变化；正式版本只跟随 DSH 的 rc/稳定线，不再兼容 `0.2.2-alpha.*`。 @SiriLee
-
 ---
 
 > DSH `>=0.2.2-rc.1 <0.3.0-0` supported
 
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0...vNEXT
+
+## [0.20.0] - 2026-11-04
+
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
+本版汇总了自 `v0.19.1` 以来的主要变更。
+
+### 问题修复
+
+- **图片回填适配 DSH 0.2.2。** 撤回带图消息时按宿主校验的完整图片引用读取，图片在进入输入框时上传，不再因引用校验而丢失。 @SiriLee
+- **撤回未读插话时，插话自己的图片也会回到输入框。** 此前只回填文字，重发会丢掉图片；沿用已读消息的图片回填通道。 (#68) @slev-agent @SiriLee
+- **Windows 上回退中断后不再丢失恢复记录。** 快照引用统一为正斜杠分隔，恢复日志、去重链接和清理时的引用校验不再因反斜杠失败。 (#70) @slev-agent @SiriLee
+- **回退的读取改走精确 `/api` 路由。** 0.2.2 线的通用 Connection RPC 通道无法从插件作用域挂载路由，影响预览与候选查询会落回 SPA 回退（HTTP 405）；本版改用 `/api/dsh-rewind/preview` 与 `/api/dsh-rewind/candidates`，读取不再依赖该通道。 (#74) @slev-agent @SiriLee
+
+### 体验优化
+
+- **插件页新增功能配图。** 详情区用中英各一张 SVG 配图展示核心操作，配置卡紧随其后。 @SiriLee
+- **新增西班牙语、法语、德语、俄语、巴西葡萄牙语界面。** 跟随 DSH 上游支持的语言；原有的日语译文自然生效，无需额外安装语言包。宿主命令文案、客户端弹层与设置卡、插件卡片元数据都跟随宿主语言；详情配图仍为中英双语，其他语言回退英文图。译文由 AI 生成，欢迎母语者更正。 (#63) @SiriLee
+
+### 其他变更
+
+- **适配 DSH `0.2.2` 线（当前 `0.2.2-rc.1`）。** 最低 Node.js 提升到 24.9；声明只覆盖 `>=0.2.2-rc.1 <0.3.0-0`，`0.2.1-rc.x`（此前的最新线）与 `0.2.2-alpha.*` 都会被启动校验整包跳过；还在旧线上的用户请继续用 `0.19.2`。 @SiriLee
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported.
+
+This release summarizes the main changes since `v0.19.1`.
+
+### Bug Fixes
+
+- **Image restore on DSH 0.2.2.** Rewinding an image-bearing message reads the complete image reference the host verifies and uploads the image as it enters the composer, so the reference check no longer drops it. @SiriLee
+- **Withdrawing an unread steering message now restores its own images to the composer.** Only the text came back before, so re-sending silently dropped the pictures; the existing image-restore path is reused. (#68) @slev-agent @SiriLee
+- **An interrupted rewind no longer loses its recovery record on Windows.** Snapshot refs are written POSIX-separated, so journal, dedup-link and prune ref checks no longer fail on backslashes. (#70) @slev-agent @SiriLee
+- **Rewind reads now use exact `/api` routes.** On the 0.2.2 line the generic Connection RPC channel cannot mount its route from a plugin scope, so the impact preview and candidate queries fell back to the SPA fallback (HTTP 405); this release uses `/api/dsh-rewind/preview` and `/api/dsh-rewind/candidates` and no longer depends on that channel. (#74) @slev-agent @SiriLee
+
+### Improvements
+
+- **The plugin page now shows a feature preview.** The detail area uses English and Chinese SVG images for the core action, keeping the configuration card close. @SiriLee
+- **Spanish, French, German, Russian, and Brazilian Portuguese are now available, following the DSH upstream languages.** The existing Japanese copy takes effect naturally with no extra language pack. Host command copy, the client popover and settings card, and the plugin card metadata all follow the host language; bundle detail images stay Chinese/English and the new locales fall back to the English image. The translations are AI-generated; corrections from native speakers are welcome. (#63) @SiriLee
+
 ### Chores
 
-- **The verification target and compatibility floor move to DSH `0.2.2-rc.1`.** rc.1 differs from alpha.3 only in version numbers; formal releases follow the DSH rc/stable line and no longer admit `0.2.2-alpha.*`. @SiriLee
+- **Adapted to the DSH `0.2.2` line (currently `0.2.2-rc.1`).** Minimum Node.js is 24.9; the declaration covers `>=0.2.2-rc.1 <0.3.0-0` only, so `0.2.1-rc.x` (the previous latest line) and `0.2.2-alpha.*` are skipped whole by the startup check — stay on `0.19.2` if you are on an older line. @SiriLee
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.4...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.19.1...v0.20.0
 
 ## [0.20.0-alpha.4] - 2026-11-03
 
