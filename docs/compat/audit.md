@@ -14,7 +14,7 @@
 > does, is in [design boundaries](../boundaries.md); this file records the
 > compatibility findings against it.
 >
-> Targeted version: npm `@deepseek-ai/*@0.2.2-alpha.3` (the last verified release).
+> Targeted version: npm `@deepseek-ai/*@0.2.2-rc.1` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
 > Version alignment: see `docs/release/release.md`.
 

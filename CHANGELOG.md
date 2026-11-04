@@ -8,11 +8,19 @@ and the release steps are documented in
 
 ## [Unreleased]
 
-> 适配 DSH `>=0.2.2-alpha.2 <0.3.0-0`
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
+### 其他变更
+
+- **验证目标与兼容下限移到 DSH `0.2.2-rc.1`。** rc.1 相对 alpha.3 只有版本号变化；正式版本只跟随 DSH 的 rc/稳定线，不再兼容 `0.2.2-alpha.*`。 @SiriLee
 
 ---
 
-> DSH `>=0.2.2-alpha.2 <0.3.0-0` supported
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Chores
+
+- **The verification target and compatibility floor move to DSH `0.2.2-rc.1`.** rc.1 differs from alpha.3 only in version numbers; formal releases follow the DSH rc/stable line and no longer admit `0.2.2-alpha.*`. @SiriLee
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0-alpha.4...vNEXT
 
