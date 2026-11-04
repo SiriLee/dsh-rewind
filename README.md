@@ -34,18 +34,17 @@ DeepSeek Harness 插件：**一键就地回退对话到任意更早的用户消�
 
 ## 安装
 
-确认本机 DSH 版本后，在 [Release](https://github.com/SiriLee/dsh-rewind/releases) 找到适配的插件版本。
-
 **命令行**：
 
 ```sh
-dsh plugin --profile <name> add dsh-rewind-plugin@<版本>
+dsh plugin --profile <name> add dsh-rewind-plugin
 ```
 
-**图形界面**：侧栏「插件」页 →「添加插件」→ 填 `dsh-rewind-plugin@<版本>` → 安装 → 重启 DSH。
+**图形界面**：侧栏「插件」页 →「添加插件」→ 填 `dsh-rewind-plugin` → 安装 → 重启 DSH。
 
-<img src="assets/screenshots/add-plugin.png" width="600" alt="「添加插件」弹窗：在输入框填入 dsh-rewind-plugin@版本号"><br>
-<sub>图片仅为示例，请以实际适配版本号为准。</sub>
+<img src="assets/screenshots/add-plugin.png" width="600" alt="「添加插件」弹窗：在输入框填入 dsh-rewind-plugin"><br>
+
+默认安装 `latest`，它适配 DSH 最新稳定版本。若使用的是旧版或内测版 DSH，请在 [Releases](https://github.com/SiriLee/dsh-rewind/releases) 页面找到适配的插件版本，并指定版本安装。
 
 > [!WARNING]
 > npm 上的 `dsh-rewind` 属于其他作者，请用 `dsh-rewind-plugin` 安装。
