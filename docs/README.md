@@ -8,9 +8,10 @@ index/navigation entry point.
 
 | Path | Purpose | Audience |
 | --- | --- | --- |
-| `architecture.md` | Module layering, rewind/checkpoint pipelines, compatibility strategy, roadmap | maintainers |
+| `architecture.md` | Source layout, module layering, rewind/checkpoint pipelines, open directions | maintainers |
+| `boundaries.md` | Design boundaries: what the plugin owns, what it leaves to other tools, and why (`.zh` mirror) | users / maintainers |
 | `format.md` | Durable on-disk format spec (checkpoint entries + restore journals) | maintainers |
-| `harness-reference.md` | DeepSeek Harness interface reference + plugin source layout | maintainers |
+| `harness-reference.md` | DeepSeek Harness interface reference (subsystems + key source) | maintainers |
 | `snapshot-auto-cleanup.md` | Global snapshot auto-cleanup policy and command (`.zh` mirror) | users / maintainers |
 | `compat/audit.md` | Compatibility audit: invariants, open upstream gaps, probe matrix | maintainers |
 | `compat/tracking-boundary.md` | Which files a rewind restores: the tracking boundary (`.zh` mirror) | users / maintainers |
@@ -20,12 +21,3 @@ index/navigation entry point.
 
 Repo-root docs outside `docs/`: `SECURITY.md`, `CONTRIBUTING.md`, and
 `CHANGELOG.md` (per-release notes, kept out of the npm tarball).
-
-## Conventions
-
-- Bilingual docs use the `.md` / `.zh.md` file split (e.g.
-  `snapshot-auto-cleanup.md` + `snapshot-auto-cleanup.zh.md`); the root pair is
-  the exception — `README.md` is Chinese, `README.en.md` English.
-- `compat/audit.md` is the single source of truth for compatibility conclusions;
-  other docs link to it instead of restating them.
-- Cross-links are relative.

@@ -1,10 +1,10 @@
 # Architecture
 
-How dsh-rewind is built: module layering, the rewind pipeline, the checkpoint
-pipeline, the compatibility strategy, and the roadmap. The module map lives in
-`AGENTS.md`; this document adds the wiring between the modules. The durable
-on-disk format is specified separately in
-`docs/format.md`, the security model in `SECURITY.md`.
+How dsh-rewind is built: source layout, module layering, and the two flows that
+do the work — rewind and checkpointing. The DSH interfaces behind these modules
+are in `docs/harness-reference.md`; the durable formats are in `docs/format.md`,
+the security model in `SECURITY.md`, and compatibility findings in
+`docs/compat/audit.md`.
 
 ## Purpose
 
@@ -15,8 +15,38 @@ credentials access.
 
 ## Module layering
 
-The module map is the one in `AGENTS.md` (`Layout at a glance`); this document
-adds the wiring between the modules and does not repeat it.
+The module map:
+
+```
+src/index.ts            host plugin: /rewind, /undo, /snapshot-auto-cleanup + checkpoint pipeline
+src/rewind.ts           pure planning: target resolution, surface range, candidate listing
+src/snapshot.ts         checkpoint store: before-backups, restore/preview, bounded prune
+src/snapshot-cleanup.ts cleanup policy + config persistence + auto-sweep throttle
+src/locales.ts          host i18n (t() renderer, HostKey)
+src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals
+src/client/popover.ts   mode-selection popover (both-mode impact confirm)
+src/client/hidden.ts    Chat-snapshot readers and executed-rewind cut derivation, pure
+src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
+src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
+src/client/portals.tsx  per-user-message ↶ button portals (React bridge into the actions row)
+src/client/settings-card.tsx  settings form on the bundle page (plugins.bundle.config)
+src/client/locales.ts   per-language copy registry (LocaleNamespaceMap)
+src/client/styles.ts    injected styles (dsh design tokens)
+src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_REWIND_BUILD__)
+src/client/log.ts       client logger (namespaced, dsh-rewind.debug-gated)
+scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
+scripts/update-badge.mjs       regenerate the tests badge (CI only)
+scripts/verify-host.mjs end-to-end host verification (full check suite)
+scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)
+tests/                  vitest suites (rewind / snapshot / hidden / integration)
+docs/                   maintainer docs: compat/, release/ subdirectories
+assets/screenshots/     UI screenshots
+cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
+package.json            dsh.bundle + dsh.client manifests, optional peerDependencies
+```
+
+`@deepseek-ai/*` dependencies stay external at build time: the DSH host resolves
+them at runtime, so the published tarball does not carry them.
 
 Two dependency rules keep the design testable:
 
@@ -28,7 +58,10 @@ Two dependency rules keep the design testable:
    `crash` hook), so the store is testable without the harness.
 
 The client never reads the DOM to derive rewind state; it consumes the host's
-machine channels (see [Compatibility strategy](#compatibility-strategy)).
+machine channels. Withdrawn nodes leave the Chat flow through the builder's
+`visibility` input, and DOM coupling is limited to the structurally typed portal
+registration. The client entry exposes only the plugin (`apply` / `inject` /
+`name`).
 
 ## Rewind pipeline
 
@@ -69,20 +102,12 @@ Key invariants:
 
 ### Marker format history
 
-The rewind marker is written as form C (a `user/message` with a
-`surfaceOp.replace` over the shadowed range, `sourceEventSeqs`, and the
-constant `(empty message)` content). Earlier
-plugin versions wrote shapes a newer harness no longer accepts:
-
-- **form A** — a bare `assistant/message(turn=N, step=0)` with no frame.
-- **form B** — a ghost turn frame: `[step/start][assistant/message][step/end]`
-  inside a closed turn.
-
-A/B became unreadable once v2 reserved surface `replace` to a node that cites
-`sourceEventSeqs` (`assistant/message` can no longer carry them). The
-`/dsh-rewind-fix` command rewrote form A/B in closed sessions to form C so a
-newer harness accepts the log — it was a **temporary migration tool** (kept on
-the `0.9.x` line) and is **removed in the `0.10.x` line**.
+The current form is a `user/message` carrying a `surfaceOp.replace` over the
+shadowed range, `sourceEventSeqs`, and the constant `(empty message)` content.
+Earlier forms — a bare `assistant/message`, then a ghost turn frame — became
+unreadable once v2 reserved surface `replace` to a node that cites
+`sourceEventSeqs`; the `/dsh-rewind-fix` migration command rewrote them and was
+removed in the `0.10.x` line.
 
 ## Checkpoint pipeline (Claude Code before-backup model)
 
@@ -115,24 +140,13 @@ pruneStale            cross-session auto-cleanup (default off): whole
                      claim that exemption).
 ```
 
-## Compatibility strategy
-
-- **Test-driven investigation**: `tests/compat-invariants.test.ts` /
-  `compat-interop.test.ts` / `compat-gaps.test.ts` probe harness behavior and pin findings in
-  `docs/compat/audit.md`; `scripts/verify-host.mjs` runs a real end-to-end
-  rewind + `/compact` chain (the full check suite).
-- **No public client contract**: the client entry exposes only the plugin
-  (`apply` / `inject` / `name`). Withdrawn nodes leave the Chat flow through the
-  builder's `visibility` input; DOM coupling is limited to the structurally
-  typed portal registration.
-
-## Roadmap
+## Open directions
 
 Ideas under consideration, not commitments:
 
 - **Multi-process identity/lock**: the current in-flight guard is
-  per-process; a cross-process exclusive lock (like the change-ledger
-  competitors) would cover multiple host processes on one worktree.
+  per-process; a cross-process exclusive lock would cover multiple host
+  processes on one worktree.
 - **Locale expansion**: copy lives in per-language dictionaries registered through
   `HOST_DICTS` / `CLIENT_DICTS`; adding a language is a dictionary plus its
   `locale/<tag>.json` metadata, with no wiring or test edits.

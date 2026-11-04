@@ -130,21 +130,21 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 
 ### 2. File restore: lightweight checkpointing, "before-write backup"
 
-The file half follows Claude Code's checkpoint semantics — **partial tracking + before-write backup, plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space, and it's actually more complete:
+The file half follows Claude Code's checkpoint semantics — **partial tracking + before-write backup, plus a re-scan of tracked files at each message**, not a whole-tree snapshot. This trade-off saves space while still covering external changes to tracked files:
 
 - **Before-write backup**: tracks only the write-class tools (`write`, `edit`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight; **a single file that is too large is not backed up**.
 - **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — external changes such as a command run or a manual edit are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
 - **Unchanged-not-recorded**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy.
-- **Accurate restore**: backups are the sole standard, checked against the real disk — **only files that actually differ are touched**. Backups are stored byte for byte, so the restored result matches the backups exactly, with no "ghost impact". There is a limit, though: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
+- **Accurate restore**: backups are the sole standard, checked against the real disk — **only files that actually differ are touched**. Backups are stored byte for byte, so the restored result matches the backups exactly, with no "ghost impact". Coverage is bounded by design: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
 - **Safety and integrity**: paths are sanitized so nothing ever escapes the backup root; symlinks / hard links are skipped so one restore can't clobber another name of the same file; a per-file failure never aborts the pass; backups and the restore journal are written atomically and kept across restarts, so a half-applied restore after a crash can be continued or rolled back.
 
 > **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and content-as-link drop the repetition; only the files that differ are touched at restore time.
 
-## What it deliberately does NOT do
+## Scope and division of labour
 
-This plugin deliberately stays lightweight and focused on one thing — "conversation rewind". The following are **out of its scope**:
+This plugin deliberately stays lightweight and focused on one thing — "conversation rewind". The following are **out of its scope**, and each has a better owner (see [design boundaries](docs/boundaries.md)):
 
-- **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. For a worktree-level full snapshot rollback, use a more specialized snapshot tool (git).
+- **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. Workspace history — any file, any moment — belongs to Git; the agent already uses it, and the plugin does not rebuild that layer. For a worktree-level full snapshot rollback, use Git or the snapshot tool the project already uses.
 - **Subagent edits** — not tracked, and no rewind inside a subagent session (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session, and none are kept for one.
 - **Fork / branch rewind** — DSH already provides this ("branch in new chat"); no need to reinvent the wheel.
 
@@ -158,12 +158,10 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 > This project and DeepSeek Harness are both in developer preview. Pin exact
 > versions in reproducible environments and review the behavior notes above.
 
-## Known issues
+## Known limitations
 
-1. **Exported logs are complete** — `/export` exports the whole session log (raw JSONL), **withdrawn content included**; this plugin cannot alter exports.
-2. **Lightweight file rewind has a cost** — in specific cases not all changes can be rewound. Consistent with Claude Code. See: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
-3. **Turn navigation keeps rewound turns** — the right-side turn navigation keeps an "unloaded" tick for each rewound turn, and hovering previews the withdrawn content. Only a display difference; no functional impact.
-4. **A far rewind may show a blank transcript** — when the target predates the loaded history, the conversation area goes blank; click **Load earlier** to page back until the history appears.
+1. **Turn navigation keeps rewound turns** — the right-side turn navigation keeps an "unloaded" tick for each rewound turn, and hovering previews the withdrawn content. Only a display difference; no functional impact.
+2. **A far rewind may show a blank transcript** — when the target predates the loaded history, the conversation area goes blank; click **Load earlier** to page back until the history appears.
 
 > [!NOTE]
 > Browser diagnostics are available; see [Browser diagnostics](docs/compat/diagnostics.md).
@@ -185,7 +183,7 @@ node scripts/verify-host.mjs   # end-to-end verification of the built artifact
 
 `prepack` runs the full build, so `npm pack` / `npm publish` always ship a complete `lib/`. Install from npm or a packed tarball — a git checkout has no built `lib/`.
 
-Maintainers: the module map and harness interface reference live in [docs/harness-reference.md](docs/harness-reference.md).
+Maintainers: the source layout and architecture are in [docs/architecture.md](docs/architecture.md); the harness interface reference is in [docs/harness-reference.md](docs/harness-reference.md).
 
 Contributing guide: [CONTRIBUTING.md](CONTRIBUTING.md).
 

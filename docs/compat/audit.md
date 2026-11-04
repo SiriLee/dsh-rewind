@@ -6,10 +6,13 @@
 > execution paths through the DSH subsystems' **real consumer paths** (real `@deepseek-ai/*`
 > packages) and assert the invariants below; a probe failure is a finding.
 >
-> **Retention rule.** Only two things are recorded: a behavior the harness could offer better
-> and does not, or a defect the plugin must **not** compensate for. Correct-by-design behavior
-> is not restated (the probes pin it; [Deliberate semantics](#deliberate-semantics-no-entry-kept)
-> names it). Upstream references use symbols and file names, never line numbers — they rot.
+> **Retention rule.** A finding records an upstream behavior the plugin works
+> within, with its owner and impact named; a plugin defect is fixed, not listed.
+> Upstream references use symbols and file names, never line numbers — they rot.
+>
+> **Boundary contract.** What the plugin owns, and why a boundary sits where it
+> does, is in [design boundaries](../boundaries.md); this file records the
+> compatibility findings against it.
 >
 > Targeted version: npm `@deepseek-ai/*@0.2.2-alpha.3` (the last verified release).
 > Source reference: the upstream [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness).
@@ -44,115 +47,94 @@ adapted line: a runtime outside it is refused at load rather than admitted into 
 | I3 step/turn structure | Client turn-tail ordering, unique `step/start` (real turns), no ghost turns; the `user/message` rewind marker adds no step frame | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
 | I4 fold-service safety | stats / title / goal / projection fold a marker-bearing log without throwing, with predictable values | `compat-invariants` I4, `compat-gaps` G4 |
 | I5 compact interop | A tool call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is refused; rewind-then-compact stays legal | `compat-interop` I5, `verify-host` 12/14 |
-| I6 tool pipeline | before-snapshot capture/commit/restore is correct for `write` / `edit`, and cancellation timing never hangs. (`str_replace_editor` and `apply_patch` are optional and off in every shipped composition, so neither is tracked; enabling either leaves its edits outside restore coverage) | `verify-host` 4–9 |
+| I6 tool pipeline | before-snapshot capture/commit/restore is correct for `write` / `edit`, and cancellation timing never hangs. (`str_replace_editor` is a standalone package for custom compositions and is mounted in no shipped composition, so it is not tracked; a composition that mounts it leaves its edits outside restore coverage) | `verify-host` 4–9 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
 | I8 runtime safety | `rewind` / `compact` combinations never leave a dangling step/turn frame | `verify-host` 13 |
 | I9 tool-update projection | `Session.toolHistory()` folds the whole log, so a withdrawn `tool-addition` stays recorded; after a withdrawal no `tool-addition` / `tool-removal` block reaches the provider and the current declarations stay complete | `compat-tool-updates` I9 |
 
-## Open items
+## Findings
 
-Each is a gap the plugin cannot close on its side, with the stance that keeps a future fix
-pointed the right way.
+Each item starts with its owner and impact. Findings record upstream behavior
+or deliberate design, not plugin defects; **plugin design** / **plugin scope**
+labels mark choices, not limitations.
 
-### U1 — a surface replacement must masquerade as a `user/message`
+**U1 · Upstream constraint — the placeholder is all that reaches the model.**
+`assistant/message` cannot carry `sourceEventSeqs` and no other carrier exists,
+so a cut is a visible user turn with the constant `(empty message)` placeholder
+(a truly empty user message is rejected by strict OpenAI-compatible gateways,
+#21). **Impact:** that constant is the only thing that reaches the model context;
+no behavioral side effect. **Stance:** no compensation; old marker shapes stay
+readable.
 
-`assistant/message` forbids `sourceEventSeqs` (it embeds its provider stream) and no
-non-conversational carrier exists, so the cut is a visible user turn whose content must be the
-`(empty message)` placeholder — a truly empty user message is rejected by strict
-OpenAI-compatible gateways (#21). **Ask:** a dedicated replacement/checkpoint event.
-**Stance:** no compensation; the placeholder is deliberate and both legacy marker shapes stay
-readable (a stored marker is immutable).
+**U2 · Upstream inconsistency — maintenance watch, no wrong-row button.**
+Assistant rows have `conversation.chat.assistant-actions`; user / steering rows
+have no counterpart. **Impact:** the ↶ button is located structurally in the
+row; a miss means no button, never a wrong-row button; the cost is watching this
+seam across upstream changes. **Stance:** keep the portal; reported upstream
+(Discussions #8345).
 
-### U2 — no per-message action slot for user / steering rows
+**U3 · Upstream constraint — private seam, maintenance watch.**
+`isVisibleChatNode` drives order, grouping, turn navigation and presentation but
+is first-party-only. **Impact:** the plugin wraps the registered chat builder's
+`create()` to mark the rewind span hidden; that private seam needs re-checking
+when the builder changes, and DOM hiding was rejected as less standard. The only
+display artifact is the Turn rail's unloaded mark; nothing else is user-visible.
+**Stance:** keep the wrapper; no DOM fallback.
 
-The ↶ button is a React portal located **structurally** in the row's own `MessageIconActions`
-container; assistant rows have `conversation.chat.assistant-actions`, user / steering rows have
-no counterpart. **Ask:** the symmetric slot, or publish the `data-chat-*` anchors with a
-deprecation path. **Stance:** keep the portal; a locate miss degrades to "no button", never a
-button on the wrong row. Pending-steering matching also keys on `data-message-attachments`,
-which renders inside the `conversation.chat.user.content` Factory (still a descendant of the
-row). Reported upstream: Discussions #8345.
+**U4 · Upstream issue — no plugin impact.**
+The synchronous reads are deprecated with no in-process replacement; the paged
+route exists only on the Remote surface. **Impact:** none — the plugin keeps the
+deprecated reads under the grace period and adds no index. **Stance:** none;
+revisit if the grace period ends.
 
-### U3 — client row visibility is not an extension input
+**U5 · Plugin design — external-editor write, not a limitation.**
+A restore writes through plain `node:fs` with the host user's existing
+authority: the plugin is an external editor of the workspace, not the model's
+tool path, so that is the correct primitive, not a missing host API. A
+host with the observation policy enabled is kept current, best-effort, by
+re-emitting `fs/observed`.
 
-`isVisibleChatNode` already drives chat order, process grouping, turn navigation and process
-presentation, but is first-party-only. **Ask:** a derived, recomputable visibility input at that
-evaluation point.
+**U6 · Plugin scope — images only, no document attachments.**
+Images are refilled through the supported `readAttachment(ImageAttachmentRef)`
+contract plus the normal composer intake. Files have no such path: the harness
+exposes no client-side file-bytes loader (file uploads are one-way), so a
+`FileAttachmentRef` cannot be turned back into a `File` without guessing a
+storage path. The plugin does not guess; this is scope, not omission.
 
-**Workaround (current line):** wrap the registered `chat` view builder's `create()` and mark the
-rewind span `visibility: 'hidden'` before `ChatSnapshotBuilder` computes `order`. Nodes stay in
-the store for composer refill; there is no DOM hiding. The seam is private and the Turn rail is
-still fed by the host `turnOutline`, so a fully hidden Turn remains an unloaded mark; U3 stays open.
+**U7 · Archived upstream issue — no plugin impact.**
+Crash-left steps are closed by upstream tail repair, and the marker adds no step
+frame, so the plugin no longer amplifies this; a hand-edited / third-party log is
+outside the contract. **Stance:** archived; no guard (a `hasOpenStep`
+pre-refusal was reverted).
 
-### U4 — no in-process paged history read
+**U8 · Upstream limitation — shared by every command-seam plugin.**
+`PopupSelectController.settle()` restores composer focus unconditionally, and
+command descriptions are a closed allowlist while no host command output is
+localized. **Impact:** any plugin using the command seam hits this; this plugin
+keeps its own capture-phase panel and host dictionary. **Stance:** no
+compensation.
 
-`Session.eventAt` / `snapshotEvents` / `ownEvents` are deprecated ("existing calls may remain,
-new calls are prohibited") with no in-process replacement: `page` + `follow` shipped only on
-the client-facing Remote surface. A projection cannot answer the rewind question — "is this
-message still on the surface?" is surface semantics, while projections fold the whole log.
-**Stance:** keep the deprecated reads (turn anchor + candidate listing) under the grace
-period; no plugin-side index. **Ask:** an in-process paged read, or document the Remote route.
+**U9 · Upstream design — not plugin-specific.**
+A nearer physical copy wins over a peer declaration, and a range is not a
+resolver filter; `.volatile()` relies on the `schemastery` peer floor. **Impact:**
+only an install that shadows an older copy is affected; true of any plugin.
+**Stance:** keep the floor; never treat the range as enforcement.
 
-### U5 — no supported file write-back primitive
+**U10 · Upstream defect — no longer used, no plugin impact.**
+`connection.rpc.handle` registers through the Connection owner's context, which
+injects only `credentials`. **Impact:** none now — the two read-only queries use
+exact `/api` routes and never read `owner.webServer`. **Stance:** no
+compensation; reported upstream.
 
-A restore writes through plain `node:fs` (it must reach paths the fs service would refuse as
-stale/absent), which the host's observation/version layer cannot see. `dsh-base` now ships
-`fs-observation-policy` disabled, so only a profile that re-enables it judges the next write
-stale (`FS_STALE_VERSION`); the plugin re-emits `fs/observed` to compensate. **Ask:** a
-supported write-and-sync primitive. **Stance:** keep the compensation, best-effort and
-per-file — it heals only what a restore itself broke.
+**U11 · Upstream constraint — display only, manual paging.**
+`paginate` counts append-origin messages, not `visibility`; hidden rows keep
+`hasMore` true. **Impact:** when the target predates the loaded window, the
+transcript shows only "Load earlier" until the user pages back — display only,
+no data loss. **Stance:** no host patch; manual paging.
 
-### U6 — the attachment bytes behind a withdrawn message (open question)
+## Verification coverage
 
-Upstream states attachments are never deleted (a reference model over session lineage would be
-needed first) and nothing observes surface replacement; `dsh-attachment-local` is mounted in
-the shipped profile but is not in this plugin's verification dependencies. **Stance:** request
-a clarification; no plugin-side reclamation, no guess.
-
-### U7 — a dangling `step/start` still breaks token-meter replay (upstream defect)
-
-Crash-left boundaries are auto-closed at load (`interruptedTurnClosers`) and the marker adds no
-step frame, so the original amplifier is closed; a leftover unclosed step (a third-party
-`Session.append('step/start')`, or a hand-edited log) still makes replay reject later step
-activity, so `/compact` fails and automatic compaction stays silently disabled. **Stance: no
-guard** — a `hasOpenStep` pre-refusal was implemented, misjudged real logs, and was reverted;
-the fix direction is upstream (token-meter recovery).
-
-### U8 — command seam: focus policy and localized copy
-
-`PopupSelectController.settle()` restores composer focus unconditionally after `onSelect` (no
-supported suppression), and command-*description* localization is a closed allowlist
-(`HOST_FACES`: compact, export, feedback, goal, permission, plan) while **no** host command
-*output* is localized for anyone. **Stance:** no compensation — keep the own capture-phase
-panel and the own host dictionary (locale read through `settings.describe({ redactSecrets: true })`).
-
-### U9 — peer ranges are not enforced at runtime
-
-A nearer physical copy wins over a higher peer declaration, and a peer range is not a resolver
-filter, so the `@deepseek-ai/schemastery` peer floor is the real availability guarantee for
-`.volatile()`: an older shadowing copy fails the top-level `Config` evaluation before the
-plugin loads. **Stance:** keep the floor; never treat the range as enforcement.
-
-### U10 — generic RPC route registration fails from a plugin scope
-
-`connection.rpc.handle` registers its route through
-`owner.effect(() => owner.webServer.register(route))`, where `owner` is the Connection
-service's own context; that context injects only `credentials`, so the read throws
-`cannot get property "webServer" without inject`. Cordis 4.0.6-alpha.2 resolves the read
-against that owner, so registering from the root context no longer avoids it. **Ask:** capture
-the web server outside the effect (or keep the channel registry carrier-neutral). **Stance:**
-no compensation: the two read-only queries use exact `/api` Fetch routes and never read
-`owner.webServer`.
-
-### U11 — history pagination ignores rewind-hidden rows
-
-`paginate` counts append-origin messages, not `visibility`; when the target predates the loaded
-window, hidden rows keep `hasMore` true, so Chat shows only “Load earlier” until the user pages
-back (also after a cold open). **Ask:** a transcript-visibility input to `paginate` (hidden rows
-returned, not counted). **Stance:** no Host patch or pagination compensation; the user pages
-back manually.
-
-## Coverage gaps
+These are paths verified manually or not yet in CI, not known-broken behavior.
 
 - **Real browser rendering replay**: the visibility wrapper's logic is covered in tests, but the
   rendered result is verified in a real engine manually, not in CI — and 0.2.2 reworked the
@@ -176,10 +158,15 @@ back manually.
 
 ## Deliberate semantics (no entry kept)
 
-Correct by design, named only so a future maintainer does not re-investigate: post-rewind
-stats / telemetry fold the whole log; the title re-derives from the surface; a rewind leaves
-`plan/mode` and the working directory alone; withdrawn content stays searchable and exportable
-(the log is append-only, only the surface is cut); the bundle card's locale + icon are declared
-by the plugin and read by the manager; a `Session` handle's synchronous reads are deprecated but
-still usable; the token-meter units fold an unmetered surface `replace` at zero delta, so their
-figures do not roll back after a rewind (pinned by G4).
+Correct by design, named only so a future maintainer does not re-investigate:
+
+- **Post-rewind folds.** Stats and telemetry fold the whole log; the title
+  re-derives from the surface; token-meter units fold an unmetered surface
+  `replace` at zero delta, so their figures do not roll back after a rewind
+  (pinned by G4).
+- **State left alone.** A rewind leaves `plan/mode` and the working directory
+  alone; withdrawn content stays searchable and exportable (the log is
+  append-only, only the surface is cut); the bundle card's locale + icon are
+  declared by the plugin and read by the manager.
+- **Deprecated reads.** A `Session` handle's synchronous reads are deprecated but
+  still usable.

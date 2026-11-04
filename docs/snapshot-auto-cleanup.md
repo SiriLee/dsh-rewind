@@ -68,7 +68,7 @@ can't make it run early. To clean up right now instead of waiting, use
   your conversation stays intact, and the session starts recording fresh
   snapshots from now on.
 
-## Known limitation
+## Retention cap (by design)
 
 The plugin keeps the most recent **100 anchor groups'** snapshots per session (one
 group per user message). If you rewind or compact a lot in one long session,

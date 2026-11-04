@@ -5,9 +5,9 @@
 > exactly, while a stretch of state that **was not backed up** makes the restore
 > **incomplete** — it prefers to do nothing rather than guess.
 >
-> This document describes how it works, the two known limitations that follow, and
-> why they are accepted. All of it is a **deliberate trade-off** (matching Claude
-> Code's checkpoint semantics), not a defect.
+> This document describes how it works, the two boundaries that follow, and why
+> they sit there. All of it is a **deliberate trade-off** (matching Claude Code's
+> checkpoint semantics).
 
 ## 1. The two modes of file change
 
@@ -83,9 +83,10 @@ A restore reads nothing else in the workspace and infers nothing:
 Looking toward later messages works because "unchanged, not stored" means the target
 message began from the same state as its latest backup — so the earliest later backup
 holds exactly that state (the premise being that nothing between the target message
-and that backup went unrecorded; see limitation 2). Conversely, the nearest backup
-*before* the target is not used because it may predate a **coverage gap** (limitation
-2, case 3): writing it back would overwrite the current file with an older version.
+and that backup went unrecorded; see boundary 2). Conversely, the nearest backup
+*before* the target is not used because it may predate a **coverage gap**
+(boundary 2, case 3): writing it back would overwrite the current file with an
+older version.
 **Restore less rather than write something wrong.**
 
 ### An example
@@ -103,13 +104,13 @@ deleted; target 2 → `A`; target 3 → no backup of its own, so looking toward 
 messages finds msg 4's `A`, exactly the state msg 3 began from; target 4 → `A`;
 target 5 → `B`.
 
-## 3. Known limitations
+## 3. The boundary
 
-Both limitations share one root cause: **a stretch of state was not backed up**.
-Limitation 1 results in **no restore at all**, limitation 2 in an **incomplete
+Both boundaries share one root cause: **a stretch of state was not backed up**.
+Boundary 1 results in **no restore at all**, boundary 2 in an **incomplete
 restore**.
 
-### Limitation 1: history that never entered tracking — no restore
+### Boundary 1: history that never entered tracking — no restore
 
 **Being handled by a write-class tool is the prerequisite for a file to join the
 tracked list and produce backups.** Before that, every external edit it went through
@@ -135,7 +136,7 @@ gives `v2`** — the earliest backup after them is msg 4's `v2`. `v2` really is 
 content at the moment the file was first handled, but what those three messages began
 from was `v0`, `v0` and `v1`; the plugin never saw them and cannot restore them.
 
-### Limitation 2: a stretch of state that was not backed up — an incomplete restore
+### Boundary 2: a stretch of state that was not backed up — an incomplete restore
 
 "Unchanged, not stored", "over the cap, not stored", and turning snapshot backups
 off all leave a stretch of state without a backup. When the target message has no
@@ -207,28 +208,22 @@ are off are not in the record, so a rewind across that period may be incomplete.
 the example, backups were turned off before msg 2 and back on before msg 3; msg 2 has
 no backup of its own, so rewinding to msg 2 finds msg 3's `B`.
 
-## 4. Why these limitations are accepted
+## 4. Why the boundary sits here
 
-Removing **limitation 1** would require the plugin to know which files an arbitrary
-command or external edit modified. Neither route works: having every external writer
-declare itself (neither `sed`, nor build scripts, nor editors will), or tracking the
-whole workspace and taking a whole-tree snapshot before every change — enormous in
-volume, and precise workspace-level history is exactly the job of dedicated snapshot
-tools such as Git. The plugin only does lightweight rewinding aimed at Agent tooling,
-so this limitation stays.
+The boundary follows from the model: a before-write checkpoint covers the edits an
+agent makes through `write`/`edit`, and everything beyond that is workspace
+history. Workspace history already has an owner — Git, or the snapshot tool the
+project uses — and reproducing it here would duplicate an authority that is
+already maintained. The full reasoning — precedent, division of labour, and what
+a whole-tree store would cost here — is in
+[design boundaries](../boundaries.md).
 
-Removing **limitation 2** would mean giving up "unchanged, not stored" and "over the
-cap, not stored": every message boundary would have to record **every** tracked file
-(changed or not), and large files would be backed up in full again and again. That
-cost has two layers: storage grows linearly with the conversation, and messages that
-change no file are the overwhelming majority; and every backup reads and writes a
-whole file, so a very large one saturates disk IO (which is exactly why the per-file
-cap exists).
+Restore less rather than write something wrong: that rule is why the plugin only
+writes back content it actually backed up.
 
-What the two limitations buy is: lightweight, predictable, and **only ever writing
-back content it actually backed up, never a guess**. For precise workspace-level
-history, use Git.
+For precise workspace-level history, use Git.
 
 ## See also
 
-[SECURITY.md](../../SECURITY.md) · [Snapshot auto-cleanup](../snapshot-auto-cleanup.md)
+[Design boundaries](../boundaries.md) · [SECURITY.md](../../SECURITY.md) ·
+[Snapshot auto-cleanup](../snapshot-auto-cleanup.md)

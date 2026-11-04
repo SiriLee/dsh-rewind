@@ -47,10 +47,13 @@ npm run verify:host    # end-to-end host verification (full check suite)
     migrate, or move the state root; no silent re-interpretation).
   - **`docs/compat/audit.md`** — new compatibility findings (it is the single
     source of truth; other docs link to it instead of restating).
+  - **`docs/boundaries.md`** — a design boundary or deliberate non-goal, with
+    its rationale; other docs link to it instead of restating it.
   - **`SECURITY.md`** — any change to the security model (trust boundary,
     mutation gates, containment, crash handling).
 - Bilingual docs use the `.md` / `.zh.md` file split; keep the two mirrors in
   sync.
+- Cross-links between docs are relative.
 
 ## Testing expectations
 

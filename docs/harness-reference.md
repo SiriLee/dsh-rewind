@@ -42,32 +42,3 @@ Also in the harness repo's `docs/`: `persistence-catalog.md` (full
 | Client `SessionFace` (`command` / `cancel` / `readAttachment(ImageAttachmentRef)`) | [packages/api/session-controller/src/client/contract/session.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/api/session-controller/src/client/contract/session.ts) |
 | Client pending interaction (SessionPendingInteraction) | [packages/client/ui-session/src/client/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-session/src/client/index.ts) |
 
-## Plugin source layout
-
-The module map below duplicates `AGENTS.md` (`Layout at a glance`), which is
-the canonical source; this block only adds the finer-grained client-side files
-and packaging entries.
-
-```
-src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals
-src/client/popover.ts   mode-selection popover (both-mode impact confirm)
-src/client/hidden.ts    Chat-snapshot readers and executed-rewind cut derivation, pure
-src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
-src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
-src/client/portals.tsx  per-user-message ↶ button portals (React bridge into the actions row)
-src/client/settings-card.tsx  settings form on the bundle page (plugins.bundle.config)
-src/client/locales.ts   per-language copy registry (LocaleNamespaceMap)
-src/client/styles.ts    injected styles (dsh design tokens)
-src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_REWIND_BUILD__)
-src/client/log.ts       client logger (namespaced, dsh-rewind.debug-gated)
-scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
-scripts/update-badge.mjs       regenerate the tests badge (CI only)
-scripts/verify-host.mjs end-to-end host verification (full check suite)
-scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)
-tests/                  vitest suites (rewind / snapshot / hidden / integration)
-docs/                   maintainer docs: compat/, release/ subdirectories
-assets/screenshots/     UI screenshots
-cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
-package.json            dsh.bundle + dsh.client manifests, optional peerDependencies
-```
-

@@ -75,7 +75,8 @@ other range and admits the plugin only while it satisfies the runtime under
 mirror the same range — a host older than that release ignores `engines.dsh` and
 reads them instead. The range is updated when it stops fitting: our own update
 drops compatibility with older releases, or upstream makes a minor or major
-change. Compatibility outside it is not maintained on purpose.
+change. `main` adapts only to the current line; an older DSH line is served by
+the plugin release built for it.
 
 The declaration is not the verification record: that is the Targeted version in
 `docs/compat/audit.md`, moved each release by pointing the `@deepseek-ai/dsh-*`
@@ -95,15 +96,16 @@ own version number.
 prior DSH line). Within a line, MINOR/PATCH remain compatible.
 
 **Branching (trunk-based).** `main` is the single integration and release line
-and is always releasable. The currently-shipped stable is cut into a short-lived
-`release/<version>.x` maintenance branch from its release commit; that branch
-receives backported fixes while `main` advances to the next line. The prior
-(broad-compat) line is frozen as a tag, with no branch.
+and is always releasable. The currently-shipped stable is cut into a
+`release/<version>.x` maintenance branch from its release commit. An older
+shipped line keeps its branch and is maintained there; it is not carried forward
+on `main`.
 
-**Support window / EOL.** A DSH line is supported within a declared window. By
+**Support window.** A DSH line is supported within a declared window. By
 default the window runs until the next DSH line ships as `latest`; after that
-the line is EOL, frozen, and receives no further patches.
+the line leaves `main` and is no longer developed forward (see Branching
+above).
 
-**Bug-fix flow (forward-fix then backport).** A fix affecting multiple supported
-lines is applied on `main` first, then backported to each still-supported
-release branch. A fix specific to one line is applied only on that line.
+**Bug-fix flow (forward-fix then backport).** A fix affecting multiple lines is
+applied on `main` first, then backported to each release branch it affects. A
+fix specific to one line is applied only on that line.
