@@ -947,3 +947,92 @@ export function createRewindBridge(deps: RewindBridgeDeps): (props: { readonly s
     return createElement(RewindPortals, { sessionId, ...deps })
   }
 }
+
+/**
+ * Embedded Conversation mount point: a Conversation rendered OUTSIDE the main
+ * view's frame carries no `conversation.session.header.actions` slot, so the
+ * header bridge above never mounts there and its user rows get no ↶ button.
+ * Observed today on the task-board floating window (`@local/dsh-task-board`
+ * renders `conversation.content` directly with `variant: 'embedded'`), and the
+ * same shape reaches any third-party embed of the Conversation body.
+ *
+ * The harness marks every Conversation body with `data-conversation-content`
+ * and its `data-conversation-session`; the main view's frame additionally owns
+ * an ancestor with `data-phase`. Those two readable attributes are enough to
+ * find each embedded Conversation and mount one `RewindPortals` per session,
+ * so this stays a DOM-attribute coupling of the same kind as the seat selectors
+ * below — no third-party plugin is imported, read, or modified.
+ */
+const EMBEDDED_CONVERSATION_SELECTOR = '[data-conversation-content][data-conversation-session]'
+/** The main view's frame marker; an embedded Conversation never has this ancestor. */
+const MAIN_VIEW_FRAME_SELECTOR = '[data-phase]'
+/** Fallback poll: a Conversation can mount without a childList mutation reaching body. */
+const EMBEDDED_SWEEP_MS = 2000
+
+/**
+ * Sessions whose Conversation renders embedded (not through the main frame),
+ * de-duplicated in document order. An empty result is the normal state when no
+ * embed is open — and the safe degradation when the harness renames the
+ * attributes: the bridge then renders nothing and the header path is untouched.
+ */
+export function embeddedSessionIds(): readonly string[] {
+  const ids: string[] = []
+  let elements: NodeListOf<HTMLElement>
+  try {
+    elements = document.querySelectorAll<HTMLElement>(EMBEDDED_CONVERSATION_SELECTOR)
+  } catch {
+    return ids
+  }
+  for (const element of elements) {
+    // The main view keeps its own header bridge; skip it to never double-render.
+    if (element.closest(MAIN_VIEW_FRAME_SELECTOR) !== null) continue
+    const sessionId = element.getAttribute('data-conversation-session')
+    if (sessionId === null || sessionId === '') continue
+    if (ids.includes(sessionId)) continue
+    ids.push(sessionId)
+  }
+  return ids
+}
+
+/**
+ * Root-scoped bridge that mounts one `RewindPortals` per embedded Conversation.
+ * It renders NO conversation UI and NO header UI — only portals into rows that
+ * already exist — so the embed stays the single owner of its chat body.
+ */
+export function EmbeddedSessionPortals(deps: RewindBridgeDeps): ReactNode {
+  const [sessionIds, setSessionIds] = useState<readonly string[]>(embeddedSessionIds)
+  useLayoutEffect(() => {
+    let active = true
+    let queued = false
+    const refresh = (): void => {
+      if (!active) return
+      const next = embeddedSessionIds()
+      // Diff, so an unrelated DOM mutation never re-renders the mounted bridges.
+      setSessionIds((current) => current.length === next.length && current.every((id, index) => id === next[index]) ? current : next)
+    }
+    const queueRefresh = (): void => {
+      if (queued || !active) return
+      queued = true
+      queueMicrotask(() => {
+        queued = false
+        refresh()
+      })
+    }
+    let observer: MutationObserver | undefined
+    try {
+      observer = new MutationObserver(queueRefresh)
+      observer.observe(document.body, { childList: true, subtree: true })
+    } catch (error) {
+      // No observer: the fallback sweep still picks up embedded Conversations.
+      rewindLog.warn('portals', 'embedded conversation observer unavailable', error)
+    }
+    const timer = window.setInterval(refresh, EMBEDDED_SWEEP_MS)
+    refresh()
+    return () => {
+      active = false
+      observer?.disconnect()
+      window.clearInterval(timer)
+    }
+  }, [])
+  return sessionIds.map((sessionId) => createElement(RewindPortals, { key: sessionId, sessionId, ...deps }))
+}

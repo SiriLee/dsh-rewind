@@ -35,7 +35,7 @@ import {
 } from './candidates.ts'
 import { closePopover, openPopover, registerPreviewCall, registerComposerFocuser } from './popover.ts'
 import { installChatViewVisibility } from './visibility.ts'
-import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
+import { createRewindBridge, EmbeddedSessionPortals, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
 import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { rewindLog } from './log.ts'
@@ -94,6 +94,13 @@ interface SessionInputResolverLike {
  * The slot the session-scoped rewind bridge registers into (harness-declared).
  */
 const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
+
+/**
+ * The frame-wide floating layer. Used ONLY as a root-scoped React mount for the
+ * embedded-Conversation portals; the entry paints nothing of its own. Absent on
+ * a client without that layer, which the registration tolerates (see apply()).
+ */
+const EMBED_OVERLAY_SLOT = 'shell.overlay'
 
 /**
  * The composer's text surface: the Lexical `contenteditable` div
@@ -346,6 +353,28 @@ export function apply(ctx: ClientContext): void {
       },
       createRewindBridge({ sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, restoreImages, t, subscribeLocale }),
     ))
+
+    // Embedded Conversations (a task-board window, any third-party embed of the
+    // Conversation body) render no `conversation.session.header.actions`, so the
+    // header bridge above never mounts there. A second, root-scoped entry on the
+    // frame-wide overlay carries the same portals for exactly those sessions.
+    // Guarded like the settings card: without the slot the header path alone
+    // keeps working, so the plugin never depends on this surface existing.
+    try {
+      const embedDeps = { sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, restoreImages, t, subscribeLocale }
+      yield slots.inject(EMBED_OVERLAY_SLOT, () => slots.register(
+        {
+          name: EMBED_OVERLAY_SLOT,
+          // Portals only, same contract as the header entry: no overlay UI.
+          id: 'dsh-rewind-embedded-portals',
+          order: 900,
+          inject: () => ({}),
+        },
+        () => EmbeddedSessionPortals(embedDeps),
+      ))
+    } catch (error) {
+      rewindLog.warn('portals', 'embedded conversation bridge unavailable (portals stay header-only)', error)
+    }
 
     // ---- plugin configuration form (sidebar Plugins page) ----
     // The card is this bundle's own configuration page: it registers under

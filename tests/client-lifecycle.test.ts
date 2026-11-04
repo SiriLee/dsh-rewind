@@ -152,10 +152,13 @@ describe('client plugin lifecycle', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
     expect(mounted.slotEntries.map(entry => entry.name))
-      .toEqual(['conversation.session.header.actions', 'plugins.bundle.config'])
+      .toEqual(['conversation.session.header.actions', 'shell.overlay', 'plugins.bundle.config'])
     expect(mounted.slotEntries[0]?.id).toBe('dsh-rewind-portals')
+    // The embedded-Conversation bridge paints nothing of its own: it only
+    // carries the same portals for Conversations rendered without a header slot.
+    expect(mounted.slotEntries[1]?.id).toBe('dsh-rewind-embedded-portals')
     // The configuration form is keyed by the bundle's package name.
-    expect(mounted.slotEntries[1]?.key).toBe('dsh-rewind-plugin')
+    expect(mounted.slotEntries[2]?.key).toBe('dsh-rewind-plugin')
     expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
   })

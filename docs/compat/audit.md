@@ -32,6 +32,7 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
 | Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
+| Client embedded Conversation mount | `data-conversation-content` + `data-conversation-session`, with no `data-phase` ancestor (the main-frame marker) |
 
 **Admission.** DSH reads `engines.dsh` alone when a manifest declares it, and the
 `@deepseek-ai/dsh-*` peers only when it does not (both under `includePrerelease`), re-checking
