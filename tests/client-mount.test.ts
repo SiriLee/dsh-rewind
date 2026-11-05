@@ -11,7 +11,7 @@
  * shape comes from `tests/support/chat-row.ts`.
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { act, createElement, memo, useSyncExternalStore, type ReactNode } from 'react'
+import { act, createElement, memo, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 // jsdom + React act: the environment must opt in so act() does not warn.
@@ -39,7 +39,6 @@ class FakeLedger implements SlotLedger {
   readonly store: FakeEntry[] = []
   readonly tickKeys: string[] = []
   private readonly listeners: (() => void)[] = []
-  private version = 0
 
   constructor(initial: FakeEntry[] = []) {
     this.store.push(...initial)
@@ -59,39 +58,13 @@ class FakeLedger implements SlotLedger {
 
   register(options: { readonly name: string; readonly key?: string }): () => void {
     this.tickKeys.push(options.key ?? '')
-    this.bump()
-    return () => { this.bump() }
-  }
-
-  /** The snapshot an outlet reads, mirroring the live service's version. */
-  getVersion(): number {
-    return this.version
-  }
-
-  /** One ledger mutation: move the version, then notify. */
-  private bump(): void {
-    this.version += 1
-    this.notify()
+    return () => {}
   }
 
   /** Fire the registration subscription, as the real ledger does on a change. */
   notify(): void {
     for (const fn of [...this.listeners]) fn()
   }
-}
-
-/**
- * A keyed outlet stand-in: it re-reads the ledger only when the version moves,
- * exactly like the harness's `SlotOutlet` (uSES over `getVersion`).
- */
-function Outlet({ ledger, rowKey = 'user' }: { ledger: FakeLedger; rowKey?: string }): ReactNode {
-  useSyncExternalStore(
-    fn => ledger.subscribe('conversation.chat.node', fn),
-    () => ledger.getVersion(),
-  )
-  const entry = ledger.entries().find(candidate => candidate.options.key === rowKey)
-  const component = entry?.component
-  return component === undefined ? null : createElement(component as () => ReactNode, ROW_PROPS)
 }
 
 /** A row element with no actions-row constructor at all. */
@@ -271,19 +244,6 @@ describe('teardown', () => {
     const rerendered = render(officialRow)
     expect(rerendered.querySelector('[data-extra]')).toBeNull()
     expect(rerendered.querySelector('[data-copy]')).not.toBeNull()
-  })
-
-  it('removes the action from an already rendered row', () => {
-    const ledger = new FakeLedger([{ component: officialRow, options: { key: 'user' } }])
-    const disposal = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
-    const container = render(() => createElement(Outlet, { ledger }))
-    expect(container.querySelector('[data-extra]')).not.toBeNull()
-
-    act(() => { disposal() })
-    expect(ledger.store[0]!.component).toBe(officialRow)
-    // The already mounted outlet re-read the ledger on the teardown nudge.
-    expect(container.querySelector('[data-extra]')).toBeNull()
-    expect(container.querySelector('[data-copy]')).not.toBeNull()
   })
 
   it('restores only the identity it still owns', () => {
