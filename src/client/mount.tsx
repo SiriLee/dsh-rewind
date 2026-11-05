@@ -139,10 +139,12 @@ function rowWithAction(official: Renderer, render: RowActionRenderer): Renderer 
  * Wrapping runs synchronously with the registration (and at install for entries
  * already registered), so a row's first render already sees the new identity.
  * Outlets re-read an identity only on a registration change, so an already
- * rendered row is nudged once (see `tick`).
+ * rendered row is nudged once when the identity changes (see `tick`) — at
+ * install, and again at teardown.
  *
  * @param mount - ledger surface and action renderer.
- * @returns teardown restoring the taken-over component identities.
+ * @returns teardown restoring the taken-over identities and nudging the ledger
+ *   once, so mounted rows stop rendering the action.
  */
 export function installRowAction({ slots, render }: RowActionMount): () => void {
   if (typeof slots.entries !== 'function') return () => {}
@@ -160,7 +162,7 @@ export function installRowAction({ slots, render }: RowActionMount): () => void 
     return true
   }
 
-  /** Move the slot's ledger version once, so mounted outlets read the new identity. */
+  /** Move the slot's ledger version once, so mounted outlets read the current identity. */
   const tick = (): void => {
     if (typeof slots.register !== 'function') return
     try {
@@ -185,10 +187,18 @@ export function installRowAction({ slots, render }: RowActionMount): () => void 
   const unsubscribe = slots.subscribe?.(CHAT_NODE_SLOT, sync)
   return () => {
     unsubscribe?.()
+    let restored = false
     for (const [entry, record] of taken) {
       // Restore only our own identity: a later takeover of the same entry stays.
-      if (entry.component === record.replacement) entry.component = record.original
+      if (entry.component === record.replacement) {
+        entry.component = record.original
+        restored = true
+      }
     }
     taken.clear()
+    // A mounted outlet holds the identity it last read; without this nudge the
+    // restored row would keep rendering the wrapper until an unrelated
+    // re-render (the locale revision it used to lean on).
+    if (restored) tick()
   }
 }
