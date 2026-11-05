@@ -1,11 +1,13 @@
 /**
  * dsh-rewind client half: the `/rewind` command decoration, the locale
- * registration, the mode popover it opens, and the visibility layer.
+ * registration, the mode popover it opens, the visibility layer, and the
+ * per-message rewind action.
  *
- * There is deliberately no per-message button here: the plugin registers no
- * conversation slot and embeds nothing into the chat DOM. The command
- * decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or its alias
- * `/undo`) open the harness's own popupSelect instead of executing; the
+ * The action lives in the Chat rows' own actions row: `mount.tsx` takes over
+ * the official user/steering renderer identity and injects one more child into
+ * that row, so nothing is portaled into or observed in the chat DOM. The
+ * command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or its
+ * alias `/undo`) open the harness's own popupSelect instead of executing; the
  * parameterized `@<seq>` form stays the execution channel, while the popover's
  * impact and candidate reads go over the host's exact `/api` routes. The
  * executed rewind and its composer refill live in `rewind-flow.ts`.
@@ -36,6 +38,8 @@ import {
 } from './candidates.ts'
 import { closePopover, openPopover, registerPreviewCall, registerComposerFocuser } from './popover.ts'
 import { installChatViewVisibility } from './visibility.ts'
+import { installRowAction, type RowAction, type SlotLedger } from './mount.tsx'
+import { rewindActionRenderer } from './action.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
 import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
@@ -466,6 +470,42 @@ export function apply(ctx: ClientContext): void {
     }
     for (const name of ['rewind', 'undo'] as const) {
       yield commandUi.decorate({ name, ...rewindPopupSpec })
+    }
+
+    // ---- per-message rewind action (a child of the official actions row) ----
+    /** A direct-subagent session refuses every generic Session RPC: no action there. */
+    const canRewindIn = (sessionId: string): boolean => {
+      const face = sessionOf(sessionId)
+      return face !== undefined && !isRewindInertSession(face.getSnapshot())
+    }
+
+    /** Open the mode popover for one row, anchored at its action button. */
+    const openRewindFor = (row: RowAction, anchor: HTMLElement): void => {
+      const face = sessionOf(row.sessionId)
+      if (face === undefined) {
+        rewindLog.warn('action', 'rewind action clicked with no session binding')
+        return
+      }
+      openPopover({
+        session: face,
+        seq: row.seq,
+        time: row.time,
+        preview: row.text,
+        anchor,
+        t,
+        onRewind: mode => { void runRewindAndFill(face, row.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
+      })
+    }
+
+    // A failing mount costs the action only: the decoration and the visibility
+    // layer above must not share its fate.
+    try {
+      yield installRowAction({
+        slots: ctx.slots as unknown as SlotLedger,
+        render: rewindActionRenderer(t, canRewindIn, openRewindFor),
+      })
+    } catch (error) {
+      rewindLog.error('action', 'rewind action mount failed', error)
     }
 
     /** The composer's text-holding element: the `contenteditable` div. */

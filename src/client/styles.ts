@@ -1,13 +1,15 @@
 /**
  * Client plugin styling: one injected `<style>` tag (scoped class names),
- * following the dsh design tokens (`--dsw-*`) so the mode popover, the failure
- * toast and the settings card blend with the conversation chrome.
+ * following the dsh design tokens (`--dsw-*`) so the per-message action, the
+ * mode popover, the failure toast and the settings card blend with the
+ * conversation chrome.
  *
  * @module dsh-rewind/client/styles
  */
 
 /** Class names shared between the injected DOM and the stylesheet. */
 export const CLASS = {
+  action: 'dsh-rewind-action',
   popover: 'dsh-rewind-popover',
   popoverTitle: 'dsh-rewind-popover-title',
   popoverTarget: 'dsh-rewind-popover-target',
@@ -24,6 +26,33 @@ export const CLASS = {
 
 /** One injected stylesheet (scoped under `.dsh-rewind-*`). */
 export const STYLE = `
+/* The official action chrome, value for value: the action is Copy's peer in the
+   same 28px row, so a different box, glyph scale, or resting tier would read as
+   a different kind of control. */
+.dsh-rewind-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  padding: 6px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 8px);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+.dsh-rewind-action svg {
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
+}
+@media (hover: hover) {
+  .dsh-rewind-action:hover {
+    background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-secondary);
+  }
+}
+
 .dsh-rewind-popover {
   position: fixed;
   z-index: 1100;

@@ -2,6 +2,8 @@
 
 /** English dictionary — the canonical key set (the harness fallback language). */
 export const en = {
+  'button.title': 'Rewind',
+  'button.aria': 'Rewind to this message',
   'popover.title': 'Rewind to this message',
   'popover.noText': '(no text)',
   'popover.chat': 'Rewind conversation only',
@@ -48,6 +50,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** Chinese dictionary, checked complete against the en key set. */
 export const zh: Record<RewindKey, string> = {
+  'button.title': '回退',
+  'button.aria': '回退到此消息',
   'popover.title': '回退到这条消息',
   'popover.noText': '（无文本）',
   'popover.chat': '仅回退对话',
@@ -84,6 +88,8 @@ export const zh: Record<RewindKey, string> = {
 
 /** Japanese dictionary, checked complete against the en key set. */
 export const ja: Record<RewindKey, string> = {
+  'button.title': '巻き戻し',
+  'button.aria': 'このメッセージまで巻き戻す',
   'popover.title': 'このメッセージまで巻き戻す',
   'popover.noText': '（テキストなし）',
   'popover.chat': '会話のみ巻き戻す',
@@ -120,6 +126,8 @@ export const ja: Record<RewindKey, string> = {
 
 /** Spanish dictionary, checked complete against the en key set. */
 export const es: Record<RewindKey, string> = {
+  'button.title': 'Rebobinar',
+  'button.aria': 'Rebobinar hasta este mensaje',
   'popover.title': 'Rebobinar hasta este mensaje',
   'popover.noText': '(sin texto)',
   'popover.chat': 'Rebobinar solo la conversación',
@@ -156,6 +164,8 @@ export const es: Record<RewindKey, string> = {
 
 /** French dictionary, checked complete against the en key set. */
 export const fr: Record<RewindKey, string> = {
+  'button.title': 'Rembobiner',
+  'button.aria': 'Rembobiner jusqu’à ce message',
   'popover.title': 'Rembobiner jusqu’à ce message',
   'popover.noText': '(sans texte)',
   'popover.chat': 'Rembobiner la conversation uniquement',
@@ -192,6 +202,8 @@ export const fr: Record<RewindKey, string> = {
 
 /** German dictionary, checked complete against the en key set. */
 export const de: Record<RewindKey, string> = {
+  'button.title': 'Zurückspulen',
+  'button.aria': 'Bis zu dieser Nachricht zurückspulen',
   'popover.title': 'Bis zu dieser Nachricht zurückspulen',
   'popover.noText': '(kein Text)',
   'popover.chat': 'Nur Unterhaltung zurückspulen',
@@ -228,6 +240,8 @@ export const de: Record<RewindKey, string> = {
 
 /** Russian dictionary, checked complete against the en key set. */
 export const ru: Record<RewindKey, string> = {
+  'button.title': 'Откатить',
+  'button.aria': 'Откатить к этому сообщению',
   'popover.title': 'Откатить к этому сообщению',
   'popover.noText': '(нет текста)',
   'popover.chat': 'Откатить только беседу',
@@ -264,6 +278,8 @@ export const ru: Record<RewindKey, string> = {
 
 /** Brazilian Portuguese dictionary, checked complete against the en key set. */
 export const pt: Record<RewindKey, string> = {
+  'button.title': 'Rebobinar',
+  'button.aria': 'Rebobinar até esta mensagem',
   'popover.title': 'Rebobinar até esta mensagem',
   'popover.noText': '(sem texto)',
   'popover.chat': 'Rebobinar apenas a conversa',

@@ -95,13 +95,34 @@ describe('floating surfaces pair the menu fill with the shared filter', () => {
   })
 })
 
-describe('no injected per-message button surface', () => {
-  // Step 1 baseline: the plugin embeds nothing into the chat rows, so the
-  // injected stylesheet must not carry the old global button rule. An A2 button
-  // is a React child of the official actions row and inherits that row's
-  // styling; it must not come back as a global overlay class.
-  it('ships no .dsh-rewind-btn rule', () => {
-    expect(allRules().has('.dsh-rewind-btn')).toBe(false)
+describe('per-message action button', () => {
+  // The action sits in the same flex row as Copy, so it must copy the row's own
+  // action chrome — 28px box (font-delta scaled), 15px glyph, tertiary resting
+  // tier — and the old global overlay class must not come back.
+  it('matches the official action chrome and ships no legacy overlay rule', () => {
+    const rules = allRules()
+    expect(rules.has('.dsh-rewind-btn')).toBe(false)
+    expect(rules.get('.dsh-rewind-action')).toEqual({
+      display: 'inline-flex',
+      'align-items': 'center',
+      'justify-content': 'center',
+      width: 'calc(28px + var(--dsh-content-font-delta, 0px))',
+      height: 'calc(28px + var(--dsh-content-font-delta, 0px))',
+      padding: '6px',
+      border: 'none',
+      'border-radius': 'var(--dsw-radius-sm, 8px)',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-tertiary)',
+      cursor: 'pointer',
+    })
+    expect(rules.get('.dsh-rewind-action svg')).toEqual({
+      width: 'calc(15px + var(--dsh-content-font-delta, 0px))',
+      height: 'calc(15px + var(--dsh-content-font-delta, 0px))',
+    })
+    expect(rules.get('.dsh-rewind-action:hover')).toEqual({
+      background: 'var(--dsw-alias-interactive-bg-hover)',
+      color: 'var(--dsw-alias-label-secondary)',
+    })
   })
 })
 
