@@ -11,7 +11,7 @@
  *
  * Values accepted (empty/unset = off): `dsh-rewind*` — every namespace;
  * `dsh-rewind:refill` — one subsystem (exact match);
- * `dsh-rewind:refill,dsh-rewind:portals` — several (comma-separated).
+ * `dsh-rewind:refill,dsh-rewind:visibility` — several (comma-separated).
  *
  * @module dsh-rewind/client/log
  */

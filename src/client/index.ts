@@ -1,23 +1,27 @@
 /**
  * dsh-rewind client half: the `/rewind` command decoration, the locale
- * registration, and the session-scoped portal bridge that renders the
- * per-message ↶ rewind button (`portals.tsx` owns the button and the popover).
+ * registration, the mode popover it opens, the visibility layer, and the
+ * per-message rewind action.
  *
- * The button registers through the harness's
- * `conversation.session.header.actions` slot — a typed structural registration,
- * so the plugin imports no conversation UI types and survives harness drift.
- * The command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or
- * its alias `/undo`) open the harness's own popupSelect instead of executing;
- * the parameterized `@<seq>` form stays the execution channel, while the
- * popover's impact and candidate reads go over the host's exact `/api` routes.
+ * A durable message's action lives in the Chat row's own actions row: `mount.tsx`
+ * takes over the official user/steering renderer identity and injects one more
+ * child into that row. Unclaimed (pending) steering input has no such seat, so
+ * `pending-mount.tsx` attaches the retract action through the only DOM path the
+ * plugin keeps. The
+ * command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or its
+ * alias `/undo`) open the harness's own popupSelect instead of executing; the
+ * parameterized `@<seq>` form stays the execution channel, while the popover's
+ * impact and candidate reads go over the host's exact `/api` routes. The
+ * executed rewind and its composer refill live in `rewind-flow.ts`.
  *
  * @module dsh-rewind/client
  */
 
 import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
-import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import type { CommandDecoration, CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
+// Type-only: the React element the slot component returns (the settings card).
+import type { ReactNode } from 'react'
 // Type-only: the per-entry configuration form (`ctx.configForms`) the settings
 // card stages over; the form model itself is the harness's own.
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -35,7 +39,10 @@ import {
 } from './candidates.ts'
 import { closePopover, openPopover, registerPreviewCall, registerComposerFocuser } from './popover.ts'
 import { installChatViewVisibility } from './visibility.ts'
-import { createRewindBridge, isRewindInertSession, runRewindAndFill, writeComposer, type SlotsLike } from './portals.tsx'
+import { installRowAction, type RowAction, type SlotLedger } from './mount.tsx'
+import { rewindActionRenderer } from './action.tsx'
+import { createPendingBridge } from './pending-mount.tsx'
+import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
 import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { rewindLog } from './log.ts'
@@ -64,6 +71,9 @@ export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms'
 
 const NS = 'rewind'
 
+/** The harness-declared session slot the pending layer mounts through (renders portals only). */
+const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
+
 /** The complete durable image reference the session face's image read verifies. */
 type DurableImageRef = Parameters<SessionFace['readAttachment']>[0]
 
@@ -89,11 +99,6 @@ interface UiConversationLike {
 interface SessionInputResolverLike {
   for(actx: unknown): { setDraft(text: string): void; focus(): void }
 }
-
-/**
- * The slot the session-scoped rewind bridge registers into (harness-declared).
- */
-const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
 /**
  * The composer's text surface: the Lexical `contenteditable` div
@@ -123,8 +128,36 @@ export interface ClientContext {
 }
 
 /**
- * Client plugin body: command decoration + parameterized guard + locale + the
- * portal bridge.
+ * Structural face of the runtime slot service. The client context types
+ * `slots` as unknown, so the plugin declares the subset it uses — the
+ * configuration card registration. Typed locally so the plugin imports no
+ * slot package and survives harness version drift.
+ */
+interface SlotsLike {
+  inject(key: string, install: () => () => void): () => void
+  /**
+   * One slot registration. `Face` is the injected business face the renderer
+   * decomposes (its `hooks` compartment is rebound as a `use<Name>` selector
+   * hook); `Props` is the COMPOSED props a component receives — the slot's
+   * runtime owner share, the locale seat, and that face — which is what the
+   * component is typed against, never the face alone.
+   */
+  register<P, Face = P>(
+    entry: {
+      readonly name: string
+      readonly id?: string
+      readonly order?: number
+      readonly key?: string
+      readonly locale?: string
+      readonly inject?: () => Face
+    },
+    component: (props: P) => ReactNode,
+  ): () => void
+}
+
+/**
+ * Client plugin body: command decoration + parameterized guard + locale +
+ * visibility + the settings card.
  * @param ctx - client root context carrying `slots`, `sessions`, `locale` and `commandUi`.
  */
 export function apply(ctx: ClientContext): void {
@@ -139,7 +172,6 @@ export function apply(ctx: ClientContext): void {
     const t = ctx.locale.bind(NS)
 
     registerPreviewCall(previewOverApi)
-    yield () => { registerPreviewCall(null) }
 
     const style = document.createElement('style')
     // The loader row id (the harness matches its owned-style fallback by
@@ -153,11 +185,10 @@ export function apply(ctx: ClientContext): void {
     // the builder receives them as `visibility: 'hidden'`.
     installChatViewVisibility(ctx)
 
-    // ---- rewind portals: session-scoped React mount ----
-    // Capabilities handed to the portal bridge. `sessionOf` resolves a
-    // session id to its live face; `isMainViewSession` is the session switch
-    // check the composer refill needs (fill only the session the rewind
-    // actually happened in).
+    // ---- shared session/chat capabilities for the text flow ----
+    // `sessionOf` resolves a session id to its live face; `isMainViewSession`
+    // is the session switch check the composer refill needs (fill only the
+    // session the rewind actually happened in).
     const sessionOf = (sessionId: string): SessionFace | undefined =>
       ctx.sessions.binding(sessionId as SessionId)?.session
     /**
@@ -168,6 +199,7 @@ export function apply(ctx: ClientContext): void {
      */
     const isMainViewSession = (sessionId: string): boolean =>
       (ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0
+    /** Locale switches re-render the pending layer's portaled labels. */
     const subscribeLocale = (cb: () => void): (() => void) => ctx.locale.subscribe(cb)
 
     /**
@@ -336,16 +368,6 @@ export function apply(ctx: ClientContext): void {
     )
 
     const slots = ctx.slots as unknown as SlotsLike
-    yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
-      {
-        name: HEADER_ACTIONS_SLOT,
-        // A distinct list-entry id keeps the bridge from shadowing any other
-        // header action; the entry renders portals only, never header UI.
-        id: 'dsh-rewind-portals',
-        order: 1000,
-      },
-      createRewindBridge({ sessionOf, chatOf, isMainViewSession, watchChat, setComposerText, restoreImages, t, subscribeLocale }),
-    ))
 
     // ---- plugin configuration form (sidebar Plugins page) ----
     // The card is this bundle's own configuration page: it registers under
@@ -380,7 +402,7 @@ export function apply(ctx: ClientContext): void {
     // executing the command: the harness-native "bare invocation opens a
     // picker" mechanism (CommandDecoration, see the ui-commands contract).
     // The plugin never re-implements a menu; picking a candidate continues
-    // the SAME flow as the ↶ button (the mode popover below).
+    // through the mode popover below.
     const commandUi = ctx.get('commandUi') as CommandUiContract
 
 
@@ -410,7 +432,7 @@ export function apply(ctx: ClientContext): void {
     // second host round-trip.
     const hostCandidatesCache = new Map<string, readonly RewindCandidate[]>()
 
-    /** The composer card the mode popover anchors to (the text flow has no button). */
+    /** The composer card the mode popover anchors to. */
     const composerAnchor = (): HTMLElement => {
       const surface = composerSurface()
       const card = surface?.closest<HTMLElement>('[data-composer-card]')
@@ -456,6 +478,54 @@ export function apply(ctx: ClientContext): void {
       yield commandUi.decorate({ name, ...rewindPopupSpec })
     }
 
+    // ---- per-message rewind action (a child of the official actions row) ----
+    /** A direct-subagent session refuses every generic Session RPC: no action there. */
+    const canRewindIn = (sessionId: string): boolean => {
+      const face = sessionOf(sessionId)
+      return face !== undefined && !isRewindInertSession(face.getSnapshot())
+    }
+
+    /** Open the mode popover for one row, anchored at its action button. */
+    const openRewindFor = (row: RowAction, anchor: HTMLElement): void => {
+      const face = sessionOf(row.sessionId)
+      if (face === undefined) {
+        rewindLog.warn('action', 'rewind action clicked with no session binding')
+        return
+      }
+      openPopover({
+        session: face,
+        seq: row.seq,
+        time: row.time,
+        preview: row.text,
+        anchor,
+        t,
+        onRewind: mode => { void runRewindAndFill(face, row.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
+      })
+    }
+
+    // A failing mount costs the action only: the decoration and the visibility
+    // layer above must not share its fate.
+    try {
+      yield installRowAction({
+        slots: ctx.slots as unknown as SlotLedger,
+        render: rewindActionRenderer(t, canRewindIn, openRewindFor),
+      })
+    } catch (error) {
+      rewindLog.error('action', 'rewind action mount failed', error)
+    }
+
+    // ---- pending (unclaimed) steering retract ----
+    // A zero-UI session-scoped anchor; the layer works only while the inbox
+    // holds steering rows.
+    try {
+      yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
+        { name: HEADER_ACTIONS_SLOT, id: 'dsh-rewind-pending', order: 1000 },
+        createPendingBridge({ sessionOf, setComposerText, restoreImages, t, subscribeLocale }),
+      ))
+    } catch (error) {
+      rewindLog.error('retract', 'pending retract mount failed', error)
+    }
+
     /** The composer's text-holding element: the `contenteditable` div. */
     const composerSurface = (): HTMLElement | null =>
       document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
@@ -465,9 +535,9 @@ export function apply(ctx: ClientContext): void {
       // plain DOM plus document capture-phase key listeners, so it must be
       // closed with this fiber: otherwise the node and the key steal (↑/↓/Esc
       // routed away from the composer) outlive the unload, and a later remount
-      // would overwrite the singleton reference and leak both for good.
+      // would overwrite the singleton reference and leak both for good. The
+      // harness reaps the styled marker itself (owned-style fallback).
       closePopover()
-      style.remove()
     }
   }, 'dsh-rewind client lifecycle')
 }

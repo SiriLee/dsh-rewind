@@ -1,5 +1,6 @@
 /**
- * Guards for the injected stylesheet: the ↶ button's geometry and the cleanup
+ * Guards for the injected stylesheet: the floating-surface rules the plugin
+ * still owns (mode popover, failure toast, keyboard focus) and the cleanup
  * card's own CSS — the shared form frame (its unavailable, read-only, save, and
  * failure lines included) and the numeric field are the harness's components
  * now, so this pins only the block the card still owns — the auto-cleanup toggle
@@ -94,18 +95,33 @@ describe('floating surfaces pair the menu fill with the shared filter', () => {
   })
 })
 
-describe('action button geometry', () => {
-  // The ↶ button is a sibling of the harness IconActions buttons and scales by
-  // the same content-font delta.
-  it('mirrors the IconActions box and glyph, delta included', () => {
+describe('per-message action button', () => {
+  // The action sits in the same flex row as Copy, so it must copy the row's own
+  // action chrome — 28px box (font-delta scaled), 15px glyph, tertiary resting
+  // tier — and the old global overlay class must not come back.
+  it('matches the official action chrome and ships no legacy overlay rule', () => {
     const rules = allRules()
-    expect(rules.get('.dsh-rewind-btn')).toMatchObject({
+    expect(rules.has('.dsh-rewind-btn')).toBe(false)
+    expect(rules.get('.dsh-rewind-action')).toEqual({
+      display: 'inline-flex',
+      'align-items': 'center',
+      'justify-content': 'center',
       width: 'calc(28px + var(--dsh-content-font-delta, 0px))',
       height: 'calc(28px + var(--dsh-content-font-delta, 0px))',
+      padding: '6px',
+      border: 'none',
+      'border-radius': 'var(--dsw-radius-sm, 8px)',
+      background: 'transparent',
+      color: 'var(--dsw-alias-label-tertiary)',
+      cursor: 'pointer',
     })
-    expect(rules.get('.dsh-rewind-btn svg')).toEqual({
+    expect(rules.get('.dsh-rewind-action svg')).toEqual({
       width: 'calc(15px + var(--dsh-content-font-delta, 0px))',
       height: 'calc(15px + var(--dsh-content-font-delta, 0px))',
+    })
+    expect(rules.get('.dsh-rewind-action:hover')).toEqual({
+      background: 'var(--dsw-alias-interactive-bg-hover)',
+      color: 'var(--dsw-alias-label-secondary)',
     })
   })
 })

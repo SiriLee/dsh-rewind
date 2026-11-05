@@ -906,9 +906,9 @@ async function handleRewind(
   if (input === '') {
     // A bare `/rewind` in the composer is taken by the client's command
     // decoration (see src/client/index.ts), which opens the candidate picker
-    // instead of running this host path; the button likewise drives this
-    // parameterized path with an explicit `@seq` target. The bare form below
-    // is a defensive fallback for non-composer callers: it withdraws the most
+    // instead of running this host path; the UI flows drive this parameterized
+    // path with an explicit `@seq` target. The bare form below is a defensive
+    // fallback for non-composer callers: it withdraws the most
     // recent user message (time-travel back one turn; the text is offered
     // back in the composer).
     const candidates = listRewindCandidates(session.snapshotEvents(), session.surface.nodes, 1)

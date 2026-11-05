@@ -1,9 +1,9 @@
 /**
  * Unit tests for the pending-message matching contract
  * (src/client/pending.ts): pairing the rendered pending-steering bubble rows
- * with the session's `next-step` inbox rows (the alpha.2 replacement for the
- * removed `queue` mirror), with per-row safe degradation — one bad row never
- * takes down the others — plus the inbox-row derivation the retract path reads.
+ * with the session's `next-step` inbox rows, with per-row safe degradation —
+ * one bad row never takes down the others — plus the inbox-row derivation the
+ * retract path reads.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -17,7 +17,7 @@ import {
 
 /** A steering item fixture (as `steeringItemsOf` would derive it). */
 function item(id: string, text: string | null, attachments = 0): PendingSteeringItem {
-  return { id, text, attachments, images: [], preview: text ?? '' }
+  return { id, text, attachments, images: [] }
 }
 
 /** A rendered bubble row fixture (text = bubble text, actions excluded). */
@@ -128,9 +128,9 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
     expect(steeringItemsOf([])).toEqual([])
   })
 
-  it('joins every text block into the editable text and the preview', () => {
+  it('joins every text block into the editable text', () => {
     expect(steeringItemsOf([textRow('a', 'hello ', 'world')]))
-      .toEqual([{ id: 'a', text: 'hello world', attachments: 0, images: [], preview: 'hello world' }])
+      .toEqual([{ id: 'a', text: 'hello world', attachments: 0, images: [] }])
   })
 
   it('drops injected (non-user) rows — the host called those context, not steering', () => {
@@ -151,14 +151,14 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
 
   it('counts attachments and keeps the text of a message that carries both', () => {
     const image: InboxMessageLike = { id: 'img', source: { kind: 'user' }, content: [{ type: 'image' }] }
-    expect(steeringItemsOf([image])).toEqual([{ id: 'img', text: null, attachments: 1, images: [], preview: '' }])
+    expect(steeringItemsOf([image])).toEqual([{ id: 'img', text: null, attachments: 1, images: [] }])
     const mixed: InboxMessageLike = {
       id: 'mixed',
       source: { kind: 'user' },
       content: [{ type: 'text', text: 'look' }, { type: 'image' }, { type: 'file' }],
     }
-    expect(steeringItemsOf([mixed])).toEqual([{ id: 'mixed', text: 'look', attachments: 2, images: [], preview: 'look' }])
-    expect(steeringItemsOf([textRow('plain', 'hi')])).toEqual([{ id: 'plain', text: 'hi', attachments: 0, images: [], preview: 'hi' }])
+    expect(steeringItemsOf([mixed])).toEqual([{ id: 'mixed', text: 'look', attachments: 2, images: [] }])
+    expect(steeringItemsOf([textRow('plain', 'hi')])).toEqual([{ id: 'plain', text: 'hi', attachments: 0, images: [] }])
   })
 
   it('extracts image references from the inbox content', () => {
@@ -190,21 +190,8 @@ describe('steeringItemsOf (inbox next-step derivation)', () => {
     expect(steeringItemsOf([mixed])[0]!.images.map(image => image.attachmentId)).toEqual(['a1', 'a2'])
   })
 
-  it('collapses whitespace in the preview', () => {
-    const row: InboxMessageLike = { id: 'ws', source: { kind: 'user' }, content: [{ type: 'text', text: '  a\n\n b   c ' }] }
-    expect(steeringItemsOf([row])).toEqual([{ id: 'ws', text: '  a\n\n b   c ', attachments: 0, images: [], preview: 'a b c' }])
-  })
-
-  it('truncates the preview at 200 code points, counting code points not units', () => {
-    const long = '🙂'.repeat(201)
-    const [item] = steeringItemsOf([textRow('long', long)])
-    expect(Array.from(item!.preview)).toHaveLength(201) // 200 + the ellipsis
-    expect(item!.preview.endsWith('…')).toBe(true)
-    expect(item!.preview.startsWith('🙂'.repeat(200))).toBe(true)
-  })
-
-  it('leaves the preview empty for a message with no text block', () => {
+  it('keeps null text for a message with no text block', () => {
     const row: InboxMessageLike = { id: 'tool', source: { kind: 'user' }, content: [{ type: 'tool-call' }] }
-    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, attachments: 1, images: [], preview: '' }])
+    expect(steeringItemsOf([row])).toEqual([{ id: 'tool', text: null, attachments: 1, images: [] }])
   })
 })

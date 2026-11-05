@@ -34,17 +34,19 @@ console filter:
 | `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
 | `refill` | The composer refill after a rewind (command/wait/refill throws, a rejected or unmatched command, an outcome that never settles) |
 | `preview` | The preview / candidate host queries behind the mode popover and the `/rewind` picker (request failure, invalid result, or timeout) |
-| `portals` | Per-message button mount issues (e.g. no session binding) |
+| `action` | Per-message action mount and click issues (e.g. no session binding) |
 | `retract` | The pending-steering retract path (the remove lost the race, or the remove threw) |
+| `visibility` | The Chat-snapshot visibility wrapper (install probe, subscription, or rebuild failures) |
 | `settings` | The snapshot-cleanup settings card |
 
 ## Verbose switch
 
 The `info`/`debug` levels are gated by `localStorage['dsh-rewind.debug']`, read
-once per call and filtered by namespace. Two gated lines remain: the `boot`
-startup identity line and the `retract` lost-race line. Both are deliberately
-**off** by default (a normal user's console stays clean, and neither is an
-anomaly), so a reporter enables the scope to see them:
+once per call and filtered by namespace. Three gated lines remain: the `boot`
+startup identity line, the `visibility` install line, and the `retract` lost-race
+line. All three are deliberately **off** by default (a normal user's console
+stays clean, and none is an anomaly), so a reporter enables the scope to see
+them:
 
 ```js
 // Just the startup identity line.

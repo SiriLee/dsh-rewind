@@ -1,10 +1,10 @@
 /**
  * @vitest-environment jsdom
  *
- * Composer-refill probes for the durable rewind path (`runRewindAndFill` in
- * `portals.tsx`): the empty-draft guard (a draft the user is editing must not
- * be clobbered, matching `retractPending`), the narrowed contract that a
- * normal rewind emits no verbose diagnostics, and the teardown-safety rewrite
+ * Composer-refill probes for the rewind path (`runRewindAndFill` in
+ * `rewind-flow.ts`): the empty-draft guard (a draft the user is editing must
+ * not be clobbered), the narrowed contract that a normal rewind emits no
+ * verbose diagnostics, and the teardown-safety rewrite
  * (a `session.command` throw becomes a `warn` on the
  * `void runRewindAndFill(...)` call site instead of a silent unhandled
  * rejection). The session face and chat snapshot are hand fakes.
@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { ChatConversationViewNode } from '../src/client/hidden.ts'
-import { runRewindAndFill } from '../src/client/portals.tsx'
+import { runRewindAndFill } from '../src/client/rewind-flow.ts'
 import { ENGINE_COMMAND, type ChatOf, type ChatWatch, type HiddenChat } from '../src/client/hidden.ts'
 
 const TARGET = 5

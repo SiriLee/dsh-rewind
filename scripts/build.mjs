@@ -10,7 +10,7 @@
  *                   `window.__ModuleLoader__.load({ id, factory })`, the
  *                   closure-factory format every `dsh.client` package's
  *                   `./client` export must use. The client half is plain DOM
- *                   plus a React portal bridge: `react`, `react-dom` and
+ *                   plus React (the settings card): `react` and
  *                   `react/jsx-runtime` stay external so the injected
  *                   `require` resolves them from the harness web profile's
  *                   module graph (the profile ships React 18).
@@ -80,13 +80,13 @@ await build({
   platform: 'browser',
   target: 'es2020',
   bundle: true,
-  // React and the harness's client UI primitives stay external: the web
-  // profile's frozen module table (PLATFORM_MODULES) resolves these from the
-  // harness installation — React 18 plus the shell's own primitives instance,
-  // whose styles the shell has already injected. `dsh.client.external` needs no
-  // declaration for a baseline module: it only lists requests BEYOND that
-  // baseline.
-  external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/dsh-client-ui-primitives'],
+  // React (with react-dom, for the pending layer's portal) and the harness's
+  // client UI primitives stay external: the web profile's frozen module table
+  // (PLATFORM_MODULES) resolves these from the harness installation — React 18
+  // plus the shell's own primitives instance, whose styles the shell has already
+  // injected. `dsh.client.external` needs no declaration for a baseline module:
+  // it only lists requests BEYOND that baseline.
+  external: ['react', 'react/jsx-runtime', 'react-dom', '@deepseek-ai/dsh-client-ui-primitives'],
   jsx: 'automatic',
   sourcemap: false,
   define: {

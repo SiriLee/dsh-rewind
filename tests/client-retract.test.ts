@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  *
- * Pending-retract probes (`retractPending` in `portals.tsx`): withdrawing an
+ * Pending-retract probes (`retractPending` in `retract.ts`): withdrawing an
  * unread steering message must NOT stop the run (SiriLee/dsh-rewind#27), must
  * remove the target and its steering future through `updateQueue`, and must
  * restore its own images and text only when the target was actually removed.
@@ -10,7 +10,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-import { retractPending } from '../src/client/portals.tsx'
+import { retractPending } from '../src/client/retract.ts'
 
 /** One inbox image reference (the fields the retract reads). */
 interface ImageRef {
