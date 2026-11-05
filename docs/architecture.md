@@ -23,12 +23,18 @@ src/rewind.ts           pure planning: target resolution, surface range, candida
 src/snapshot.ts         checkpoint store: before-backups, restore/preview, bounded prune
 src/snapshot-cleanup.ts cleanup policy + config persistence + auto-sweep throttle
 src/locales.ts          host i18n (t() renderer, HostKey)
-src/client/index.ts     client plugin: /rewind command decoration + per-message ↶ button portals
-src/client/popover.ts   mode-selection popover (both-mode impact confirm)
+src/client/index.ts     client entry: command decoration, mounts, locale, teardown
+src/client/action.tsx   the ↶ button both mount paths share
+src/client/mount.tsx    durable-row action: takes over the user/steering renderer
+src/client/pending-mount.tsx  unclaimed-steering retract layer
+src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
+src/client/retract.ts   pending retract: queue removal + composer refill
+src/client/rewind-flow.ts  executed rewind + composer refill
+src/client/popover.ts   mode-selection popover, plus the pending-retract confirm
+src/client/visibility.ts  snapshot-level hidden span (wraps the chat builder)
 src/client/hidden.ts    Chat-snapshot readers and executed-rewind cut derivation, pure
 src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
-src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
-src/client/portals.tsx  per-user-message ↶ button portals (React bridge into the actions row)
+src/client/host-api.ts  exact /api reads (preview, candidates)
 src/client/settings-card.tsx  settings form on the bundle page (plugins.bundle.config)
 src/client/locales.ts   per-language copy registry (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
@@ -38,7 +44,7 @@ scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader
 scripts/update-badge.mjs       regenerate the tests badge (CI only)
 scripts/verify-host.mjs end-to-end host verification (full check suite)
 scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)
-tests/                  vitest suites (rewind / snapshot / hidden / integration)
+tests/                  vitest suites (rewind / snapshot / client / hidden / integration)
 docs/                   maintainer docs: compat/, release/ subdirectories
 assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
@@ -56,12 +62,6 @@ Two dependency rules keep the design testable:
 2. **`snapshot.ts` is host-independent** — it talks to the disk through plain
    `node:fs` plus injected seams (`DiskProbe`, `DeleteFile`, a test-only
    `crash` hook), so the store is testable without the harness.
-
-The client never reads the DOM to derive rewind state; it consumes the host's
-machine channels. Withdrawn nodes leave the Chat flow through the builder's
-`visibility` input, and DOM coupling is limited to the structurally typed portal
-registration. The client entry exposes only the plugin (`apply` / `inject` /
-`name`).
 
 ## Rewind pipeline
 

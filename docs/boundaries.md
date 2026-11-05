@@ -29,7 +29,7 @@ Two rules keep it small:
 | File restore covers the agent's `write`/`edit` text edits and the tracked list, not the whole tree | By design | The before-write checkpoint model has this boundary; whole-tree history is a different product | Git, or the snapshot tool the project already uses |
 | A rewind is one-way; the session log is append-only | By design | Append-only is the audit and crash-safety foundation; the cut is a replace operation | DSH "branch into a new conversation" |
 | Adaptation follows upstream | By design | DSH is a developer preview; one adapted line keeps behavior stable and the gate meaningful | The release built for your DSH line |
-| Upstream seams are not compensated | Upstream constraint | A private seam is not a contract; a second contract breaks silently | An upstream fix; the plugin degrades in a bounded way |
+| Hiding and the message action join the official path on private seams | Upstream constraint | No public seat exists; only the host's own path keeps behavior and timing identical | An upstream seat; until then, the seams are re-checked per DSH line |
 | Subagent sessions are not tracked | By design | A subagent owns its own session; the parent has no authority over its files | The subagent's session, or Git |
 | No whole-tree snapshot, no git operations | By design | Workspace history already has an owner; refs and the index belong to the project's own workflows | Git |
 
@@ -129,21 +129,30 @@ admission gate would stop meaning much. Matching the plugin version to
 newest features need a DSH update; otherwise, stay on the older plugin release.
 The mechanics are in [release & DSH version alignment](release/release.md).
 
-## Upstream seams are not compensated
+## Private seams on the official path
 
-Where a needed input does not exist on the host's public surface — a per-message
-action slot for user rows, a derived visibility input for the chat flow, an
-in-process paged read, a supported file write-back primitive — the plugin takes
-the smallest workaround and stops there. It does not build a second contract on a
-private seam.
+Hiding a withdrawn span and offering a rewind action are the same problem: the
+host has no public seat for either. The plugin does not mirror them from the
+outside; it joins the path the harness itself uses — the Chat builder's
+`visibility` input for the span, and the row's own actions row for the action.
+The only cost is maintenance: the seams are re-checked when DSH moves, and the
+inventory lives in the [compatibility audit](compat/audit.md).
 
-The reason is the same each time: a private seam is not a contract. A
-compensation built on it is a contract the host does not know about; it breaks
-silently on the next line and has to be re-verified forever. So the plugin
-accepts a bounded degradation instead — no button rather than a button on the
-wrong row, a manual "Load earlier" rather than pagination that accounts for the
-hidden rows — and records the constraint, the ask, the stance and the
-user-visible effect in the [compatibility audit](compat/audit.md).
+The gain is that the plugin behaves like the official UI rather than beside it:
+
+- **Hiding takes the official path** — a withdrawn row leaves ordering, grouping
+  and turn navigation exactly as an official hidden row does, because it is one.
+- **The action shares the row's own controls** — a sibling of Copy in the same
+  commit, so it appears, hides and unmounts with it, with no timing of its own.
+- **The rest of the UI pays nothing** — the action is part of the render, not an
+  observation of it: no transcript-wide DOM scan, no re-query per change, so no
+  other part of the interface slows down or changes behavior. (The unread
+  steering bubble is the exception, but it is scanned only while one exists,
+  gated by the inbox.)
+
+Where there is no official path to join — an in-process paged read — the plugin
+does without: a manual "Load earlier" instead of pagination that accounts for
+the hidden rows.
 
 ## Subagents, and what "minimal" means
 
@@ -161,8 +170,8 @@ failure modes countable.
 
 - **By design** — inside the contract; the boundary is intentional and the need
   has an owner.
-- **Upstream constraint** — the host does not offer the input; the plugin chooses
-  not to compensate, and the item is recorded with an ask.
+- **Upstream constraint** — the host does not offer the input; the plugin joins
+  the nearest official path or does without, and the item is recorded.
 - **Defect** — behavior that contradicts this page, another documented contract,
   or the tests. It is fixed; a fixed defect is not kept as a boundary.
 

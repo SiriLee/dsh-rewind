@@ -28,10 +28,10 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | Host session log | `session.snapshotEvents()` |
 | Host working directory | `ctx.workingDirectory.ensure(agent)` — the base the fs tools resolve against |
 | Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
-| Client composer refill | `conversation.input.setDraft` facade |
+| Client composer refill | `conversation.input.setDraft` facade, else the `[data-composer-input]` DOM fill |
 | Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
-| Client seat-button DOM | structural locate of the copy-`<button>` container (`actionsContainerOf`) |
+| Client message action | chat-node entry takeover (row `actions` prop + `extraActions`); pending bubbles matched in the session DOM |
 
 **Admission.** DSH reads `engines.dsh` alone when a manifest declares it, and the
 `@deepseek-ai/dsh-*` peers only when it does not (both under `includePrerelease`), re-checking
@@ -66,11 +66,12 @@ so a cut is a visible user turn with the constant `(empty message)` placeholder
 no behavioral side effect. **Stance:** no compensation; old marker shapes stay
 readable.
 
-**U2 · Upstream inconsistency — maintenance watch, no wrong-row button.**
+**U2 · Upstream inconsistency — no user-row action slot; maintenance watch.**
 Assistant rows have `conversation.chat.assistant-actions`; user / steering rows
-have no counterpart. **Impact:** the ↶ button is located structurally in the
-row; a miss means no button, never a wrong-row button; the cost is watching this
-seam across upstream changes. **Stance:** keep the portal; reported upstream
+have no counterpart, and an unread steering bubble has no component at all.
+**Impact:** none on behavior — the durable action is injected through the row
+entry's own `component` and `actions` row, closer to the official path and
+lighter than a DOM pass. **Stance:** keep the takeover; reported upstream
 (Discussions #8345).
 
 **U3 · Upstream constraint — private seam, maintenance watch.**
@@ -136,9 +137,8 @@ no data loss. **Stance:** no host patch; manual paging.
 
 These are paths verified manually or not yet in CI, not known-broken behavior.
 
-- **Real browser rendering replay**: the visibility wrapper's logic is covered in tests, but the
-  rendered result is verified in a real engine manually, not in CI — and 0.2.2 reworked the
-  chat viewport and collapse motion, so re-check the hide + scroll behavior there.
+- **Real browser rendering**: the hidden span and the action's placement are tested at the
+  logic level only; the rendered result is verified manually in a real engine, not in CI.
 - **Workflow/jobs cancelled by a rewind**: statically confirmed only; log-only
   `job/registered` / `job/settled` carry the creating `toolCall` and a termination `cause`.
 - **Providers outside the verification dependencies**: `dsh-attachment-local` (so image refill is
