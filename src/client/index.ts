@@ -17,8 +17,7 @@
 
 import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { CommandDecoration, CommandUiContract, SelectOption } from '@deepseek-ai/dsh-client-ui-commands/client'
-import type { ClientSessionContext } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
+import type { CommandDecoration, CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
 // Type-only: the React element the slot component returns (the settings card).
 import type { ReactNode } from 'react'
 // Type-only: the per-entry configuration form (`ctx.configForms`) the settings

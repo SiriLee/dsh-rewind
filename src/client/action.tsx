@@ -9,7 +9,6 @@
  * @module dsh-rewind/client/action
  */
 
-import type { ReactNode } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { RewindKey } from './locales.ts'
 import type { RowAction, RowActionRenderer } from './mount.tsx'
