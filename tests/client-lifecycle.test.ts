@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { apply, type ClientContext } from '../src/client/index.ts'
 import { closePopover, openPopover, type PopoverOptions } from '../src/client/popover.ts'
+import { isRewindInertSession } from '../src/client/rewind-flow.ts'
 import { CLASS } from '../src/client/styles.ts'
 
 /** A disposer yielded by the plugin's lifecycle generator. */
@@ -148,14 +149,14 @@ afterEach(() => {
 })
 
 describe('client plugin lifecycle', () => {
-  it('registers the rewind surface and decorates both commands', () => {
+  it('registers only the configuration card and decorates both commands', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
-    expect(mounted.slotEntries.map(entry => entry.name))
-      .toEqual(['conversation.session.header.actions', 'plugins.bundle.config'])
-    expect(mounted.slotEntries[0]?.id).toBe('dsh-rewind-portals')
-    // The configuration form is keyed by the bundle's package name.
-    expect(mounted.slotEntries[1]?.key).toBe('dsh-rewind-plugin')
+    // Baseline: no conversation slot at all — the plugin injects no per-message
+    // UI; the only slot entry is the configuration card, keyed by the bundle's
+    // package name.
+    expect(mounted.slotEntries.map(entry => entry.name)).toEqual(['plugins.bundle.config'])
+    expect(mounted.slotEntries[0]?.key).toBe('dsh-rewind-plugin')
     expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
   })
@@ -192,5 +193,13 @@ describe('client plugin lifecycle', () => {
     // Exactly what a live disable runs.
     mounted.dispose()
     expect(document.querySelector(`.${CLASS.popover}`)).toBeNull()
+  })
+})
+
+describe('rewind-inert gate', () => {
+  it('treats a direct-subagent session as inert and a plain session as usable', () => {
+    expect(isRewindInertSession({ subagent: null })).toBe(false)
+    expect(isRewindInertSession({ subagent: undefined })).toBe(false)
+    expect(isRewindInertSession({ subagent: { address: { mode: 'continuable' } } })).toBe(true)
   })
 })

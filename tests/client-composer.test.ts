@@ -9,10 +9,10 @@
  *
  * Compilation: typechecked by `tsconfig.client-test.json` (client surface +
  * JSX), excluded from `tsconfig.json` (host, no JSX) — see the neighbouring
- * `client-dom.test.ts` comment.
+ * `client-refill.test.ts` comment.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { composerText, fillComposer, writeComposer } from '../src/client/portals.tsx'
+import { composerText, fillComposer, writeComposer } from '../src/client/rewind-flow.ts'
 
 /** Build the `[data-composer-input]` contenteditable div. */
 function addEditable(text = ''): HTMLElement {

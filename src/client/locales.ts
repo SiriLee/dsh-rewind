@@ -2,16 +2,8 @@
 
 /** English dictionary — the canonical key set (the harness fallback language). */
 export const en = {
-  'button.aria': 'Rewind to this message',
-  'button.title': 'Rewind',
-  'button.retract.aria': 'Rewind to this pending message',
-  'button.retract.title': 'Rewind',
   'popover.title': 'Rewind to this message',
   'popover.noText': '(no text)',
-  'popover.retract.title': 'Rewind to this pending message',
-  'popover.retract.target': 'Pending · {preview}',
-  'popover.retract.hint': 'Retracts this pending message and the ones after it, without interrupting the run',
-  'popover.retract.confirm': 'Confirm rewind',
   'popover.chat': 'Rewind conversation only',
   'popover.chat.hint': 'Context only; workspace untouched',
   'popover.both': 'Rewind conversation and files',
@@ -19,7 +11,6 @@ export const en = {
   'popover.checking': 'Checking for file changes…',
   'popover.noChanges': 'No restorable file changes',
   'popover.backupDisabled': 'Snapshots off; the restore may be incomplete',
-  'popover.cancel': 'Cancel',
   'popover.impact.loading': 'Fetching impact list…',
   'popover.impact.failed': 'Could not fetch the impact list: {message}',
   'popover.impact.none': 'No tracked file changes after the target; nothing to restore.',
@@ -57,16 +48,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** Chinese dictionary, checked complete against the en key set. */
 export const zh: Record<RewindKey, string> = {
-  'button.aria': '回退到此消息',
-  'button.title': '回退',
-  'button.retract.aria': '回退到此插话消息',
-  'button.retract.title': '回退',
   'popover.title': '回退到这条消息',
   'popover.noText': '（无文本）',
-  'popover.retract.title': '回退到这条插话消息',
-  'popover.retract.target': '插话中 · {preview}',
-  'popover.retract.hint': '撤回这条及之后的插话消息，不打断当前生成',
-  'popover.retract.confirm': '确认回退',
   'popover.chat': '仅回退对话',
   'popover.chat.hint': '仅回退上下文，不动工作区文件',
   'popover.both': '回退对话和文件',
@@ -74,7 +57,6 @@ export const zh: Record<RewindKey, string> = {
   'popover.checking': '正在检查文件变更…',
   'popover.noChanges': '无可还原的文件变更',
   'popover.backupDisabled': '快照备份已关闭，还原可能不充分',
-  'popover.cancel': '取消',
   'popover.impact.loading': '正在获取影响清单…',
   'popover.impact.failed': '无法获取影响清单：{message}',
   'popover.impact.none': '目标之后没有跟踪到的写类变更，无需还原文件。',
@@ -102,16 +84,8 @@ export const zh: Record<RewindKey, string> = {
 
 /** Japanese dictionary, checked complete against the en key set. */
 export const ja: Record<RewindKey, string> = {
-  'button.aria': 'このメッセージまで巻き戻す',
-  'button.title': '巻き戻し',
-  'button.retract.aria': 'この保留中のメッセージまで巻き戻す',
-  'button.retract.title': '巻き戻し',
   'popover.title': 'このメッセージまで巻き戻す',
   'popover.noText': '（テキストなし）',
-  'popover.retract.title': 'この保留中のメッセージまで巻き戻す',
-  'popover.retract.target': '保留中 · {preview}',
-  'popover.retract.hint': 'この保留中のメッセージとそれ以降を撤回します。現在の生成は中断しません',
-  'popover.retract.confirm': '巻き戻しを実行',
   'popover.chat': '会話のみ巻き戻す',
   'popover.chat.hint': 'コンテキストのみ対象で、ワークスペースは変更しません',
   'popover.both': '会話とファイルを巻き戻す',
@@ -119,7 +93,6 @@ export const ja: Record<RewindKey, string> = {
   'popover.checking': 'ファイルの変更を確認中…',
   'popover.noChanges': '復元できるファイルの変更はありません',
   'popover.backupDisabled': 'スナップショットが無効なため、復元が不完全になる可能性があります',
-  'popover.cancel': 'キャンセル',
   'popover.impact.loading': '影響リストを取得中…',
   'popover.impact.failed': '影響リストを取得できませんでした：{message}',
   'popover.impact.none': '対象より後に追跡されたファイル変更はありません。復元するものはありません。',
@@ -147,16 +120,8 @@ export const ja: Record<RewindKey, string> = {
 
 /** Spanish dictionary, checked complete against the en key set. */
 export const es: Record<RewindKey, string> = {
-  'button.aria': 'Rebobinar hasta este mensaje',
-  'button.title': 'Rebobinar',
-  'button.retract.aria': 'Rebobinar hasta este mensaje pendiente',
-  'button.retract.title': 'Rebobinar',
   'popover.title': 'Rebobinar hasta este mensaje',
   'popover.noText': '(sin texto)',
-  'popover.retract.title': 'Rebobinar hasta este mensaje pendiente',
-  'popover.retract.target': 'Pendiente · {preview}',
-  'popover.retract.hint': 'Retira este mensaje pendiente y los siguientes, sin interrumpir la ejecución',
-  'popover.retract.confirm': 'Confirmar rebobinado',
   'popover.chat': 'Rebobinar solo la conversación',
   'popover.chat.hint': 'Solo el contexto; el espacio de trabajo no se modifica',
   'popover.both': 'Rebobinar conversación y archivos',
@@ -164,7 +129,6 @@ export const es: Record<RewindKey, string> = {
   'popover.checking': 'Comprobando cambios en los archivos…',
   'popover.noChanges': 'No hay cambios de archivo restaurables',
   'popover.backupDisabled': 'Instantáneas desactivadas; la restauración puede ser incompleta',
-  'popover.cancel': 'Cancelar',
   'popover.impact.loading': 'Obteniendo la lista de impacto…',
   'popover.impact.failed': 'No se pudo obtener la lista de impacto: {message}',
   'popover.impact.none': 'No hay cambios de archivo rastreados después del destino; no hay nada que restaurar.',
@@ -192,16 +156,8 @@ export const es: Record<RewindKey, string> = {
 
 /** French dictionary, checked complete against the en key set. */
 export const fr: Record<RewindKey, string> = {
-  'button.aria': 'Rembobiner jusqu’à ce message',
-  'button.title': 'Rembobiner',
-  'button.retract.aria': 'Rembobiner jusqu’à ce message en attente',
-  'button.retract.title': 'Rembobiner',
   'popover.title': 'Rembobiner jusqu’à ce message',
   'popover.noText': '(sans texte)',
-  'popover.retract.title': 'Rembobiner jusqu’à ce message en attente',
-  'popover.retract.target': 'En attente · {preview}',
-  'popover.retract.hint': 'Retire ce message en attente et les suivants, sans interrompre l’exécution',
-  'popover.retract.confirm': 'Confirmer le rembobinage',
   'popover.chat': 'Rembobiner la conversation uniquement',
   'popover.chat.hint': 'Contexte uniquement ; l’espace de travail reste intact',
   'popover.both': 'Rembobiner la conversation et les fichiers',
@@ -209,7 +165,6 @@ export const fr: Record<RewindKey, string> = {
   'popover.checking': 'Vérification des modifications de fichiers…',
   'popover.noChanges': 'Aucune modification de fichier restaurable',
   'popover.backupDisabled': 'Instantanés désactivés ; la restauration peut être incomplète',
-  'popover.cancel': 'Annuler',
   'popover.impact.loading': 'Récupération de la liste d’impact…',
   'popover.impact.failed': 'Impossible de récupérer la liste d’impact : {message}',
   'popover.impact.none': 'Aucune modification de fichier suivie après la cible ; rien à restaurer.',
@@ -237,16 +192,8 @@ export const fr: Record<RewindKey, string> = {
 
 /** German dictionary, checked complete against the en key set. */
 export const de: Record<RewindKey, string> = {
-  'button.aria': 'Bis zu dieser Nachricht zurückspulen',
-  'button.title': 'Zurückspulen',
-  'button.retract.aria': 'Bis zu dieser ausstehenden Nachricht zurückspulen',
-  'button.retract.title': 'Zurückspulen',
   'popover.title': 'Bis zu dieser Nachricht zurückspulen',
   'popover.noText': '(kein Text)',
-  'popover.retract.title': 'Bis zu dieser ausstehenden Nachricht zurückspulen',
-  'popover.retract.target': 'Ausstehend · {preview}',
-  'popover.retract.hint': 'Zieht diese ausstehende Nachricht und alle folgenden zurück, ohne den Lauf zu unterbrechen',
-  'popover.retract.confirm': 'Zurückspulen bestätigen',
   'popover.chat': 'Nur Unterhaltung zurückspulen',
   'popover.chat.hint': 'Nur Kontext; Arbeitsbereich bleibt unverändert',
   'popover.both': 'Unterhaltung und Dateien zurückspulen',
@@ -254,7 +201,6 @@ export const de: Record<RewindKey, string> = {
   'popover.checking': 'Dateiänderungen werden geprüft…',
   'popover.noChanges': 'Keine wiederherstellbaren Dateiänderungen',
   'popover.backupDisabled': 'Snapshots deaktiviert; die Wiederherstellung kann unvollständig sein',
-  'popover.cancel': 'Abbrechen',
   'popover.impact.loading': 'Auswirkungsliste wird abgerufen…',
   'popover.impact.failed': 'Auswirkungsliste konnte nicht abgerufen werden: {message}',
   'popover.impact.none': 'Keine erfassten Dateiänderungen nach dem Ziel; nichts wiederherzustellen.',
@@ -282,16 +228,8 @@ export const de: Record<RewindKey, string> = {
 
 /** Russian dictionary, checked complete against the en key set. */
 export const ru: Record<RewindKey, string> = {
-  'button.aria': 'Откатить к этому сообщению',
-  'button.title': 'Откатить',
-  'button.retract.aria': 'Откатить к этому ожидающему сообщению',
-  'button.retract.title': 'Откатить',
   'popover.title': 'Откатить к этому сообщению',
   'popover.noText': '(нет текста)',
-  'popover.retract.title': 'Откатить к этому ожидающему сообщению',
-  'popover.retract.target': 'Ожидает · {preview}',
-  'popover.retract.hint': 'Отзывает это ожидающее сообщение и последующие, не прерывая выполнение',
-  'popover.retract.confirm': 'Подтвердить откат',
   'popover.chat': 'Откатить только беседу',
   'popover.chat.hint': 'Только контекст; рабочая область не изменяется',
   'popover.both': 'Откатить беседу и файлы',
@@ -299,7 +237,6 @@ export const ru: Record<RewindKey, string> = {
   'popover.checking': 'Проверка изменений файлов…',
   'popover.noChanges': 'Нет восстановимых изменений файлов',
   'popover.backupDisabled': 'Снимки отключены; восстановление может быть неполным',
-  'popover.cancel': 'Отмена',
   'popover.impact.loading': 'Получение списка влияния…',
   'popover.impact.failed': 'Не удалось получить список влияния: {message}',
   'popover.impact.none': 'После цели нет отслеживаемых изменений файлов; восстанавливать нечего.',
@@ -327,16 +264,8 @@ export const ru: Record<RewindKey, string> = {
 
 /** Brazilian Portuguese dictionary, checked complete against the en key set. */
 export const pt: Record<RewindKey, string> = {
-  'button.aria': 'Rebobinar até esta mensagem',
-  'button.title': 'Rebobinar',
-  'button.retract.aria': 'Rebobinar até esta mensagem pendente',
-  'button.retract.title': 'Rebobinar',
   'popover.title': 'Rebobinar até esta mensagem',
   'popover.noText': '(sem texto)',
-  'popover.retract.title': 'Rebobinar até esta mensagem pendente',
-  'popover.retract.target': 'Pendente · {preview}',
-  'popover.retract.hint': 'Retira esta mensagem pendente e as seguintes, sem interromper a execução',
-  'popover.retract.confirm': 'Confirmar rebobinamento',
   'popover.chat': 'Rebobinar apenas a conversa',
   'popover.chat.hint': 'Apenas o contexto; o espaço de trabalho não é alterado',
   'popover.both': 'Rebobinar conversa e arquivos',
@@ -344,7 +273,6 @@ export const pt: Record<RewindKey, string> = {
   'popover.checking': 'Verificando alterações nos arquivos…',
   'popover.noChanges': 'Nenhuma alteração de arquivo restaurável',
   'popover.backupDisabled': 'Snapshots desativados; a restauração pode ficar incompleta',
-  'popover.cancel': 'Cancelar',
   'popover.impact.loading': 'Obtendo a lista de impacto…',
   'popover.impact.failed': 'Não foi possível obter a lista de impacto: {message}',
   'popover.impact.none': 'Nenhuma alteração de arquivo rastreada após o destino; nada a restaurar.',

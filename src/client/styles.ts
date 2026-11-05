@@ -1,14 +1,13 @@
 /**
  * Client plugin styling: one injected `<style>` tag (scoped class names),
- * following the dsh design tokens (`--dsw-*`) so the button and popover blend
- * with the conversation chrome.
+ * following the dsh design tokens (`--dsw-*`) so the mode popover, the failure
+ * toast and the settings card blend with the conversation chrome.
  *
  * @module dsh-rewind/client/styles
  */
 
 /** Class names shared between the injected DOM and the stylesheet. */
 export const CLASS = {
-  button: 'dsh-rewind-btn',
   popover: 'dsh-rewind-popover',
   popoverTitle: 'dsh-rewind-popover-title',
   popoverTarget: 'dsh-rewind-popover-target',
@@ -23,49 +22,8 @@ export const CLASS = {
   guardHint: 'dsh-rewind-guard-hint',
 } as const
 
-/**
- * The ↶ glyph, drawn inline so the bundle stays dependency-free.
- *
- * Size follows the 0.1.7 product-icon set (15px, as the neighbouring copy/branch
- * actions in `MessageIconActions`). Stroke is 1.25 rather than upstream's
- * `Regular` 1: ↶ is a single open stroke next to a dense outline-plus-fill copy
- * glyph, so at 1 it reads thinned out. Rounded caps/joins stay — upstream keeps
- * them on curved artwork.
- */
-export const REWIND_ICON_SVG = [
-  '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">',
-  '  <path d="M6.5 2.5 2.5 6.5l4 4" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>',
-  '  <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>',
-  '</svg>',
-].join('')
-
 /** One injected stylesheet (scoped under `.dsh-rewind-*`). */
 export const STYLE = `
-.dsh-rewind-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  /* The neighbouring action buttons scale by this delta too. */
-  width: calc(28px + var(--dsh-content-font-delta, 0px));
-  height: calc(28px + var(--dsh-content-font-delta, 0px));
-  padding: 6px;
-  border: none;
-  border-radius: var(--dsw-radius-sm, 8px);
-  background: transparent;
-  color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
-}
-.dsh-rewind-btn svg {
-  width: calc(15px + var(--dsh-content-font-delta, 0px));
-  height: calc(15px + var(--dsh-content-font-delta, 0px));
-}
-@media (hover: hover) {
-  .dsh-rewind-btn:hover {
-    background: var(--dsw-alias-interactive-bg-hover);
-    color: var(--dsw-alias-label-secondary);
-  }
-}
-
 .dsh-rewind-popover {
   position: fixed;
   z-index: 1100;

@@ -109,7 +109,7 @@ export function chatSnapshotOf(
  * filling the composer after a withdraw. Accepts BOTH `user` and `steering`
  * nodes: a plan-mode (`/plan <text>`) input is delivered through the agent
  * inbox next-step and claimed, so it renders as `steering`, and its text must
- * still return to the composer (`portals.tsx` `runRewindAndFill`). State absent
+ * still return to the composer (`rewind-flow.ts` `runRewindAndFill`). State absent
  * → undefined; a message with no text blocks → ''. Same text-blocks join the
  * candidate side uses.
  */
@@ -186,7 +186,7 @@ export function imageRefsOf(content: readonly ImageBlockLike[] | undefined): rea
 /**
  * The durable image references of the human message at `seq` in the chat
  * snapshot, in message order. The composer-refill counterpart of
- * `messageTextAt` (see `portals.tsx` `runRewindAndFill`): rewinding an
+ * `messageTextAt` (see `rewind-flow.ts` `runRewindAndFill`): rewinding an
  * image-bearing message restores its pictures into the composer so the
  * withdraw does not silently drop them.
  *
