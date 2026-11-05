@@ -46,8 +46,7 @@ If the problem is in DSH itself or in another plugin, report it to that project.
 
 ## Scope
 
-**In scope** — behavior that breaks a guarantee in the
-[security model](docs/security-model.md):
+**In scope** — behavior that breaks a guarantee in the security model:
 
 - a restore that writes outside the paths and locations the session recorded, or
   that runs without an explicit user action;
@@ -73,7 +72,9 @@ If the problem is in DSH itself or in another plugin, report it to that project.
 
 ## Security model
 
-The guarantees, the containment rules, and the explicit non-goals are in
-[docs/security-model.md](docs/security-model.md). Reporters are welcome to test
-those claims: a mismatch between that document and the code is itself worth
-reporting.
+The guarantees, the containment rules, and the explicit non-goals are
+documented at
+**https://github.com/SiriLee/dsh-rewind/blob/main/docs/security-model.md**.
+
+Reporters are welcome to test those claims: a mismatch between that document and
+the code is itself worth reporting.
