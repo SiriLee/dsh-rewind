@@ -10,9 +10,17 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
+### 体验优化
+
+- **已发送消息的回退按钮与复制按钮从结构上并列。** ↶ 现在是官方消息操作行里的普通 React 子节点（与 Copy 同级），随行出现、隐藏与卸载；插件不再靠 DOM 扫描、观察或逐次重查来挂载和维持它，界面其他部分不受影响，位置、尺寸与悬停行为保持不变。这回应了 #75 指出的挂载点问题。（#77）@SiriLee @MWGE22629
+
 ---
 
 > DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Improvements
+
+- **The rewind action on a sent message now sits beside Copy by construction.** The ↶ is an ordinary React child of the official actions row — a sibling of Copy, mounted, hidden and unmounted with it — so the plugin no longer needs a DOM scan, observer or per-change re-query to mount or maintain it; the rest of the UI pays nothing, and position, size and hover behavior are unchanged. This addresses the mount-point problem raised in #75. (#77) @SiriLee @MWGE22629
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.20.0...vNEXT
 
