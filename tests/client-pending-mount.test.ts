@@ -90,7 +90,7 @@ function contentRoot(sessionId = 's1'): HTMLElement {
 }
 
 /** One rendered pending steering bubble: content text, then the Copy action row. */
-function pendingBubble(text: string, options: { readonly attachments?: number; readonly actions?: boolean } = {}): HTMLElement {
+function pendingBubble(text: string, options: { readonly attachments?: number; readonly actions?: boolean; readonly attachmentButtons?: boolean } = {}): HTMLElement {
   const row = document.createElement('div')
   row.setAttribute('data-pending-steering', '')
   const content = document.createElement('div')
@@ -99,6 +99,14 @@ function pendingBubble(text: string, options: { readonly attachments?: number; r
     const block = document.createElement('div')
     block.setAttribute('data-message-attachments', '')
     block.textContent = 'attachment'
+    if (options.attachmentButtons === true) {
+      // An image thumbnail renders as a `<button>` inside the attachment block,
+      // before the actions row (MessageImage's frame).
+      const thumbnail = document.createElement('button')
+      thumbnail.type = 'button'
+      thumbnail.textContent = 'image'
+      block.append(thumbnail)
+    }
     row.append(block)
   }
   row.append(content)
@@ -293,6 +301,43 @@ describe('pending layer (matching and scope)', () => {
     await act(async () => { await Promise.resolve() })
     expect(myBubble.querySelector('button[data-pending-retract]')).not.toBeNull()
     expect(otherBubble.querySelector('button[data-pending-retract]')).toBeNull()
+  })
+
+  it('targets the actions row, not an attachment thumbnail, when the bubble shows an image', async () => {
+    const inbox = fakeSession()
+    await mountBridge(inbox.session)
+    const root = contentRoot()
+    const bubble = pendingBubble('look', { attachments: 1, attachmentButtons: true })
+    root.append(bubble)
+    inbox.acceptInbox([
+      { id: 'img', source: { kind: 'user' }, content: [{ type: 'text', text: 'look' }, { type: 'image' }] },
+    ])
+    await act(async () => { await Promise.resolve() })
+
+    const actions = bubble.querySelector('[data-actions]')!
+    expect([...actions.children].some(child => child.matches('button[data-pending-retract]'))).toBe(true)
+    expect(bubble.querySelector('[data-message-attachments] button[data-pending-retract]')).toBeNull()
+  })
+
+  it('keeps targeting the actions row when its own button is already there', async () => {
+    const inbox = fakeSession()
+    await mountBridge(inbox.session)
+    const root = contentRoot()
+    const bubble = pendingBubble('again')
+    // A previously portaled button, wrapped: the finder must skip it instead of
+    // re-targeting its wrapper on the next refresh.
+    const wrapper = document.createElement('span')
+    const own = document.createElement('button')
+    own.setAttribute('data-pending-retract', '')
+    wrapper.append(own)
+    bubble.querySelector('[data-actions]')!.append(wrapper)
+    root.append(bubble)
+    inbox.acceptInbox([steeringRow('a', 'again')])
+    await act(async () => { await Promise.resolve() })
+
+    const actions = bubble.querySelector('[data-actions]')!
+    expect([...actions.children].some(child => child.matches('button[data-pending-retract]'))).toBe(true)
+    expect(wrapper.children).toHaveLength(1)
   })
 
   it('refuses a bubble without an actions row', async () => {
