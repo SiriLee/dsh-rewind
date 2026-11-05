@@ -28,7 +28,7 @@ function fakeSession(): SessionFace {
 
 /** Translator stub: embeds params so the host-supplied reason stays readable. */
 const t = ((key: string, params?: Record<string, unknown>) =>
-  params === undefined ? key : `${key}:${String(params['path'] ?? params['message'])}`) as unknown as PopoverOptions['t']
+  params === undefined ? key : `${key}:${String(params['path'] ?? params['message'] ?? params['preview'])}`) as unknown as PopoverOptions['t']
 
 /** Open the durable popover; `preview`, when given, answers the host query. */
 function open(preview?: () => Promise<PreviewOutcome>): void {
@@ -113,6 +113,64 @@ describe('openPopover (the impact step reports checkpointing-off)', () => {
     expect(impact).toContain('popover.impact.restore:/a')
     expect(impact).not.toContain('popover.backupDisabled')
     expect(document.querySelector(`.${CLASS.popoverNote}`)).toBeNull()
+  })
+})
+
+describe('openPopover (the pending retract confirmation)', () => {
+  /** Open the pending variant against a button; returns its callback spy. */
+  function openRetract(): { readonly anchor: HTMLButtonElement; readonly onRetract: ReturnType<typeof vi.fn> } {
+    const anchor = document.createElement('button')
+    document.body.append(anchor)
+    const onRetract = vi.fn()
+    openPopover({
+      session: fakeSession(),
+      preview: 'pending text',
+      anchor,
+      t,
+      retract: { itemId: 'item-1', text: 'pending text' },
+      onRetract,
+    })
+    return { anchor, onRetract }
+  }
+
+  /** Click the popover button whose label matches `label`. */
+  function click(label: string): void {
+    [...document.querySelectorAll<HTMLButtonElement>(`button`)]
+      .find(button => button.textContent === label)?.click()
+  }
+
+  it('renders one confirmation step instead of the rewind modes', () => {
+    const { anchor } = openRetract()
+    const popover = document.querySelector(`.${CLASS.popover}`)
+    expect(popover?.getAttribute('aria-label')).toBe('popover.retract.title')
+    expect(popover?.textContent).toContain('popover.retract.hint')
+    expect(popover?.textContent).toContain('popover.retract.target:pending text')
+    expect(optionHints()).toEqual([])
+    expect(anchor.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('confirm closes the popover, then hands off to the retract lifecycle', () => {
+    const { onRetract } = openRetract()
+    click('popover.confirm')
+    expect(document.querySelector(`.${CLASS.popover}`)).toBeNull()
+    expect(onRetract).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancel and Escape close without retracting', async () => {
+    const nextTick = (): Promise<void> => new Promise((resolve) => { setTimeout(resolve, 0) })
+    const cancelled = openRetract()
+    click('popover.cancel')
+    expect(document.querySelector(`.${CLASS.popover}`)).toBeNull()
+    expect(cancelled.onRetract).not.toHaveBeenCalled()
+
+    // Escape is the keyboard twin of cancel; the capture-phase handler attaches
+    // on the deferred (0ms) tick.
+    await nextTick()
+    const escaped = openRetract()
+    await nextTick()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    expect(document.querySelector(`.${CLASS.popover}`)).toBeNull()
+    expect(escaped.onRetract).not.toHaveBeenCalled()
   })
 })
 

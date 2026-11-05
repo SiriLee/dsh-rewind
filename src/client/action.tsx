@@ -1,14 +1,18 @@
 /**
- * The per-message rewind action: the ↶ button the A2 mount injects into a
- * durable user/steering row's actions row.
+ * The ↶ action button: the one message-action control this plugin renders.
  *
- * The action only records intent. A click opens the mode popover, which
- * confirms and runs the host command (see `popover.ts` / `rewind-flow.ts`);
- * whether the host admits the rewind stays its own decision.
+ * The A2 mount injects it as a React child of a durable row's actions row; the
+ * pending layer (`pending-mount.tsx`) portals the same button, with the retract
+ * copy and a marker, into an unclaimed steering bubble.
+ *
+ * The action only records intent: a click opens the popover variant, which
+ * confirms and runs the host command / queue mutation (see `popover.ts`,
+ * `rewind-flow.ts`, `retract.ts`); the host's admission stays the authority.
  *
  * @module dsh-rewind/client/action
  */
 
+import type { ReactNode } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { RewindKey } from './locales.ts'
 import type { RowAction, RowActionRenderer } from './mount.tsx'
@@ -29,8 +33,41 @@ const ICON = (
   </svg>
 )
 
+/** The shared button's inputs. */
+export interface RewindActionButtonProps {
+  readonly t: Translate
+  /** Dictionary keys of the tooltip and the aria label. */
+  readonly titleKey: RewindKey
+  readonly ariaKey: RewindKey
+  /** Mark the pre-admission variant: the pending layer uses it to skip its own button. */
+  readonly pending?: boolean
+  /** Open the action's popover variant, anchored at the button. */
+  readonly onOpen: (anchor: HTMLElement) => void
+}
+
+/** The row's action chrome, matching the official Copy/branch buttons. */
+export function RewindActionButton({ t, titleKey, ariaKey, pending = false, onOpen }: RewindActionButtonProps): ReactNode {
+  return (
+    <Tooltip label={t(titleKey)} side="bottom">
+      <button
+        type="button"
+        className={CLASS.action}
+        aria-label={t(ariaKey)}
+        aria-haspopup="dialog"
+        data-pending-retract={pending || undefined}
+        onClick={event => {
+          event.stopPropagation()
+          onOpen(event.currentTarget)
+        }}
+      >
+        {ICON}
+      </button>
+    </Tooltip>
+  )
+}
+
 /**
- * Build the mount's action renderer: one button per eligible row, nothing for
+ * Build the A2 mount's action renderer: one button per eligible row, nothing for
  * the rest.
  * @param t - the plugin's own translate function (the action's copy).
  * @param eligible - render-time gate: whether a row's session may offer a rewind at all.
@@ -43,19 +80,11 @@ export function rewindActionRenderer(
   open: (row: RowAction, anchor: HTMLElement) => void,
 ): RowActionRenderer {
   return row => (eligible(row.sessionId) ? (
-    <Tooltip label={t('button.title')} side="bottom">
-      <button
-        type="button"
-        className={CLASS.action}
-        aria-label={t('button.aria')}
-        aria-haspopup="dialog"
-        onClick={event => {
-          event.stopPropagation()
-          open(row, event.currentTarget)
-        }}
-      >
-        {ICON}
-      </button>
-    </Tooltip>
+    <RewindActionButton
+      t={t}
+      titleKey="button.title"
+      ariaKey="button.aria"
+      onOpen={anchor => open(row, anchor)}
+    />
   ) : null)
 }

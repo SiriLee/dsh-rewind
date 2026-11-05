@@ -39,6 +39,10 @@ export interface PopoverOptions {
    * runRewindAndFill in rewind-flow.ts).
    */
   readonly onRewind?: (mode: 'chat' | 'both') => void
+  /** Pending variant: retract a pre-sent steering message (single-confirm flow). */
+  readonly retract?: { readonly itemId: string; readonly text: string | null }
+  /** Pending variant: executed after the retract confirm closes the popover. */
+  readonly onRetract?: () => void
 }
 
 /** The single live popover element, or null when closed. */
@@ -229,6 +233,18 @@ function moveFocus(root: HTMLElement, dir: 1 | -1): void {
   buttons[next]?.focus()
 }
 
+/**
+ * Consume an ↑/↓ press as one focus step; both popover variants share it.
+ * @returns whether the key was the focus cycle's.
+ */
+function moveFocusByKey(root: HTMLElement, event: KeyboardEvent): boolean {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return false
+  event.preventDefault()
+  event.stopPropagation()
+  moveFocus(root, event.key === 'ArrowDown' ? 1 : -1)
+  return true
+}
+
 /** The narrowed popover identity (guarded before the mode flow). */
 interface DurablePopoverOptions {
   readonly session: SessionFace
@@ -397,10 +413,69 @@ function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: K
   return { position, dispose }
 }
 
+/**
+ * Open the pending-retract popover: a single-confirm dialog for one pre-sent
+ * steering message. No mode selection and no impact preview — the message has
+ * never been processed, so there are no files to restore and nothing to choose.
+ * Confirm closes the popover and hands off to `onRetract` (the queue removal +
+ * composer refill in retract.ts).
+ */
+function openRetractPopover(opts: PopoverOptions): void {
+  const { preview, anchor, t, retract, onRetract } = opts
+  if (retract === undefined || onRetract === undefined) return
+  markOpen(anchor)
+
+  const root = el('div', CLASS.popover)
+  root.setAttribute('role', 'dialog')
+  root.setAttribute('aria-label', t('popover.retract.title'))
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    if (moveFocusByKey(root, event)) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      closePopover()
+    }
+  }
+
+  const previewText = preview.length > 0 ? preview : t('popover.noText')
+  const actions = el('div', CLASS.popoverActions)
+  const confirm = document.createElement('button')
+  confirm.type = 'button'
+  confirm.className = CLASS.popoverPrimary
+  confirm.textContent = t('popover.confirm')
+  confirm.addEventListener('click', () => {
+    closePopover()
+    onRetract()
+  })
+  const cancel = document.createElement('button')
+  cancel.type = 'button'
+  cancel.className = CLASS.popoverGhost
+  cancel.textContent = t('popover.cancel')
+  cancel.addEventListener('click', closePopover)
+  actions.append(confirm, cancel)
+  root.replaceChildren(
+    el('div', CLASS.popoverTitle, t('popover.retract.title')),
+    el('div', CLASS.popoverTarget, t('popover.retract.target', { preview: previewText })),
+    el('div', CLASS.popoverImpact, t('popover.retract.hint')),
+    actions,
+  )
+
+  const shell = mountShell(root, anchor, onKeyDown)
+  popoverEl = root
+  disposeOutside = shell.dispose
+  focusFirst(root)
+}
+
 /** Open the mode-selection popover anchored near the given anchor. */
 export function openPopover(opts: PopoverOptions): void {
   closePopover()
   liveSessionId = opts.session.sessionId
+  // Pending retract variant: a single-confirm dialog, no rewind modes.
+  if (opts.retract !== undefined) {
+    openRetractPopover(opts)
+    return
+  }
   const { session, seq, time, preview, anchor, t } = opts
   const onRewind = opts.onRewind
   if (seq === undefined || time === undefined || onRewind === undefined) return
@@ -468,18 +543,7 @@ export function openPopover(opts: PopoverOptions): void {
   }
 
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      event.stopPropagation()
-      moveFocus(root, 1)
-      return
-    }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      event.stopPropagation()
-      moveFocus(root, -1)
-      return
-    }
+    if (moveFocusByKey(root, event)) return
     if (event.key === 'Escape') {
       event.preventDefault()
       event.stopPropagation()

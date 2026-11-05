@@ -3,9 +3,11 @@
  * registration, the mode popover it opens, the visibility layer, and the
  * per-message rewind action.
  *
- * The action lives in the Chat rows' own actions row: `mount.tsx` takes over
- * the official user/steering renderer identity and injects one more child into
- * that row, so nothing is portaled into or observed in the chat DOM. The
+ * A durable message's action lives in the Chat row's own actions row: `mount.tsx`
+ * takes over the official user/steering renderer identity and injects one more
+ * child into that row. Unclaimed (pending) steering input has no such seat, so
+ * `pending-mount.tsx` attaches the retract action through the only DOM path the
+ * plugin keeps. The
  * command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or its
  * alias `/undo`) open the harness's own popupSelect instead of executing; the
  * parameterized `@<seq>` form stays the execution channel, while the popover's
@@ -39,6 +41,7 @@ import { closePopover, openPopover, registerPreviewCall, registerComposerFocuser
 import { installChatViewVisibility } from './visibility.ts'
 import { installRowAction, type RowAction, type SlotLedger } from './mount.tsx'
 import { rewindActionRenderer } from './action.tsx'
+import { createPendingBridge } from './pending-mount.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
 import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
@@ -67,6 +70,9 @@ export const name = 'dsh-rewind'
 export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms']
 
 const NS = 'rewind'
+
+/** The harness-declared session slot the pending layer mounts through (renders portals only). */
+const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
 /** The complete durable image reference the session face's image read verifies. */
 type DurableImageRef = Parameters<SessionFace['readAttachment']>[0]
@@ -194,6 +200,8 @@ export function apply(ctx: ClientContext): void {
      */
     const isMainViewSession = (sessionId: string): boolean =>
       (ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0
+    /** Locale switches re-render the pending layer's portaled labels. */
+    const subscribeLocale = (cb: () => void): (() => void) => ctx.locale.subscribe(cb)
 
     /**
      * The chat channel: the `uiConversation` service (contributed by
@@ -505,6 +513,18 @@ export function apply(ctx: ClientContext): void {
       })
     } catch (error) {
       rewindLog.error('action', 'rewind action mount failed', error)
+    }
+
+    // ---- pending (unclaimed) steering retract ----
+    // A zero-UI session-scoped anchor; the layer works only while the inbox
+    // holds steering rows.
+    try {
+      yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
+        { name: HEADER_ACTIONS_SLOT, id: 'dsh-rewind-pending', order: 1000 },
+        createPendingBridge({ sessionOf, setComposerText, restoreImages, t, subscribeLocale }),
+      ))
+    } catch (error) {
+      rewindLog.error('retract', 'pending retract mount failed', error)
     }
 
     /** The composer's text-holding element: the `contenteditable` div. */

@@ -167,15 +167,16 @@ afterEach(() => {
 })
 
 describe('client plugin lifecycle', () => {
-  it('registers only the configuration card and decorates both commands', () => {
+  it('registers the configuration card and the pending bridge, and decorates both commands', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
-    // The plugin REGISTERS no conversation slot: the per-message action lives in
-    // the official rows' own actions row through the component takeover below,
-    // so without a Chat-row ledger the only slot entry is the configuration
-    // card, keyed by the bundle's package name.
-    expect(mounted.slotEntries.map(entry => entry.name)).toEqual(['plugins.bundle.config'])
+    // The durable action is not a slot entry (it lives in the official rows via
+    // the component takeover). The two registrations are the configuration card
+    // and the zero-UI bridge that mounts the pending retract layer.
+    expect(mounted.slotEntries.map(entry => entry.name))
+      .toEqual(['plugins.bundle.config', 'conversation.session.header.actions'])
     expect(mounted.slotEntries[0]?.key).toBe('dsh-rewind-plugin')
+    expect(mounted.slotEntries[1]?.id).toBe('dsh-rewind-pending')
     expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
   })
