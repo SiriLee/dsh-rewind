@@ -3,7 +3,7 @@
 How dsh-rewind is built: source layout, module layering, and the two flows that
 do the work — rewind and checkpointing. The DSH interfaces behind these modules
 are in `docs/harness-reference.md`; the durable formats are in `docs/format.md`,
-the security model in `SECURITY.md`, and compatibility findings in
+the security model in `security-model.md`, and compatibility findings in
 `docs/compat/audit.md`.
 
 ## Purpose
@@ -98,7 +98,7 @@ Key invariants:
 - **Restore is reconciled against the live disk** (`planRestore`), so repeated
   rewinds are idempotent and a rewind whose target state already matches is a
   no-op. A path whose directory no longer resolves to its commit-time location
-  is skipped and reported, never written through (see `SECURITY.md`).
+  is skipped and reported, never written through (see `security-model.md`).
 
 ### Marker format history
 

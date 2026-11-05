@@ -225,5 +225,5 @@ For precise workspace-level history, use Git.
 
 ## See also
 
-[Design boundaries](../boundaries.md) · [SECURITY.md](../../SECURITY.md) ·
+[Design boundaries](../boundaries.md) · [Security model](../security-model.md) ·
 [Snapshot auto-cleanup](../snapshot-auto-cleanup.md)

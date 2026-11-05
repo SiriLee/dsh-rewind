@@ -139,4 +139,4 @@
 
 ## 相关
 
-[设计边界](../boundaries.zh.md) · [SECURITY.md](../../SECURITY.md) · [快照自动清理](../snapshot-auto-cleanup.zh.md)
+[设计边界](../boundaries.zh.md) · [安全模型](../security-model.md) · [快照自动清理](../snapshot-auto-cleanup.zh.md)

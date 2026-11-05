@@ -9,7 +9,7 @@ first), and the docs live under `docs/` with an index in `docs/README.md`.
 - **Focused on purpose** — one thing: in-window rewind to any earlier user
   message, never forking a session.
 - **Security first** — session logs are append-only; file restores draw only from
-  the plugin's own backup directory. See `SECURITY.md`.
+  the plugin's own backup directory. See `docs/security-model.md`.
 - **Minimal** — avoid over-abstraction; keep the plugin light and maintainable.
 
 ## Prerequisites
@@ -49,8 +49,10 @@ npm run verify:host    # end-to-end host verification (full check suite)
     source of truth; other docs link to it instead of restating).
   - **`docs/boundaries.md`** — a design boundary or deliberate non-goal, with
     its rationale; other docs link to it instead of restating it.
-  - **`SECURITY.md`** — any change to the security model (trust boundary,
-    mutation gates, containment, crash handling).
+  - **`docs/security-model.md`** — any change to the security model (trust
+    boundary, mutation gates, containment, crash handling).
+  - **`SECURITY.md`** — any change to the reporting policy (channel,
+    supported versions, response expectations).
 - Bilingual docs use the `.md` / `.zh.md` file split; keep the two mirrors in
   sync.
 - Cross-links between docs are relative.

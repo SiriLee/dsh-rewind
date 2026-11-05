@@ -11,6 +11,7 @@ index/navigation entry point.
 | `architecture.md` | Source layout, module layering, rewind/checkpoint pipelines, open directions | maintainers |
 | `boundaries.md` | Design boundaries: what the plugin owns, what it leaves to other tools, and why (`.zh` mirror) | users / maintainers |
 | `format.md` | Durable on-disk format spec (checkpoint entries + restore journals) | maintainers |
+| `security-model.md` | Security model: trust boundary, containment, crash safety, non-goals | maintainers |
 | `harness-reference.md` | DeepSeek Harness interface reference (subsystems + key source) | maintainers |
 | `snapshot-auto-cleanup.md` | Global snapshot auto-cleanup policy and command (`.zh` mirror) | users / maintainers |
 | `compat/audit.md` | Compatibility audit: invariants, open upstream gaps, probe matrix | maintainers |
@@ -19,5 +20,6 @@ index/navigation entry point.
 | `release/release.md` | Release workflow & DSH peer-version alignment | maintainers |
 | `release/notes-template.md` | Release-notes (CHANGELOG) block, rules, and lifecycle | maintainers |
 
-Repo-root docs outside `docs/`: `SECURITY.md`, `CONTRIBUTING.md`, and
-`CHANGELOG.md` (per-release notes, kept out of the npm tarball).
+Repo-root docs outside `docs/`: `SECURITY.md` (vulnerability-reporting policy),
+`CONTRIBUTING.md`, and `CHANGELOG.md` (per-release notes, kept out of the npm
+tarball).

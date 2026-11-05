@@ -22,7 +22,7 @@
  *   kept), and restores read/write the real file system with plain `node:fs`
  *   — independent of the fs service. The atomic-commit and journaled-restore
  * guarantees, the security model and the in-store layout are specified in
- * `SECURITY.md` and `docs/format.md`.
+ * `docs/security-model.md` and `docs/format.md`.
  *
  * Restore semantics (identical to Claude Code): for every path with entries
  * anchored at or after the target message, apply the EARLIEST entry — write

@@ -191,5 +191,5 @@ and the narrow file slice a rewind needs; Git owns the workspace's history.
 ## See also
 
 [File-rewind tracking boundary](compat/tracking-boundary.md) ·
-[Compatibility audit](compat/audit.md) · [Security model](../SECURITY.md) ·
+[Compatibility audit](compat/audit.md) · [Security model](security-model.md) ·
 [Release & DSH version alignment](release/release.md)

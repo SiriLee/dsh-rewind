@@ -47,7 +47,7 @@ the store rebuilds from scratch.
 - `store` is the session's store-format marker (a decimal version, written
   atomically); a missing marker means the released v1 string format. `format` is
   the DSH **session**-format marker the snapshots were anchored under (see
-  `SECURITY.md`) — the two are independent.
+  `security-model.md`) — the two are independent.
 
 ## Checkpoint entry
 
@@ -84,7 +84,7 @@ Semantics:
 - **`parent` is the location pin**: the `realpath` of `dirname(file)` at commit
   time. A restore refuses the path when its directory no longer resolves there.
   Only the path's FINAL component is checked for links (`lstat().nlink > 1` or a
-  symlink; see `SECURITY.md`), so a repointed ancestor directory would otherwise
+  symlink; see `security-model.md`), so a repointed ancestor directory would otherwise
   redirect the write — or the unlink of a recorded creation — outside the
   recorded location. Absent means "no pin" and falls back to the final-component
   check alone.

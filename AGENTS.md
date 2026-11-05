@@ -42,6 +42,7 @@
 
 ## Further reading
 - Design boundaries: `docs/boundaries.md`
-- Security model: `SECURITY.md`
+- Security model: `docs/security-model.md`
+- Vulnerability reporting policy: `SECURITY.md`
 - Interfaces / compatibility: `docs/harness-reference.md`, `docs/compat/audit.md`
 - Release & DSH version alignment: `docs/release/release.md`

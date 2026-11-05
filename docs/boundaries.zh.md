@@ -102,4 +102,4 @@ DSH 处于开发者预览阶段，迭代很快，行为在相邻线之间会变�
 
 ## 相关
 
-[文件回退的追踪边界](compat/tracking-boundary.zh.md) · [兼容性审计](compat/audit.md) · [安全模型](../SECURITY.md) · [发布与 DSH 版本对齐](release/release.md)
+[文件回退的追踪边界](compat/tracking-boundary.zh.md) · [兼容性审计](compat/audit.md) · [安全模型](security-model.md) · [发布与 DSH 版本对齐](release/release.md)
