@@ -260,10 +260,10 @@ describe('client plugin lifecycle', () => {
   it('injects its styles under the package identity the harness reaps by', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
-    // The owned-style fallback matches `data-plugin` against the loader row id.
+    // The owned-style fallback removes plugin styles by this id on unload; the
+    // plugin itself only marks them.
     expect(document.head.querySelector('style[data-plugin="dsh-rewind-plugin"]')).not.toBeNull()
     mounted.dispose()
-    expect(document.head.querySelector('style[data-plugin="dsh-rewind-plugin"]')).toBeNull()
   })
 
   it('closes an open mode popover when the plugin is unloaded', () => {

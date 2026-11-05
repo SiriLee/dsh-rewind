@@ -172,7 +172,6 @@ export function apply(ctx: ClientContext): void {
     const t = ctx.locale.bind(NS)
 
     registerPreviewCall(previewOverApi)
-    yield () => { registerPreviewCall(null) }
 
     const style = document.createElement('style')
     // The loader row id (the harness matches its owned-style fallback by
@@ -536,9 +535,9 @@ export function apply(ctx: ClientContext): void {
       // plain DOM plus document capture-phase key listeners, so it must be
       // closed with this fiber: otherwise the node and the key steal (↑/↓/Esc
       // routed away from the composer) outlive the unload, and a later remount
-      // would overwrite the singleton reference and leak both for good.
+      // would overwrite the singleton reference and leak both for good. The
+      // harness reaps the styled marker itself (owned-style fallback).
       closePopover()
-      style.remove()
     }
   }, 'dsh-rewind client lifecycle')
 }
