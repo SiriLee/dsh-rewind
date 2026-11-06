@@ -59,7 +59,7 @@ interface CheckpointEntryJson {   // one `<base>.json`
   store: 2              // on-disk store format (absent/1 = the released v1 string format)
   callId: string        // the tool call that mutated the file
   file: string          // resolved display path (absolute)
-  parent?: string       // realpath of the file's directory at commit time (the location pin)
+  parent?: string       // location pin: where the file's directory resolved at capture (or would)
   blob: string | null   // sibling sidecar file name; null = the file was created
   size: number          // byte length of the sidecar (0 when `blob` is null)
   mode?: number         // permission bits, applied when content is restored
@@ -81,12 +81,13 @@ Semantics:
 - **`anchorSeq` is the parent directory**, deliberately not a field of the
   entry: rewinding to message N applies every entry anchored at or after N (the
   boundary is inclusive).
-- **`parent` is the location pin**: the `realpath` of `dirname(file)` at commit
-  time. A restore refuses the path when its directory no longer resolves there.
-  Only the path's FINAL component is checked for links (`lstat().nlink > 1` or a
-  symlink; see `security-model.md`), so a repointed ancestor directory would otherwise
-  redirect the write — or the unlink of a recorded creation — outside the
-  recorded location. Absent means "no pin" and falls back to the final-component
+- **`parent` is the location pin**: where `dirname(file)` resolved when the
+  entry was captured, or where a missing directory would resolve (nearest
+  surviving ancestor plus the missing segments). A restore refuses the path
+  when its directory no longer resolves there, and the final component must be
+  one regular file (no symlink, hard link, FIFO or device; see
+  `security-model.md`). Absent means "no pin" (released-v1 data, or a location
+  that cannot be resolved): the restore falls back to the final-component
   check alone.
 - **`time` is the ordering key within an anchor group**: it is monotonic per
   store instance (bumped past the previous commit), so same-millisecond
@@ -179,18 +180,17 @@ versions on disk.
   leave an unreferenced sidecar but never an entry whose bytes are missing.
   A sidecar that is missing, or whose size differs from `size`, is a per-file
   failure — never a silent "the file was created".
-- **Pinned location**: every record this build writes — entry, link and journal
-  action — carries where the tracked file's directory resolved at commit time
-  (the `parent` pin, best-effort), and a restore re-checks it before touching the
-  path — the initial pass, a post-restart `continueRestore` and a
-  `rollbackRestore` alike (the journal carries the pin). A directory that
-  resolves elsewhere is refused and reported, so a restore can never write or
-  unlink outside the recorded location; a record with no pin (released-v1 data,
-  or a commit whose parent could not be resolved) falls back to the
-  final-component link check alone. A parent chain that is GONE is still
-  recreated — the plugin restores files whose directory was deleted — but only
-  while its nearest surviving ancestor resolves inside the pin. A stable
-  symlinked ancestor is never refused: both sides of the comparison are
+- **Pinned location**: every record this build writes — entry, link and
+  journal action — carries where the tracked file's directory resolved when it
+  was captured (the `parent` pin, projected through a missing directory), and
+  a restore re-checks it before touching the path — the initial pass, a
+  `continueRestore` and a `rollbackRestore` alike (the journal carries the
+  pin). A path that resolves elsewhere is refused and reported, so a restore
+  never writes or unlinks outside the recorded location; a record with no pin
+  (released-v1 data, or a commit whose parent could not be resolved) falls
+  back to the final-component check alone. A gone parent chain is recreated —
+  but only while its nearest surviving ancestor resolves inside the pin — and
+  a stable symlinked ancestor is never refused, because both sides are
   `realpath`s.
 - **Journal before mutation**: the rescue state of every planned path is
   captured as a raw byte copy and the intent journal — references only —

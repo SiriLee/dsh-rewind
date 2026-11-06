@@ -63,6 +63,8 @@ interface Mounted {
 /** One fake fs service, only the members `captureBefore` reads. */
 const fakeFs = () => ({
   resolve: async (path: string) => ({ displayPath: path }),
+  // Every path this double names is a host path (the local backend).
+  processPathFromHostPath: (hostPath: string) => hostPath,
   stat: async () => ({ type: 'file', size: 3, mode: 0o644 }),
 })
 
