@@ -96,6 +96,7 @@ class FakeFs extends FileSystem {
     return { targetKey: FsTargetKey(displayPath), displayPath }
   }
   processPath(target) { return target.displayPath }
+  processPathFromHostPath(hostPath) { return hostPath }
   async readText(target) { return readFile(target.displayPath, 'utf8') }
   async writeText(target, content) { await writeFile(target.displayPath, content, 'utf8'); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
   async stat(target) {
@@ -860,7 +861,7 @@ check('log stays append-only (5 events: 4 + user/message marker)', paramSession.
 }
 
 // 4j. a tracked file whose ancestor directory was replaced by a symlink is
-//     refused: only the path's FINAL component is link-checked, so without the
+//     refused: only the path's FINAL component is checked, so without the
 //     checkpoint-time parent pin a restore would write — and a creation delete
 //     would UNLINK — through the link, outside the recorded location.
 {

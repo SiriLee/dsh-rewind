@@ -10,6 +10,18 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
+### 问题修复
+
+- **还原被约束在记录的位置内。** 位置在捕获时确定：目录已不存在时，记下它本该解析到的位置（最近仍存在的祖先加缺失段），模型之后把目录换成符号链接也无法冒充该位置；规划与执行两层都要求末段仍是单个普通文件，符号链接、硬链接、FIFO 与设备一律跳过并报告。无法映射到本机路径的文件系统后端（如远程后端）不再捕获，避免回退删除本机同名文件。该问题由安全公告 GHSA-67px-g83w-4rv3 跟踪。（#79）@SiriLee @ADCDS
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **A restore now stays inside the location it recorded.** The location is fixed when the file is captured — a directory that is already gone pins where it would have resolved (nearest surviving ancestor plus the missing segments), so a directory later swapped for a symlink cannot pass as that location — and both planning and the apply pass require the final component to still be one regular file (a symlink, hard link, FIFO or device is skipped and reported). A filesystem backend that cannot name a path on the host, such as a remote one, is no longer captured, so a rewind cannot delete a same-named host file. Tracked as GHSA-67px-g83w-4rv3. (#79) @SiriLee @ADCDS
+
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.21.0...vNEXT
 
 ## [0.21.0] - 2026-11-05

@@ -159,14 +159,15 @@ export interface CheckpointEntry {
   /** Byte size of `before` (0 when the file was created). */
   readonly size: number
   /**
-   * Checkpoint-time location pin: the `realpath` of `dirname(path)` at the
-   * moment the entry was committed. A restore refuses the path when its parent
-   * directory no longer resolves there, because a repointed or moved ancestor
-   * would otherwise redirect the write (or the unlink) outside the recorded
-   * location — only the path's FINAL component is link-checked. Absent means
-   * "no pin": a released-v1 entry, a v2 entry written before this field
-   * existed, or a commit whose parent could not be resolved; the restore then
-   * falls back to the final-component check alone.
+   * Checkpoint-time location pin: where `dirname(path)` resolved when the entry
+   * was captured — or, when that directory was already gone, where it would
+   * have resolved (nearest surviving ancestor plus the missing segments). A
+   * restore refuses the path when its parent directory no longer resolves there,
+   * because a repointed or moved ancestor would otherwise redirect the write
+   * (or the unlink) outside the recorded location; the path's FINAL component is
+   * checked separately (see {@link isUnsafeTarget}). Absent means "no pin": a
+   * released-v1 entry or a legacy v2 entry, whose restore falls back to the
+   * final-component check alone.
    */
   readonly parent?: string
   /**
@@ -393,8 +394,14 @@ export interface DiskProbe {
    * unknown", which never counts as "too big".
    */
   size?(path: string): Promise<number | undefined>
-  /** True when the path is a symlink or a hard link (never planned/restored). */
-  isLink(path: string): Promise<boolean>
+  /**
+   * True when the path's final component is not a single regular file: a
+   * symlink, a hard link (`nlink > 1`), a directory, a FIFO or a device. The
+   * planner and the apply pass both refuse one — a link redirects the write,
+   * a hard link shares the inode with other names, and a FIFO or device is
+   * neither restorable nor safe to open.
+   */
+  isUnsafeTarget(path: string): Promise<boolean>
 }
 
 /** Result of staging one on-disk byte copy. */
@@ -476,6 +483,13 @@ export const defaultProbe: DiskProbe = {
   },
   async copy(path: string, dest: string): Promise<CopyOutcome> {
     try {
+      // A FIFO or a device never reaches copyFile: opening one can block or
+      // stream forever. A symlinked file is still copied through, because a
+      // checkpoint of a dotfile a manager links into the tree is legitimate.
+      const live = await lstat(path).catch(() => undefined)
+      if (live !== undefined && !live.isFile() && !live.isSymbolicLink()) {
+        return { kind: 'failed', message: `not a regular file: ${path}` }
+      }
       await copyFile(path, dest)
       const st = await stat(dest)
       return { kind: 'copied', size: st.size }
@@ -499,7 +513,7 @@ export const defaultProbe: DiskProbe = {
       return undefined
     }
   },
-  isLink: isLinkPath,
+  isUnsafeTarget: isUnsafeTarget,
 }
 
 /** Sanitize a call id into a safe file name. */
@@ -831,16 +845,19 @@ async function dirBytes(dir: string): Promise<number> {
 }
 
 /**
- * True when the path is a symlink or a hard link (nlink > 1) — both are never
- * written through on restore: a symlink would redirect the write to its target
- * (bypassing the checkpoint), and a hard link would clobber every other name
- * pointing at the same inode (e.g. pnpm-installed files). Mirrors Claude Code's
- * "symlinked and hard-linked paths not restored".
+ * True when the path is not a single regular file: a symlink, a hard link
+ * (`nlink > 1`), a directory, a FIFO or a device. None is ever written,
+ * created or read through on restore — a symlink redirects the operation, a
+ * hard link clobbers every other name of the inode (e.g. pnpm-installed
+ * files), and a FIFO or device either blocks the read or streams forever.
+ * Mirrors Claude Code's "symlinked and hard-linked paths not restored", plus
+ * the non-regular targets its restore guard also refuses.
  */
-async function isLinkPath(path: string): Promise<boolean> {
+async function isUnsafeTarget(path: string): Promise<boolean> {
   try {
-    const stat = await lstat(path)
-    return stat.isSymbolicLink() || stat.nlink > 1
+    const st = await lstat(path)
+    // A symlink is not a regular file under lstat, so the first test covers it.
+    return !st.isFile() || st.nlink > 1
   } catch {
     return false
   }
@@ -863,9 +880,34 @@ async function nearestExistingAncestor(dir: string): Promise<string | undefined>
 }
 
 /**
+ * Where `path`'s directory resolved when the entry was captured — the location
+ * pin. A directory that does not exist (or does not exist any more) pins where
+ * it WOULD resolve: the `realpath` of its nearest surviving ancestor plus the
+ * missing segments. A link created there later therefore cannot pass as the
+ * same location, which is what makes an unpinned fallback unreachable for a
+ * record this build writes. Undefined only when nothing at all resolves.
+ */
+async function locationPin(path: string): Promise<string | undefined> {
+  const dir = dirname(path)
+  try {
+    return await realpath(dir)
+  } catch (error) {
+    if (!isEnoent(error)) return undefined
+  }
+  const ancestor = await nearestExistingAncestor(dir)
+  if (ancestor === undefined) return undefined
+  try {
+    return join(await realpath(ancestor), relative(ancestor, dir))
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * True when `path`'s parent directory still resolves where it did at checkpoint
  * time (`recorded`, the entry's location pin). Only the path's FINAL component
- * is link-checked (see {@link isLinkPath}); without this a repointed ancestor
+ * is checked for links and non-regular files (see {@link isUnsafeTarget});
+ * without this a repointed ancestor
  * directory would redirect a restore — or, worse, an unlink — outside the
  * recorded location.
  *
@@ -1342,10 +1384,11 @@ export class SnapshotStore {
     // instance, so same-millisecond commits stay capture-ordered.
     const time = Math.max(Date.now(), this.lastEntryTime + 1)
     this.lastEntryTime = time
-    // The location pin: where this path's directory resolved at commit time.
-    // Best-effort — an unresolvable parent simply means "no pin" (legacy
-    // behavior), never a failed commit.
-    const parent = await realpath(dirname(entry.path)).catch(() => undefined)
+    // The location pin: where this path's directory resolved when it was
+    // captured — or where it would have resolved when the directory is already
+    // gone (see locationPin). The projection is what keeps a later boundary
+    // re-check from writing an unpinned record a symlink could redirect.
+    const parent = await locationPin(entry.path)
     await this.ensureDedupSeeded(sessionId)
     // Never write into a store a newer build owns: the marker would be
     // overwritten and the formats mixed. The failure is loud (the host logs
@@ -1579,14 +1622,14 @@ export class SnapshotStore {
         continue
       }
       try {
-        if (await probe.isLink(entry.path)) {
+        if (await probe.isUnsafeTarget(entry.path)) {
           skipped.push(entry.path)
           continue
         }
-        // Only the path's FINAL component is link-checked above: refuse a path
-        // whose directory no longer resolves to its checkpoint-time location,
-        // so the preview never promises a restore the apply pass would refuse
-        // (and no doomed action ever reaches the journal).
+        // Only the path's FINAL component is checked above: refuse a path whose
+        // directory no longer resolves to its checkpoint-time location, so the
+        // preview never promises a restore the apply pass would refuse (and no
+        // doomed action ever reaches the journal).
         if (!(await parentStillMatches(entry.path, entry.parent))) {
           skipped.push(entry.path)
           continue
@@ -1709,7 +1752,7 @@ export class SnapshotStore {
         if (applied === 'skipped') {
           // The directory moved between planning and this write: refuse, and
           // record why so the journal cannot claim the op completed.
-          journalAction.failed = `parent directory moved or repointed: ${dirname(action.path)}`
+          journalAction.failed = `path moved or repointed: ${action.path}`
           await this.saveJournal(journal)
           failed.push({ path: action.path, message: journalAction.failed })
           continue
@@ -1956,6 +1999,10 @@ export class SnapshotStore {
     // Containment first: never write, create or unlink through an ancestor
     // directory that no longer resolves to its checkpoint-time location.
     if (!(await parentStillMatches(path, opts?.parent))) return 'skipped'
+    // ... and never through a final component that is no longer one regular
+    // file: this is the last check before the mutation, so a link or FIFO
+    // swapped in since planning is refused here rather than followed.
+    if (await isUnsafeTarget(path)) return 'skipped'
     if (kind === 'delete') {
       try {
         await deleteFile(path)
@@ -2152,7 +2199,7 @@ export class SnapshotStore {
         if (applied === 'skipped') {
           // The directory no longer resolves where the op was pinned: refuse
           // the redo and keep the journal non-terminal, with the reason.
-          action.failed = `parent directory moved or repointed: ${dirname(action.path)}`
+          action.failed = `path moved or repointed: ${action.path}`
           await this.saveJournal(journal)
           failed.push({ path: action.path, message: action.failed })
           continue
@@ -2257,7 +2304,7 @@ export class SnapshotStore {
         if (applied === 'skipped') {
           // A rollback that cannot verify the location must not claim to have
           // undone the op: leave it retryable as recovery-required.
-          journal.rollbackError = `parent directory moved or repointed: ${action.path}`
+          journal.rollbackError = `path moved or repointed: ${action.path}`
           journal.state = 'recovery-required'
           await this.saveJournal(journal)
           failed.push({ path: action.path, message: journal.rollbackError })
@@ -2908,7 +2955,7 @@ export async function reconcileTracked(
   let recorded = 0
   for (const path of tracked) {
     try {
-      if (await probe.isLink(path)) continue
+      if (await probe.isUnsafeTarget(path)) continue
       // SIZE CAP: an over-cap state is never recorded, checked before the
       // content comparison so its bytes are not read at all. A path first seen
       // over the cap is simply never tracked, so it can never be mis-restored.

@@ -344,6 +344,11 @@ async function captureBefore(
   const cwd = await workingDirectory.ensure(agent, exec.signal)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
+  // The backup is restored through host `node:fs`. A backend that cannot name
+  // this path on the host (a remote one, where the display path is a URI or a
+  // remote path) has no file a host-side restore could safely touch — capturing
+  // it would let a rewind delete or overwrite a same-named host file.
+  if (fs.processPathFromHostPath(target.displayPath) === undefined) return
   const info = await fs.stat(target, exec.signal).catch((error: unknown) => {
     // Only an affirmative "not found" answer becomes a creation. Any other
     // failure abandons the capture (the caller logs it and the tool proceeds

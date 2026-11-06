@@ -3,7 +3,7 @@
  * dedup link and journal action records the `realpath` of the tracked file's
  * parent directory at checkpoint time. A restore then refuses a path whose
  * directory no longer resolves there, because only the FINAL component of a
- * tracked path is link-checked — a repointed ancestor directory would otherwise
+ * tracked path is checked — a repointed ancestor directory would otherwise
  * redirect the write (or the unlink) outside the recorded location.
  *
  * These cases pin the persisted field (the on-disk `parent` key, its absence
@@ -74,14 +74,17 @@ describe('location pin', () => {
     expect((await rawEntry(5)).parent).toBe(expected)
   })
 
-  it('records no pin for a path whose parent cannot be resolved', async () => {
+  it('pins a path whose parent does not exist yet to where it would resolve', async () => {
     const ghost = join(root, 'does-not-exist', 'f.txt')
     await store.recordBackup(session, { callId: 'c2', anchorSeq: 6, path: ghost }, null)
 
     const [entry] = await store.entriesAfter(session, 0)
     expect(entry?.path).toBe(ghost)
-    expect(entry?.parent).toBeUndefined()
-    expect(await rawEntry(6)).not.toHaveProperty('parent')
+    // The projection: nearest surviving ancestor + the missing segments, so a
+    // link created at `does-not-exist` later cannot pass as the same location.
+    const projected = join(await realpath(root), 'does-not-exist')
+    expect(entry?.parent).toBe(projected)
+    expect(await rawEntry(6)).toMatchObject({ parent: projected })
   })
 
   it('ignores a malformed pin and treats the entry as unpinned', async () => {

@@ -255,7 +255,7 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
     // Byte-exact fake probe: decides by comparing the RECORDED bytes with the
     // live file, so the planner must hand it the right source.
     const probe: DiskProbe = {
-      isLink: async () => false,
+      isUnsafeTarget: async () => false,
       matches: async (source, path) => {
         if (source === null) return false // the created file is back on disk
         if (source.kind === 'blob') return (await readFile(source.path)).equals(await readFile(path))
@@ -274,7 +274,7 @@ describe('restore planning reconciles with the current disk (Claude Code behavio
     const file = await touch('unreadable.txt', 'original')
     await store.recordEntry(session, { callId: 'c1', anchorSeq: 5, path: file, before: 'original' })
     const failingProbe: DiskProbe = {
-      isLink: async () => false,
+      isUnsafeTarget: async () => false,
       matches: async () => {
         throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
       },
@@ -470,15 +470,15 @@ describe('reconcileTracked (user-message boundary re-check)', () => {
     // if either the content comparison or the copy is reached, so a regression
     // that moved the cap check after them fails loudly here instead of quietly
     // spending the IO the cap exists to save.
-    let isLinkCalls = 0
+    let unsafeTargetCalls = 0
     const sized = (bytes: number): DiskProbe => ({
-      isLink: async () => { isLinkCalls += 1; return false },
+      isUnsafeTarget: async () => { unsafeTargetCalls += 1; return false },
       size: async () => bytes,
       matches: async () => { throw new Error('the cap gate must run before any content comparison') },
       copy: async () => { throw new Error('an over-cap path must never be copied') },
     })
     expect(await reconcileTracked(store, session, 7, new Set([file]), sized(9_000_000))).toBe(0)
-    expect(isLinkCalls).toBe(1) // the path really was visited and then skipped
+    expect(unsafeTargetCalls).toBe(1) // the path really was visited and then skipped
 
     // Back under the cap, with a NEW state to record: captured normally.
     await writeFile(file, 'shrunk again', 'utf8')

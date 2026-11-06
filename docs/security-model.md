@@ -96,16 +96,16 @@ rendered transcript. The marker shape is specified in
 - **Path sanitization**: session and call ids are scrubbed to a safe character
   set before joining the store root; bare `.` and `..` are replaced — hostile
   ids cannot traverse out of the root.
-- **Links are refused**: planning skips a path whose last component is a
-  symlink or a hard link and reports it — a symlink would redirect the write
-  outside the checkpoint, and a hard link would clobber every other name of the
-  same inode. A link swapped in after planning is not re-checked.
-- **Recorded locations are re-checked**: every record written by this build
-  carries the directory location resolved at commit time; a restore re-checks
-  it before touching the path, including after a restart. A directory that no
-  longer resolves there is refused and reported; a missing parent chain is
-  recreated only inside the recorded location. Data with no recorded location
-  falls back to the link check. This matches Claude Code's checkpoint behavior.
+- **Unsafe targets are refused**: planning and the apply pass skip a path
+  whose last component is not one regular file (a symlink, hard link,
+  directory, FIFO or device) and report it. A link swapped in after the check
+  is not re-checked.
+- **Recorded locations are re-checked**: each record this build writes pins
+  where its directory resolved when the file was captured — or where a missing
+  directory would resolve — and a restore refuses the path when it no longer
+  resolves there; a missing parent chain is recreated only inside that
+  location. A record with no pin (released-v1 data, or a location that cannot
+  be resolved) falls back to the link check, as in Claude Code.
 - **Observation sync (best-effort)**: after a restore, the plugin re-emits the
   host's `fs/observed` event for the paths it changed (absent, or present with
   the current version), so a host with the observation policy enabled does not

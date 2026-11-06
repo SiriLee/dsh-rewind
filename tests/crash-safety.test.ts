@@ -418,7 +418,7 @@ describe('reconciliation auto-heal and failure reporting', () => {
     await writeFile(file, 'user-edited', 'utf8')
 
     const failingCopyProbe: DiskProbe = {
-      isLink: async () => false,
+      isUnsafeTarget: async () => false,
       matches: async () => false, // plan a restore (the content differs)
       copy: async () => ({ kind: 'failed', message: 'EACCES: cannot stage rescue' }),
     }
