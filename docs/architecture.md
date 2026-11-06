@@ -21,6 +21,8 @@ The module map:
 src/index.ts            host plugin: /rewind, /undo, /snapshot-auto-cleanup + checkpoint pipeline
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
 src/snapshot.ts         checkpoint store: before-backups, restore/preview, bounded prune
+src/snapshot-format.ts  on-disk format: naming, entry/journal codecs, ref guards
+src/snapshot-fs.ts      filesystem primitives: atomic write, byte compares, disk probe
 src/snapshot-cleanup.ts cleanup policy + config persistence + auto-sweep throttle
 src/locales.ts          host i18n (t() renderer, HostKey)
 src/client/index.ts     client entry: command decoration, mounts, locale, teardown
@@ -59,9 +61,11 @@ Two dependency rules keep the design testable:
 1. **`rewind.ts` is pure** — no I/O, no `Session` dependency; everything
    derives from the event log + ordered surface, so the whole planning layer
    is unit-testable without a host.
-2. **`snapshot.ts` is host-independent** — it talks to the disk through plain
-   `node:fs` plus injected seams (`DiskProbe`, `DeleteFile`, a test-only
-   `crash` hook), so the store is testable without the harness.
+2. **`snapshot.ts` is host-independent** — it talks to the disk only through
+   `snapshot-fs.ts` (plain `node:fs` primitives plus injected seams
+   `DiskProbe`, `DeleteFile`, and a test-only `crash` hook), and the on-disk
+   shape lives in `snapshot-format.ts`, so the store is testable without the
+   harness and the format is testable without the store.
 
 ## Rewind pipeline
 

@@ -9,5 +9,5 @@
     "rootDir": "src",
     "rewriteRelativeImportExtensions": true
   },
-  "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts"]
+  "include": ["src/index.ts", "src/rewind.ts", "src/snapshot.ts", "src/snapshot-format.ts", "src/snapshot-fs.ts"]
 }

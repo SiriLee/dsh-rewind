@@ -19,6 +19,10 @@
   listing.
 - `src/snapshot.ts` — checkpoint store: before-backups, restore/preview,
   bounded prune.
+- `src/snapshot-format.ts` — on-disk format: naming, entry/journal codecs,
+  ref guards.
+- `src/snapshot-fs.ts` — filesystem primitives: atomic write, byte compares,
+  disk probe.
 - `src/snapshot-cleanup.ts` — cleanup policy, config persistence, auto-sweep
   throttle.
 - `src/locales.ts` — host i18n.
