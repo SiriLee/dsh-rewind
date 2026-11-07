@@ -10,6 +10,18 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
+### 问题修复
+
+- **回退按钮的消息行接管不再替换其他插件包装渲染器的身份。** 接管只装饰默认优先级的官方行；包装器仍可委派到官方行，回退按钮照常出现。该问题在同时启用 dsh-baton-host 时被发现：此前替换其包装器身份会让委派递归，导致页面卡死并耗尽渲染进程内存，现在不再发生。缺少消息来源子插槽的转发行会降级为空，而不是抛错。 (#83) @FUFUTPR
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **The rewind action's row takeover no longer replaces the identity of a wrapper renderer owned by another plugin.** It decorates only the default-priority shipped row; a wrapper can still delegate to the shipped row and carry the rewind action. The issue surfaced with dsh-baton-host: replacing its wrapper identity made the delegation recurse, freezing the page and exhausting the renderer process; that no longer happens. A forwarded row without the message-source child seat degrades to empty instead of throwing. (#83) @FUFUTPR
+
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.21.1...vNEXT
 
 ## [0.21.1] - 2026-11-07
