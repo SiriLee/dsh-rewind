@@ -29,10 +29,14 @@ const CHAT_NODE_SLOT = 'conversation.chat.node'
 /** Row keys whose actions row carries the action (user and steering share one renderer). */
 const ROW_KEYS: ReadonlySet<string> = new Set(['user', 'steering'])
 
-/** Shipped chat rows use the default priority. Shadow renderers may delegate to them. */
+/**
+ * The shipped user/steering rows register at the default priority. A shadow
+ * may sit in front and delegate by excluding its own identity, so only the
+ * default-priority entry is safe to take over.
+ */
 const SHIPPED_ROW_PRIORITY = 0
 
-/** A shadow slot may forward row props without the shipped row's chain capability. */
+/** A shadow's forwarded props may lack the shipped row's child-chain seat. */
 const NO_SLOT_CHAIN = (): null => null
 
 /** Probe key of the version tick: a cell no node kind ever dispatches to. */
@@ -109,6 +113,7 @@ function targetOf(props: Record<string, unknown>): Omit<RowAction, 'text'> | und
  */
 function rowWithAction(official: Renderer, render: RowActionRenderer): Renderer {
   return function RowWithAction(props: Record<string, unknown>): ReactNode {
+    // Keep a host-supplied chain; a shadow's forwarded props may omit it.
     const row = official(typeof props['renderSlotChain'] === 'function'
       ? props
       : { ...props, renderSlotChain: NO_SLOT_CHAIN })
@@ -184,8 +189,8 @@ export function installRowAction({ slots, render }: RowActionMount): () => void 
     for (const entry of readEntries(CHAT_NODE_SLOT)) {
       const key = entry.options.key
       if (key === undefined || !ROW_KEYS.has(key)) continue
-      // A shadow may find the shipped row by excluding its own component identity.
-      // Replacing that identity would make it select itself and recurse.
+      // Decorate only the shipped row: a shadow resolves its delegate by
+      // excluding its own identity, so replacing that identity would recurse.
       if ((entry.options.priority ?? SHIPPED_ROW_PRIORITY) !== SHIPPED_ROW_PRIORITY) continue
       changed = takeOver(entry) || changed
     }

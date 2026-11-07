@@ -74,13 +74,6 @@ entry's own `component` and `actions` row, closer to the official path and
 lighter than a DOM pass. **Stance:** keep the takeover; reported upstream
 (Discussions #8345).
 
-The shipped user and steering entries use the default slot priority. A shadow
-renderer such as `dsh-baton-host` can delegate to the shipped entry by excluding
-its own component identity. Preserve shadow identities and wrap the shipped
-entry only. A shadow can forward props without `renderSlotChain`, so the
-shipped row skips the chain when the capability is absent. The
-`client-mount` probe covers this delegation.
-
 **U3 · Upstream constraint — private seam, maintenance watch.**
 `isVisibleChatNode` drives order, grouping, turn navigation and presentation but
 is first-party-only. **Impact:** the plugin wraps the registered chat builder's
