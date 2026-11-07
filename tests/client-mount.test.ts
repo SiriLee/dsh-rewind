@@ -27,7 +27,7 @@ type Props = Record<string, unknown>
 /** One fake ledger entry, as the mount reads it. */
 interface FakeEntry {
   component: unknown
-  options: { key?: string }
+  options: { key?: string; priority?: number }
 }
 
 /**
@@ -144,6 +144,45 @@ describe('row takeover', () => {
     const dispose = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
     expect(ledger.store[0]!.component).not.toBe(officialRow)
     const container = render(ledger.store[0]!.component)
+    expect(container.querySelector('[data-extra]')).not.toBeNull()
+    dispose()
+  })
+
+  it('keeps a delegating shadow renderer identifiable and mounts the action on its shipped row', () => {
+    const shipped = (props: Props): ReactNode => {
+      const chain = props['renderSlotChain'] as () => ReactNode
+      chain()
+      return officialRow.type()
+    }
+    const ledger = new FakeLedger()
+    function Shadow(props: Props): ReactNode {
+      // Mirrors a delegating shadow: the lowest-priority entry that is not this component.
+      const inner = ledger.entries()
+        .filter(entry => entry.options.key === 'user' && entry.component !== Shadow)
+        .sort((a, b) => (a.options.priority ?? 0) - (b.options.priority ?? 0))[0]?.component
+      return createElement(inner as (props: Props) => ReactNode, props)
+    }
+    ledger.store.push(
+      { component: Shadow, options: { key: 'user', priority: -100 } },
+      { component: shipped, options: { key: 'user' } },
+    )
+    const dispose = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
+    expect(ledger.store[0]!.component).toBe(Shadow)
+    expect(render(Shadow).querySelector('[data-extra]')).not.toBeNull()
+    dispose()
+  })
+
+  it('keeps a host-supplied chain when the shipped row is rendered directly', () => {
+    const chain = (): null => null
+    const received: unknown[] = []
+    const shipped = (props: Props): ReactNode => {
+      received.push(props['renderSlotChain'])
+      return officialRow.type()
+    }
+    const ledger = new FakeLedger([{ component: shipped, options: { key: 'user' } }])
+    const dispose = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
+    const container = render(ledger.store[0]!.component, rowProps({ renderSlotChain: chain }))
+    expect(received).toEqual([chain])
     expect(container.querySelector('[data-extra]')).not.toBeNull()
     dispose()
   })

@@ -31,7 +31,7 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | Client composer refill | `conversation.input.setDraft` facade, else the `[data-composer-input]` DOM fill |
 | Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
-| Client message action | chat-node entry takeover (row `actions` prop + `extraActions`); pending bubbles matched in the session DOM |
+| Client message action | default-priority chat-node entry takeover (row `actions` prop + `extraActions`); pending bubbles matched in the session DOM |
 
 **Admission.** DSH reads `engines.dsh` alone when a manifest declares it, and the
 `@deepseek-ai/dsh-*` peers only when it does not (both under `includePrerelease`), re-checking
