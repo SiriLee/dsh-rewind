@@ -26,7 +26,7 @@ Two rules keep it small:
 
 | Boundary | Classification | Why it sits here | The need is served by |
 | --- | --- | --- | --- |
-| File restore covers the agent's `write`/`edit` text edits and the tracked list, not the whole tree | By design | The before-write checkpoint model has this boundary; whole-tree history is a different product | Git, or the snapshot tool the project already uses |
+| File restore covers the agent's `write`/`edit` text edits and the tracked list, not the whole tree | By design | The checkpoint model has this boundary; whole-tree history is a different product | Git, or the snapshot tool the project already uses |
 | A rewind is one-way; the session log is append-only | By design | Append-only is the audit and crash-safety foundation; the cut is a replace operation | DSH "branch into a new conversation" |
 | Adaptation follows upstream | By design | DSH is a developer preview; one adapted line keeps behavior stable and the gate meaningful | The release built for your DSH line |
 | Hiding and the message action join the official path on private seams | Upstream constraint | No public seat exists; only the host's own path keeps behavior and timing identical | An upstream seat; until then, the seams are re-checked per DSH line |
@@ -54,14 +54,12 @@ cannot be written back. It prefers to write nothing over guessing:
 - no tracking for external edits to files outside the list, or for write tools
   outside the default `write`/`edit` pair that a custom composition mounts.
 
-This is the before-write checkpoint model Claude Code uses; the boundary is
-inherent to it, not a shortcut in this implementation. Workspace history already
-has a better owner: Git records it byte-exactly, with the
-tooling and habits agents already have. Reproducing that inside a conversation
-plugin would duplicate an authority that is already maintained, and two
-authorities eventually disagree.
+This is the checkpoint model Claude Code uses. The boundary comes from the model
+itself: checkpoints cover edits within the session, and workspace history beyond
+that belongs to Git. Git records history byte-exactly and is already how agents
+work; the plugin does not build a second one.
 
-A whole-tree store here would cost real things:
+A whole-tree store here would cost something concrete:
 
 - **scope** — a second store needs indexing, exclusions, pruning, large-repo
   behavior and binary handling; the plugin becomes a snapshot engine with a

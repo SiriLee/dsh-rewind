@@ -1,7 +1,7 @@
 # File-rewind tracking boundary
 
-> When it rewinds files, the plugin **writes back only state it recorded in a
-> file checkpoint**: one dense manifest per user message. A file enters the
+> When it rewinds files, the plugin **writes back only what its checkpoints
+> recorded**: one dense manifest per user message. A file enters the
 > record when a write-class tool (`write`, `edit`) first touches it; from then
 > on every retained checkpoint carries a row for it. Restores reconcile against
 > the live disk and never guess.
@@ -185,12 +185,12 @@ when content is restored.
 ## 7. Why the boundary sits here
 
 Checkpoints cover the agent's `write`/`edit` edits plus external changes to those
-tracked files; everything beyond that is workspace history, which already belongs
-to Git or the project's snapshot tool. Reproducing it here would duplicate that
-authority. The full reasoning is in [design boundaries](../boundaries.md).
+tracked files; workspace history beyond that belongs to Git. Why the split works
+this way, and what a whole-tree store would cost, is in
+[design boundaries](../boundaries.md).
 
 The plugin writes back only recorded state and reports every path it leaves
-alone; it does not guess unrecorded content. For precise
+alone; it does not guess unrecorded content. For permanent
 workspace history, use Git.
 
 ## See also

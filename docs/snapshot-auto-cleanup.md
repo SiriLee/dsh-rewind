@@ -68,7 +68,7 @@ can't make it run early. To clean up right now instead of waiting, use
   currently running, the plugin pauses it first, then clears. This is one-way
   for that session's file-rewind history: you can't rewind code to before the
   clear, but your conversation stays intact, and the session starts recording
-  fresh checkpoints from now on.
+  checkpoints from its current state.
 
 ## Retention cap (by design)
 

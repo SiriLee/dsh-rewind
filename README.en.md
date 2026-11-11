@@ -124,7 +124,7 @@ The whole design rests on two principles, simple but deliberate: **the conversat
 - **The replacement is imperceptible** — the model ignores the marker, with no effect (verified empirically). Together with the plugin's UI handling, what you and the model see is exactly how the conversation looked at the target;
 - **Content is preserved** — because this is "masking, not deleting", the withdrawn content stays in the log — auditable, traceable, and in principle manually recoverable.
 
-> **Design highlight**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics.
+> **Design note**: the entire conversation rewind is **a single append**. It's deterministic, auditable, and — because the log was never broken — a "clean" time-travel. Minimal action, complete semantics.
 
 ### 2. File restore: lightweight checkpointing, "before-write backup"
 
@@ -136,13 +136,13 @@ The file half follows Claude Code's checkpoint semantics — **partial tracking 
 - **Accurate restore**: backups are the sole standard, checked against the real disk — **only files that actually differ are touched**. Backups are stored byte for byte, so the restored result matches the backups exactly, with no "ghost impact". Coverage is bounded by design: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
 - **Safety and integrity**: paths are sanitized so nothing ever escapes the backup root; symlinks / hard links are skipped so one restore can't clobber another name of the same file; a per-file failure never aborts the pass; checkpoints and versions are written atomically and kept across restarts, so a target file is never half-written; a crash can be rerun to converge.
 
-> **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and version reuse drop the repetition; only the files that differ are touched at restore time.
+> **Design note**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and version reuse drop the repetition; only the files that differ are touched at restore time.
 
 ## Scope and division of labour
 
 This plugin deliberately stays lightweight and focused on one thing — "conversation rewind". The following are **out of its scope**, and each has a better owner (see [design boundaries](docs/boundaries.md)):
 
-- **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. Workspace history — any file, any moment — belongs to Git; the agent already uses it, and the plugin does not rebuild that layer. For a worktree-level full snapshot rollback, use Git or the snapshot tool the project already uses.
+- **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. Checkpoints are for quick, session-level recovery; permanent workspace history, branches and collaboration belong to Git. Git records that history byte-exactly and is already how agents work; the plugin does not build a second one.
 - **Subagent edits** — not tracked, and no rewind inside a subagent session: a subagent runs its own session, so its backups could never be restored by a rewind of the parent session, and none are kept for one.
 - **Fork / branch rewind** — DSH already provides this ("branch in new chat"); no need to reinvent the wheel.
 
