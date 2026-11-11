@@ -13,9 +13,9 @@
 
 Conversation rewind is the product. File restore is an accessory: a rewind
 usually means "undo what that turn did to the files too", and a before-write
-checkpoint is enough for that. The plugin is not a workspace history system, a
-session manager, or a toolkit other plugins build on, and it does not grow into
-one. It is one plugin in an agent's workflow, not the workflow itself.
+checkpoint is enough for that. The plugin is not a workspace history system, a session
+manager, or a toolkit other plugins build on, and it does not grow into one.
+It is one plugin in an agent's workflow, not the workflow itself.
 
 Two rules keep it small:
 
@@ -49,8 +49,8 @@ never enters the tracked list, and a stretch of state the plugin did not back up
 cannot be written back. It prefers to write nothing over guessing:
 
 - no history before the first write-class touch;
-- no restore across a stretch that was not backed up (unchanged-not-stored, over
-  the per-file cap, snapshots switched off);
+- no restore across a stretch that was not backed up (over the per-file cap,
+  snapshots switched off);
 - no tracking for external edits to files outside the list, or for write tools
   outside the default `write`/`edit` pair that a custom composition mounts.
 
@@ -159,7 +159,7 @@ the hidden rows.
 A subagent runs its own session. Its files are not backed up, and a rewind of the
 parent session cannot restore them; the plugin keeps no snapshot for a subagent
 session and offers no rewind inside one. That is the same scope rule the plugin
-applies everywhere, and it matches Claude Code.
+applies everywhere.
 
 "Minimal" is not an aesthetic. It means no plugin framework, no adapter layer for
 hypothetical hosts and no cross-line shim: every abstraction is surface that has

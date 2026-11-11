@@ -9,7 +9,7 @@
 - **Focused on purpose**: it does exactly one thing — rewind to any earlier user
   message in the same window, never forking a session or switching windows.
 - **Security first**: session logs are append-only and conversations are never
-  deleted; file restores draw only from the plugin's own backup directory.
+  deleted; file restores draw only from the plugin's own checkpoint store.
 - **Minimal**: avoid over-abstraction; keep the plugin light and maintainable.
 
 ## Layout at a glance
@@ -17,19 +17,19 @@
   and the checkpoint pipeline.
 - `src/rewind.ts` — pure planning: target resolution, surface range, candidate
   listing.
-- `src/snapshot.ts` — checkpoint store: before-backups, restore/preview,
-  bounded prune.
-- `src/snapshot-format.ts` — on-disk format: naming, entry/journal codecs,
-  ref guards.
-- `src/snapshot-fs.ts` — filesystem primitives: atomic write, byte compares,
-  disk probe.
+- `src/snapshot.ts` — checkpoint store: dense manifests at message boundaries,
+  first-touch capture, per-file restore, retention/GC, whole-session cleanup.
+- `src/snapshot-format.ts` — durable format: naming, meta/checkpoint codecs,
+  structural validation.
+- `src/snapshot-fs.ts` — filesystem primitives: atomic JSON, streaming byte
+  compares, location pin, unsafe-target rejection.
 - `src/snapshot-cleanup.ts` — cleanup policy, config persistence, auto-sweep
   throttle.
 - `src/locales.ts` — host i18n.
 - `src/client/` — client plugin: ↶ button, mode popover, hidden-span
   computation.
 - `scripts/` — build, badge, host verification, session codec.
-- `tests/` — vitest suites (rewind / snapshot / hidden / integration).
+- `tests/` — vitest suites (rewind / checkpoint / client / lifecycle).
 - `docs/` — `compat/`, `release/`, plus the design, format and interface docs.
 - Full source layout: `docs/architecture.md`; DSH interfaces:
   `docs/harness-reference.md`.

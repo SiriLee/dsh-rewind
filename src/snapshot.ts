@@ -1,255 +1,169 @@
 /**
- * Checkpoint store — the Claude Code style file-rewind backing for dsh-rewind.
+ * Checkpoint store — the file-rewind backing for dsh-rewind.
  *
- * Claude Code's checkpointing (see README) works like this: it creates a
- * BACKUP of a file BEFORE every tracked modification, groups those backups by
- * the user message they belong to (a "checkpoint"), and rewinding to a
- * checkpoint restores every backup recorded at or after it — modified files
- * are written back to their pre-edit content, files created after the target
- * are deleted. This module is the same design, persisted on disk:
+ * Each user message gets one dense manifest (`Checkpoint.files`) describing
+ * every tracked path's state when that message's step began. Content bytes
+ * live in shared version files; the manifest only holds references. A rewind
+ * reads the target message's manifest, takes the earliest later row for a path
+ * first tracked after the target (the v1 fallback), reconciles it against the
+ * live disk, and applies only the differences with a per-file atomic replace
+ * or delete.
  *
- * - `tools/execute` captures the BEFORE state of each tracked write/edit call
- *   (or "created" when the file did not exist) — the capture happens at the
- *   around-dispatch stage, so an approval `ask` short-circuit cannot skip it
- *   and a denied call never records.
- * - The entry is committed to disk at `tools/post-execute` under the turn's
- *   anchor seq: `<root>/<sessionId>/<anchorSeq>/<callId>.json` carries the
- *   metadata, and the before content lives beside it as a RAW BYTE sidecar
- *   (`<callId>.before`, copied with `copyFile`). Content never travels through
- *   a JS string, so binary and non-UTF-8 files round-trip byte-exactly.
- * - Because entries live on disk under the dsh data directory, they survive a
- *   host restart, are bounded (the newest 100 anchor groups per session are
- *   kept), and restores read/write the real file system with plain `node:fs`
- *   — independent of the fs service. The atomic-commit and journaled-restore
- * guarantees, the security model and the in-store layout are specified in
- * `docs/security-model.md` and `docs/format.md`.
- *
- * Restore semantics (identical to Claude Code): for every path with entries
- * anchored at or after the target message, apply the EARLIEST entry — write
- * the before content back, or delete the file when that entry recorded a
- * creation. Symlinked and hard-linked paths are skipped and reported, never
- * written through.
- *
- * Released-v1 entries stay readable and the byte format is specified in
- * `docs/format.md`; the downgrade marker contract lives in
- * `tests/downgrade-safety.test.ts`.
+ * All mutations run under a per-session promise lock. The newest 100 manifests
+ * are retained; versions referenced by none of them are deleted after each new
+ * checkpoint and on load. Old per-call snapshot layouts are never read: their
+ * members are only counted by whole-session cleanup and removed with the
+ * entire session directory.
  *
  * @module dsh-rewind/snapshot
  */
 
-import type { Stats } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, type Stats } from 'node:fs'
+import { chmod, copyFile, lstat, mkdir, readFile, readdir, rename, rm, stat, unlink } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import {
+  CHECKPOINTS_DIR,
   CURRENT_STORE_VERSION,
-  JOURNAL_PREFIX,
-  LEGACY_JOURNAL_PREFIX,
-  PENDING_DIR,
-  RESCUE_DIR,
-  SIDECAR_SUFFIX,
+  META_FILE,
+  VERSIONS_DIR,
   UnknownStoreVersionError,
-  entryFileName,
-  entryToJson,
-  isJournalName,
-  isLinkEntry,
-  isRestoreJournal,
-  isSafeBackupRef,
-  isSafeLinkRef,
-  journalFromJson,
-  journalOpIdOf,
-  journalToJson,
-  linkToJson,
-  readEntry,
-  refAnchorOf,
-  safeFileId,
+  checkpointFileName,
+  checkpointToJson,
+  metaToJson,
+  parseCheckpoint,
+  parseMeta,
   safeSessionId,
-  sessionRelativeRef,
-  shortHash,
-  sidecarName,
-  textSourceOf,
-} from './snapshot-format.ts'
-import type {
-  ByteSource,
-  CheckpointEntry,
-  ClearSessionReport,
-  CrashPoint,
-  DeleteFile,
-  DiskProbe,
-  FileImpact,
-  LinkEntry,
-  PendingBackup,
-  PlannedAction,
-  PruneStaleReport,
-  RestoreJournal,
-  RestoreJournalAction,
-  RestoreOutcome,
-  RestoreReconcileReport,
-  RestoreRunOptions,
-  StoredEntry,
-  UncoveredPath,
+  versionFileName,
+  type Checkpoint,
+  type ClearSessionReport,
+  type FileImpact,
+  type FileState,
+  type PlannedAction,
+  type PruneStaleReport,
+  type RestoreOutcome,
+  type SkippedPath,
+  type UncoveredPath,
 } from './snapshot-format.ts'
 import {
-  defaultProbe,
   dirBytes,
   dirSizeAndLastActive,
   isEnoent,
   isUnsafeTarget,
   locationPin,
   parentStillMatches,
-  sameFileBuffer,
   sameFileBytes,
   writeJsonAtomic,
 } from './snapshot-fs.ts'
 
-export { CURRENT_STORE_VERSION, UnknownStoreVersionError, isLinkEntry } from './snapshot-format.ts'
-export type {
-  ByteSource,
-  CheckpointEntry,
-  ClearSessionReport,
-  CopyOutcome,
-  CrashPoint,
-  DeleteFile,
-  DiskProbe,
-  FileImpact,
-  LinkEntry,
-  PendingBackup,
-  PlannedAction,
-  PruneStaleReport,
-  RestoreJournal,
-  RestoreJournalAction,
-  RestoreJournalState,
-  RestoreOutcome,
-  RestoreReconcileReport,
-  RestoreRunOptions,
-  StoredEntry,
-  UncoveredPath,
+export {
+  CURRENT_STORE_VERSION,
+  UnknownStoreVersionError,
+  type Checkpoint,
+  type ClearSessionReport,
+  type FileImpact,
+  type FileState,
+  type PlannedAction,
+  type PruneStaleReport,
+  type RestoreOutcome,
+  type SkippedPath,
+  type UncoveredPath,
 } from './snapshot-format.ts'
-export { defaultProbe } from './snapshot-fs.ts'
 
 /** Sub-directory of the harness home holding this plugin's snapshots. */
 const SNAPSHOT_DIR_NAME = 'rewind-snapshots'
 
-/** Age after which an uncommitted `.pending/` capture is collected by `prune`. */
-const PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000
-
 /**
- * A regular file larger than this is NOT backed up. This plugin is a
- * lightweight, conversation-scoped undo, not a backup system: copying a very
- * large file on every edit is what grows the store without bound and saturates
- * IO (issue #39). The cap is a declared limitation, not a delta scheme, and is
- * exposed as the `maxFileBytes` config field (`0` disables the cap).
+ * A regular file larger than this is NOT versioned. The cap keeps one oversized
+ * file from dominating the store: an over-cap state produces no new version, and
+ * a restore skips it while it stays over the cap. Exposed as the `maxFileBytes`
+ * config field (`0` disables it).
  */
 export const DEFAULT_MAX_FILE_BYTES = 8 * 1024 * 1024
 
-/** Number of newest anchor groups (user messages) kept per session. */
-export const MAX_ANCHOR_GROUPS = 100
+/** Newest checkpoints kept per session (also the rewind candidate window). */
+export const RETAINED_CHECKPOINTS = 100
 
-/**
- * On-disk checkpoint store. Every write goes straight through `node:fs`, so a
- * restore reliably lands on the real file system.
- */
+/** Test-only seams; the production constructor never sets them. */
+export interface CheckpointStoreHooks {
+  /** Runs after the restore temp file is complete, before its rename. */
+  readonly beforeRestoreRename?: () => void | Promise<void>
+}
+
+/** The session facts loading needs; kept structural so the store stays host-free. */
+export interface StoreSession {
+  readonly id: string
+  /** DSH session format (`session.header.version`). */
+  readonly version: number
+  /** Every `user/message` id currently in the session log. */
+  readonly messageIds: readonly string[]
+}
+
+/** One loaded manifest plus its absolute file name. */
+interface StoredCheckpoint extends Checkpoint {
+  readonly file: string
+}
+
+/** Per-session in-memory state. */
+interface SessionState {
+  readonly sessionId: string
+  loaded: boolean
+  unavailable?: UnknownStoreVersionError
+  /** Retained manifests by absolute file name. */
+  checkpoints: Map<string, StoredCheckpoint>
+  /** Retained manifests in ascending `time` order. */
+  order: StoredCheckpoint[]
+  /** The last pre-step batch's newest manifest, for first-touch rows. */
+  current?: StoredCheckpoint
+  /** Paths in the newest manifest. */
+  tracked: Set<string>
+  /** Newest manifest time, for the monotonic clock. */
+  lastTime: number
+  /** Tail of the per-session mutation queue. */
+  lock: Promise<unknown>
+}
+
+/** Options for {@link SnapshotStore}. */
+export interface SnapshotStoreOptions {
+  readonly dshHome?: string
+  /** Per-file cap in bytes; `<= 0` disables it. */
+  readonly maxFileBytes?: number
+  /** Test-only seams. */
+  readonly testHooks?: CheckpointStoreHooks
+}
+
+/** One restore plan. */
+interface RestorePlan {
+  readonly actions: PlannedAction[]
+  readonly skipped: SkippedPath[]
+  readonly failed: { readonly path: string; readonly message: string }[]
+  readonly uncovered: UncoveredPath[]
+  readonly noCheckpoint: boolean
+}
+
+/** On-disk checkpoint store. Every write goes through `node:fs`. */
 export class SnapshotStore {
-  /** Debounce window for the per-commit prune (keeps the readdir+sort off the hot path). */
-  private static readonly PRUNE_INTERVAL_MS = 1000
-
-  /** Session-format-version marker file inside the session dir. Non-`.json`, so it never counts as a checkpoint entry. */
-  private static readonly FORMAT_FILE = 'format'
-
-  /** Plugin STORE-format marker file inside the session dir (non-`.json`, same reasoning). */
-  private static readonly STORE_FILE = 'store'
-
-  private lastPruneAt = 0
-
-  /**
-   * Monotonic entry clock. Date.now() has 1ms precision, so back-to-back
-   * commits in the same millisecond would TIE on the entry `time` field and
-   * entriesAfter's (anchorSeq, time) sort would fall back to the readdir
-   * order — filesystem-dependent, so a re-read could pick the WRONG "earliest"
-   * version for a path. Bumping past the previous commit keeps the capture
-   * order reproducible after a re-read. The read-modify-write below is
-   * synchronous (before the first await), so concurrent commits can never
-   * observe the same value. Across restarts wall-clock monotonicity holds
-   * (restart gaps dwarf 1ms); a backwards NTP step is the only way to break
-   * it, and even then the in-process order still holds.
-   */
-  private lastEntryTime = 0
-
-  /** Store options; `dedup` toggles in-place content dedup (default on). */
-  private readonly dedup: boolean
-
-  /**
-   * Per-file backup cap in bytes; `<= 0` means no cap. Capture paths consult it
-   * and the restore planner refuses a pre-cap record over an over-cap file.
-   */
-  private readonly maxFileBytes: number
-
-  /**
-   * Newest anchor groups (user messages) kept per session; `prune` evicts past
-   * this bound. A `Config` field (`maxAnchorGroups`).
-   */
-  private readonly maxAnchorGroups: number
-
-  /** Resolved checkpoint store root (absolute); see the constructor's fallback. */
+  /** Resolved store root (absolute). */
   readonly root: string
 
-  /**
-   * In-memory per-path "most recent entry" for content dedup, keyed by
-   * `<sessionId>\0<path>`. Each value holds the entry's effective byte source
-   * (a handle, not a copy) and its own file ref, so a new record with the same
-   * content links to the immediately-prior entry (linear chain). Seeded lazily
-   * per session from the bounded on-disk window, so dedup survives a host
-   * restart. A handle whose bytes vanished (pruned out of band) is treated as
-   * "never recorded" — dedup then stores MORE, never less.
-   */
-  private readonly lastEntry = new Map<string, { source: ByteSource | null; ref: string }>()
+  private readonly maxFileBytes: number
+  private readonly hooks: CheckpointStoreHooks
 
-  /** Sessions whose dedup state has been seeded from disk this process. */
-  private readonly seededSessions = new Set<string>()
+  private readonly sessions = new Map<string, SessionState>()
+  private readonly legacyWarned = new Set<string>()
 
-  /** Sessions whose store-format marker this process has already stamped. */
-  private readonly storeStamped = new Set<string>()
-
-  /**
-   * Session-format version snapshots are anchored under, stamped into each
-   * session's `format` marker when an entry is recorded. `null` until the host
-   * sets it (from `agent/created`), so a session that never records is
-   * never materialized and a marker is only written where snapshots exist.
-   */
-  private formatVersion: number | null = null
-
-  constructor(
-    root?: string,
-    opts?: {
-      readonly dedup?: boolean
-      readonly dshHome?: string
-      /** Per-file backup cap in bytes; `<= 0` disables it. */
-      readonly maxFileBytes?: number
-      /** Newest anchor groups kept per session; see {@link MAX_ANCHOR_GROUPS}. */
-      readonly maxAnchorGroups?: number
-    },
-  ) {
-    this.dedup = opts?.dedup ?? true
+  constructor(root?: string, opts?: SnapshotStoreOptions) {
     this.maxFileBytes = opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES
-    this.maxAnchorGroups = opts?.maxAnchorGroups ?? MAX_ANCHOR_GROUPS
-    // Deterministic store-root fallback (highest first): an explicit root
-    // (config `snapshotDir`) → the harness-home base derived from
-    // `config.dshHome` (via resolveDshHome: config.dshHome > `$DSH_HOME` >
-    // `~/.dsh`) plus `rewind-snapshots`. No ambient env override: the config
-    // field is the one owner of this path.
+    this.hooks = opts?.testHooks ?? {}
     this.root = root ?? join(resolveDshHome(opts?.dshHome), SNAPSHOT_DIR_NAME)
   }
 
-  /** Absolute path of one session's snapshot directory (id sanitized). */
+  /** Absolute path of one session's store directory. */
   sessionDir(sessionId: string): string {
     return join(this.root, safeSessionId(sessionId))
   }
 
-  /**
-   * True when `size` bytes is over the per-file cap, so it must not be backed
-   * up. `undefined` (a backend that cannot report a size) answers false: the
-   * guard fails toward STORING, never toward calling a file too big on a guess.
-   */
+  /** True when `size` is over the per-file cap. */
   isOverFileCap(size: number | undefined): boolean {
     return this.maxFileBytes > 0 && size !== undefined && size > this.maxFileBytes
   }
@@ -259,1367 +173,9 @@ export class SnapshotStore {
     return this.maxFileBytes
   }
 
-  /** Absolute path of one anchor group directory. */
-  anchorDir(sessionId: string, anchorSeq: number): string {
-    return join(this.sessionDir(sessionId), String(anchorSeq))
-  }
-
-  /** Absolute file ref (relative to the session dir) of an entry. */
-  private entryRefOf(sessionId: string, callId: string, anchorSeq: number): string {
-    return `${anchorSeq}/${entryFileName(callId)}`
-  }
-
-  /**
-   * The session-relative ref of an entry READ from disk: the file that really
-   * holds it. A v1 entry keeps its released name, so recomputing the name from
-   * the call id would produce a dangling reference.
-   */
-  private refOfRead(sessionId: string, entry: StoredEntry): string {
-    if (entry.file !== undefined) return sessionRelativeRef(this.sessionDir(sessionId), entry.file)
-    return this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
-  }
-
-  /** Drop every in-memory trace of one session (its directory is gone). */
-  private forgetSession(sessionId: string): void {
-    this.seededSessions.delete(sessionId)
-    this.storeStamped.delete(sessionId)
-    for (const key of [...this.lastEntry.keys()]) {
-      if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
-    }
-  }
-
-  /**
-   * Forget in-memory state for sessions whose directory no longer exists —
-   * after a sweep, or after the user removed a session dir out of band. A
-   * stale handle is SAFE (dedup and the boundary both fail toward storing
-   * more), but keeping it means the store holds state for a session it deleted
-   * and skips re-stamping that session's `format`/`store` markers.
-   */
-  private async forgetMissingSessions(): Promise<void> {
-    const known = new Set<string>([...this.seededSessions, ...this.storeStamped])
-    for (const key of this.lastEntry.keys()) {
-      const separator = key.indexOf('\0')
-      if (separator !== -1) known.add(key.slice(0, separator))
-    }
-    for (const sessionId of known) {
-      // "Cannot tell" keeps the (safe) state rather than failing the sweep
-      // whose deletions already happened.
-      const present = await this.exists(this.sessionDir(sessionId)).catch(() => true)
-      if (!present) this.forgetSession(sessionId)
-    }
-  }
-
-  /**
-   * Stage a capture slot for one tool call: create the session's `.pending/`
-   * area and return the absolute path the caller copies the before-bytes into
-   * (never through memory). The slot lives inside the session dir so the
-   * commit can `rename` it into the anchor group atomically; a slot that is
-   * never committed is either unlinked by its caller or collected by `prune`.
-   */
-  async stageCapture(sessionId: string, key: string): Promise<string> {
-    const dir = join(this.sessionDir(sessionId), PENDING_DIR)
-    await mkdir(dir, { recursive: true })
-    // The digest disambiguates two keys that `safeFileId` would collapse onto
-    // the same staged name (a collision would let the second capture overwrite
-    // the first one's bytes before either is committed).
-    return join(dir, `${safeFileId(key)}-${shortHash(key)}${SIDECAR_SUFFIX}`)
-  }
-
-  /**
-   * Seed a session's dedup state from the existing (bounded) on-disk window:
-   * scan entries newest-first and record the most recent entry per path. This
-   * makes content dedup survive a host restart within the session window. A
-   * no-op after the first seed (or when `dedup` is disabled).
-   */
-  private async ensureDedupSeeded(sessionId: string): Promise<void> {
-    if (!this.dedup || this.seededSessions.has(sessionId)) return
-    this.seededSessions.add(sessionId)
-    try {
-      // entriesAfter returns newest-first; the first entry per path is its
-      // most recent one. Resolve a link to its effective byte source.
-      for (const entry of await this.entriesAfter(sessionId, 0)) {
-        const key = `${sessionId}\0${entry.path}`
-        if (this.lastEntry.has(key)) continue
-        const source = await this.resolveBefore(sessionId, entry)
-        this.lastEntry.set(key, { source, ref: this.refOfRead(sessionId, entry) })
-      }
-    } catch {
-      // Seeding is best-effort: an unreadable/corrupt session simply starts
-      // with an empty dedup state (redundant but correct, like a cold start).
-      this.seededSessions.delete(sessionId)
-    }
-  }
-
-  /**
-   * Resolve an entry's effective `before` content, following a link chain to
-   * its terminal real snapshot. Refs are strictly backward in
-   * `(anchorSeq, time)`, so the chain is acyclic and finite. A dangling or
-   * cyclic link throws — callers fail per-file (never silently dropping the
-   * path from a restore).
-   */
-  private async resolveBefore(
-    sessionId: string,
-    entry: StoredEntry,
-    seen = new Set<string>(),
-  ): Promise<ByteSource | null> {
-    if (!isLinkEntry(entry)) return this.validatedSource(entry)
-    const key = `${entry.anchorSeq}:${entry.callId}`
-    if (seen.has(key)) throw new Error(`link cycle at ${entry.path} (${key})`)
-    seen.add(key)
-    if (!isSafeLinkRef(entry.ref)) throw new Error(`unsafe link ref ${entry.ref} for ${entry.path}`)
-    const referenced = await readEntry(join(this.sessionDir(sessionId), entry.ref), refAnchorOf(entry.ref))
-    if (referenced === undefined) throw new Error(`dangling link ${entry.ref} for ${entry.path}`)
-    return this.resolveBefore(sessionId, referenced, seen)
-  }
-
-  /**
-   * Validate a real entry's byte source against the store's own files: a
-   * sidecar that is missing, not a regular file, or a different size than the
-   * metadata records is an INTEGRITY failure (thrown), never a silent skip and
-   * never a fallback to "the file was created" — a restore must not delete a
-   * file whose backup it cannot read.
-   */
-  private async validatedSource(entry: CheckpointEntry): Promise<ByteSource | null> {
-    const source = entry.before
-    if (source === null || source.kind !== 'blob') return source
-    const st = await stat(source.path).catch((error: unknown) => {
-      if (isEnoent(error)) throw new Error(`missing backup sidecar ${source.path} for ${entry.path}`)
-      throw error
-    })
-    if (!st.isFile()) throw new Error(`backup sidecar is not a file: ${source.path}`)
-    if (st.size !== entry.size) {
-      throw new Error(`backup sidecar size mismatch for ${entry.path} (recorded ${entry.size}, found ${st.size})`)
-    }
-    return source
-  }
-
-  /**
-   * True when two recorded byte sources are the same content. Comparison is
-   * STREAMING (size first, then chunks) so large files never enter memory.
-   * Any unreadable handle — or any legacy lossy source, whose original bytes
-   * are unknowable — answers `false`: dedup must fail toward storing more,
-   * never toward claiming "unchanged".
-   */
-  private async sourcesMatch(a: ByteSource | null, b: ByteSource | null): Promise<boolean> {
-    if (a === null || b === null) return a === null && b === null
-    try {
-      if (a.kind === 'blob' && b.kind === 'blob') return await sameFileBytes(a.path, b.path)
-      if (a.kind === 'text' && b.kind === 'text') return a.bytes.equals(b.bytes)
-      if (a.kind === 'blob' && b.kind === 'text') return await sameFileBuffer(a.path, b.bytes)
-      if (a.kind === 'text' && b.kind === 'blob') return await sameFileBuffer(b.path, a.bytes)
-      return false
-    } catch {
-      return false
-    }
-  }
-
-  /**
-   * Write raw bytes to a sidecar path atomically (temp + rename): a crash
-   * between the steps leaves only a `.tmp` that no reader picks up.
-   */
-  private async writeSidecar(dest: string, source: ByteSource): Promise<void> {
-    const tmp = `${dest}.tmp`
-    if (source.kind === 'blob') await copyFile(source.path, tmp)
-    else if (source.kind === 'text') await writeFile(tmp, source.bytes)
-    else await writeFile(tmp, Buffer.from(source.text, 'utf8'))
-    await rename(tmp, dest)
-  }
-
-  /**
-   * Place one entry's sidecar next to its entry file: MOVE a staged capture
-   * (same filesystem, atomic) or write the bytes from a source. Returns the
-   * blob source and its size, or null for a created file. The sidecar is
-   * always complete before the entry JSON is written.
-   */
-  private async placeSidecar(
-    entryFile: string,
-    content: { readonly source: ByteSource | null; readonly staged?: { readonly file: string } },
-  ): Promise<{ readonly source: ByteSource; readonly size: number } | null> {
-    if (content.source === null) return null
-    const dest = join(dirname(entryFile), sidecarName(basename(entryFile)))
-    if (content.staged !== undefined) await rename(content.staged.file, dest)
-    else await this.writeSidecar(dest, content.source)
-    const st = await stat(dest)
-    return { source: { kind: 'blob', path: dest }, size: st.size }
-  }
-
-  /**
-   * Commit one entry (a full before-backup or an in-place dedup link) under
-   * its anchor group.
-   */
-  private async commit(
-    sessionId: string,
-    entry: { readonly callId: string; readonly anchorSeq: number; readonly path: string },
-    content: {
-      readonly source: ByteSource | null
-      readonly staged?: { readonly file: string }
-      readonly mode?: number
-    },
-    opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
-  ): Promise<void> {
-    // Monotonic time (see lastEntryTime): strictly increasing per store
-    // instance, so same-millisecond commits stay capture-ordered.
-    const time = Math.max(Date.now(), this.lastEntryTime + 1)
-    this.lastEntryTime = time
-    // The location pin: where this path's directory resolved when it was
-    // captured — or where it would have resolved when the directory is already
-    // gone (see locationPin). The projection is what keeps a later boundary
-    // re-check from writing an unpinned record a symlink could redirect.
-    const parent = await locationPin(entry.path)
-    await this.ensureDedupSeeded(sessionId)
-    // Never write into a store a newer build owns: the marker would be
-    // overwritten and the formats mixed. The failure is loud (the host logs
-    // the failed commit) and costs snapshots, never workspace data.
-    await this.assertKnownStoreVersion(sessionId)
-    const dir = this.anchorDir(sessionId, entry.anchorSeq)
-    await mkdir(dir, { recursive: true })
-    const file = join(dir, entryFileName(entry.callId))
-    const selfRef = this.entryRefOf(sessionId, entry.callId, entry.anchorSeq)
-    // Content dedup: when the new content equals the path's most recent
-    // recorded content, store a LINK to that prior entry instead of a second
-    // copy. The prior entry is the immediately-preceding one (linear chain).
-    // `dedup: false` skips the comparison and always writes a full copy — used
-    // by the boundary, which only records CHANGED files and so never links.
-    const key = `${sessionId}\0${entry.path}`
-    const prior = this.lastEntry.get(key)
-    // A staged capture is already a byte file, so it can be compared directly.
-    const incoming: ByteSource | null = content.source === null
-      ? null
-      : content.staged !== undefined ? { kind: 'blob', path: content.staged.file } : content.source
-    const link = this.dedup && opts?.dedup !== false && prior !== undefined
-      && await this.sourcesMatch(prior.source, incoming)
-    if (link) {
-      const committed: LinkEntry = {
-        callId: entry.callId,
-        anchorSeq: entry.anchorSeq,
-        path: entry.path,
-        ref: prior.ref,
-        ...(parent !== undefined ? { parent } : {}),
-        time,
-      }
-      // The staged copy is redundant now: drop it before publishing the link
-      // (a crash in between leaves an inert orphan, never a lost backup).
-      if (content.staged !== undefined) await rm(content.staged.file, { force: true })
-      await writeJsonAtomic(file, linkToJson(committed), () => opts?.crash?.('after-temp-write'))
-      this.lastEntry.set(key, { source: prior.source, ref: selfRef })
-    } else {
-      const placed = await this.placeSidecar(file, content)
-      const committed: CheckpointEntry = {
-        callId: entry.callId,
-        anchorSeq: entry.anchorSeq,
-        path: entry.path,
-        before: placed?.source ?? null,
-        size: placed?.size ?? 0,
-        // Content that was already lossy when it reached the store (a v1
-        // string, or a materialized link to one) stays marked, so a later
-        // reader cannot mistake its re-encoded bytes for a faithful backup.
-        ...(incoming?.kind === 'lossyText' ? { lossy: true } : {}),
-        ...(content.mode !== undefined ? { mode: content.mode } : {}),
-        ...(parent !== undefined ? { parent } : {}),
-        time,
-      }
-      await writeJsonAtomic(file, entryToJson(committed), () => opts?.crash?.('after-temp-write'))
-      this.lastEntry.set(key, { source: committed.before, ref: selfRef })
-    }
-    // Stamp the session-format marker so this session's snapshots record the
-    // session-format version they were written under — the value the
-    // `agent/created` reconcile compares against on the next load — and
-    // the plugin's own store-format marker, so a future format bump can fail
-    // closed before reading any entry.
-    if (this.formatVersion !== null) {
-      await this.markFormatVersion(sessionId, this.formatVersion)
-    }
-    // The store-format marker only ever moves to the CURRENT version in this
-    // build, so stamp it once per process per session.
-    if (!this.storeStamped.has(sessionId)) {
-      await this.markStoreVersion(sessionId, CURRENT_STORE_VERSION)
-      this.storeStamped.add(sessionId)
-    }
-    // Prune at most once per interval: a turn with many writes would otherwise
-    // pay a readdir + sort on every commit. The 100-group cap still holds —
-    // the debounce only skips redundant scans within a burst.
-    const now = Date.now()
-    if (now - this.lastPruneAt >= SnapshotStore.PRUNE_INTERVAL_MS) {
-      this.lastPruneAt = now
-      await this.prune(sessionId)
-    }
-  }
-
-  /**
-   * Commit one before-backup whose content the caller already holds as raw
-   * text (the boundary-friendly API: tests, synthetic records). The bytes are
-   * encoded UTF-8, exactly as the released v1 build did for text content.
-   */
-  async recordEntry(
-    sessionId: string,
-    entry: {
-      readonly callId: string
-      readonly anchorSeq: number
-      readonly path: string
-      readonly before: string | null
-    },
-    opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
-  ): Promise<void> {
-    await this.commit(sessionId, entry, {
-      source: entry.before === null ? null : textSourceOf(entry.before),
-    }, opts)
-  }
-
-  /**
-   * Commit one before-backup whose content is an existing byte file (the
-   * capture and boundary paths): `backup.file` is MOVED into the anchor group
-   * (same filesystem, so this is atomic), or `null` when the file did not
-   * exist — a creation.
-   */
-  async recordBackup(
-    sessionId: string,
-    entry: { readonly callId: string; readonly anchorSeq: number; readonly path: string },
-    backup: PendingBackup | null,
-    opts?: { readonly dedup?: boolean; readonly crash?: (point: CrashPoint) => void },
-  ): Promise<void> {
-    await this.commit(sessionId, entry, {
-      source: backup === null ? null : { kind: 'blob', path: backup.file },
-      ...(backup !== null ? { staged: { file: backup.file } } : {}),
-      ...(backup?.mode !== undefined ? { mode: backup.mode } : {}),
-    }, opts)
-  }
-
-  /**
-   * The byte source recorded by the path's MOST RECENT entry, or undefined
-   * when the path has never been recorded (a fresh tracking sight). This is
-   * the single in-memory "last known state" the boundary compares the disk
-   * against — the same source `recordEntry` dedups against, so there is one
-   * handle and one comparison per decision, not two. Seeding is idempotent
-   * (once per session from disk).
-   */
-  async lastKnownContent(sessionId: string, path: string): Promise<ByteSource | null | undefined> {
-    await this.ensureDedupSeeded(sessionId)
-    return this.lastEntry.get(`${sessionId}\0${path}`)?.source
-  }
-
-  /**
-   * All committed entries anchored at or after `targetSeq`, newest first (for
-   * preview ordering). The boundary is inclusive: rewinding to a message also
-   * reverts the changes its own turn caused (the rewind cut removes that
-   * turn's assistant response and tool calls), so only entries anchored at
-   * earlier messages survive.
-   */
-  async entriesAfter(sessionId: string, targetSeq: number): Promise<StoredEntry[]> {
-    const sessionDir = this.sessionDir(sessionId)
-    let names: string[]
-    try {
-      names = await readdir(sessionDir)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
-    const entries: StoredEntry[] = []
-    for (const name of names) {
-      const anchorSeq = Number(name)
-      if (!Number.isSafeInteger(anchorSeq) || anchorSeq < targetSeq) continue
-      const files = await readdir(this.anchorDir(sessionId, anchorSeq)).catch(() => [] as string[])
-      for (const file of files) {
-        if (!file.endsWith('.json')) continue
-        const entry = await readEntry(join(this.anchorDir(sessionId, anchorSeq), file), anchorSeq)
-        if (entry !== undefined) entries.push(entry)
-      }
-    }
-    return entries.sort((a, b) => b.anchorSeq - a.anchorSeq || b.time - a.time)
-  }
-
-  /**
-   * Per-path EARLIEST committed entry anchored at or after the target — the
-   * single source of truth for both restore and impact preview.
-   */
-  private async earliestEntries(sessionId: string, targetSeq: number): Promise<Map<string, StoredEntry>> {
-    const earliest = new Map<string, StoredEntry>()
-    for (const entry of await this.entriesAfter(sessionId, targetSeq)) {
-      const current = earliest.get(entry.path)
-      if (current === undefined || entry.anchorSeq < current.anchorSeq || (entry.anchorSeq === current.anchorSeq && entry.time < current.time)) {
-        earliest.set(entry.path, entry)
-      }
-    }
-    return earliest
-  }
-
-  /**
-   * The single source of truth for BOTH the impact preview and the restore
-   * pass: reconcile the earliest recorded entry per path (at/after the
-   * target) against the CURRENT on-disk state, and plan only the actions
-   * that would actually change the disk. This is the Claude Code model —
-   * `fileHistoryGetDiffStats` / `applySnapshot` both compare against the
-   * live filesystem (`checkOriginFileChanged`) and count only real
-   * differences, so a rewind whose target state already matches the disk is
-   * a no-op with zero impact.
-   *
-   * - `before === null` (the file did not exist at the target) plans a
-   *   `delete` ONLY when the file currently exists; an already-absent file
-   *   is a no-op — this kills the "ghost impact" of replaying an entry a
-   *   previous rewind already consumed.
-   * - a recorded byte source plans a `restore` ONLY when the current bytes
-   *   differ from it (or the file is missing); identical bytes are a no-op —
-   *   this keeps repeated rewinds idempotent.
-   * - A released-v1 record that lost bytes to a lossy decode (`lossyText`) is
-   *   compared with the same lossy decode but NEVER written back: a skip is
-   *   reported instead of destroying live bytes with U+FFFD content.
-   * - An unreadable / unresolvable record is a per-file FAILURE, never a
-   *   delete: planning a delete for a file we cannot restore is the one
-   *   mistake that loses data.
-   * - Symlinked / hard-linked paths are never planned (they are reported as
-   *   skipped by the restore pass, never written through).
-   * - A probe failure (e.g. a permission error reading the file) plans the
-   *   action conservatively as if the file differed, so an unreadable file
-   *   is never silently dropped from the restore.
-   *
-   * @param sessionId - session whose snapshot store to plan against.
-   * @param targetSeq - rewind target; entries anchored at/after it apply.
-   * @param probe - current-disk state probe (defaults to the real FS).
-   * @returns the planned actions, the link paths skipped, and per-file failures.
-   */
-  private async planRestore(
-    sessionId: string,
-    targetSeq: number,
-    probe: DiskProbe,
-  ): Promise<{ actions: PlannedAction[]; skipped: string[]; failed: { path: string; message: string }[] }> {
-    // Whole-operation fail-closed for a store this build does not understand:
-    // a partial restore of a half-known format is worse than no restore.
-    await this.assertKnownStoreVersion(sessionId)
-    const actions: PlannedAction[] = []
-    const skipped: string[] = []
-    const failed: { path: string; message: string }[] = []
-    for (const entry of (await this.earliestEntries(sessionId, targetSeq)).values()) {
-      // A dedup link resolves to its terminal real content; a dangling link,
-      // an unreadable sidecar and a corrupt record are all per-file integrity
-      // failures, never a silent skip and never a delete.
-      let source: ByteSource | null
-      try {
-        source = await this.resolveBefore(sessionId, entry)
-      } catch (error) {
-        failed.push({ path: entry.path, message: error instanceof Error ? error.message : String(error) })
-        continue
-      }
-      try {
-        if (await probe.isUnsafeTarget(entry.path)) {
-          skipped.push(entry.path)
-          continue
-        }
-        // Only the path's FINAL component is checked above: refuse a path whose
-        // directory no longer resolves to its checkpoint-time location, so the
-        // preview never promises a restore the apply pass would refuse (and no
-        // doomed action ever reaches the journal).
-        if (!(await parentStillMatches(entry.path, entry.parent))) {
-          skipped.push(entry.path)
-          continue
-        }
-        // SIZE CAP, the safety half: a record only exists for content under the
-        // cap, so an over-cap file means its recorded state predates untracked
-        // edits. Writing that smaller content back would destroy the larger
-        // current file, so refuse. `matches` below stats this path anyway.
-        if (probe.size !== undefined && this.isOverFileCap(await probe.size(entry.path))) {
-          skipped.push(entry.path)
-          continue
-        }
-        if (source !== null && source.kind === 'lossyText') {
-          // A legacy record that lost bytes: comparable, never writable.
-          const same = await probe.matches(source, entry.path)
-          if (same !== true) skipped.push(entry.path)
-          continue
-        }
-        const same = await probe.matches(source, entry.path)
-        if (same === true) continue // identical content (or still absent): a no-op
-        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
-        if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
-        else {
-          // `mode` never MAKES an action (a mode-only difference is a no-op),
-          // but restoring content also restores the recorded permissions.
-          const mode = isLinkEntry(entry) ? undefined : entry.mode
-          actions.push({
-            path: entry.path,
-            action: 'restore',
-            before: source,
-            ...(mode !== undefined ? { mode } : {}),
-            ...pin,
-          })
-        }
-      } catch {
-        // Probe failure: conservative — treat as differing. A restore still
-        // attempts the write, a delete still attempts the unlink (failures
-        // surface per-file in the restore outcome, never silently skipped).
-        // A LOSSY record is the exception: its bytes are already gone, so it
-        // must never be written back — the normal path above skips it for the
-        // same reason, and a throwing probe must not smuggle it through.
-        if (source !== null && source.kind === 'lossyText') {
-          skipped.push(entry.path)
-          continue
-        }
-        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
-        if (source === null) actions.push({ path: entry.path, action: 'delete', ...pin })
-        else actions.push({ path: entry.path, action: 'restore', before: source, ...pin })
-      }
-    }
-    return { actions, skipped, failed }
-  }
-
-  /** Per-file restore impact: only actions that would actually change the disk. */
-  async impactsAfter(
-    sessionId: string,
-    targetSeq: number,
-    probe: DiskProbe = defaultProbe,
-  ): Promise<FileImpact[]> {
-    const { actions } = await this.planRestore(sessionId, targetSeq, probe)
-    return actions
-      .sort((a, b) => a.path.localeCompare(b.path))
-      .map(action => ({ path: action.path, action: action.action }))
-  }
-
-  /**
-   * Restore the workspace to the target message's checkpoint: execute exactly
-   * the actions {@link planRestore} derived from the record + current disk
-   * reconciliation — write the before content back, or delete the file when
-   * it was created after the target and still exists. Symlinked and
-   * hard-linked paths are skipped (reported, never written through); a
-   * restored file's parent directory is created when it was deleted after
-   * the backup; a delete whose file is ALREADY absent is a silent no-op (not
-   * a failure — the target state is already reached). Failures are per-file
-   * and never abort the pass.
-   *
-   * The pass is journaled for crash safety: the pre-restore ("rescue") state
-   * of every planned path is captured and an intent journal persisted BEFORE
-   * any mutation, then each action is marked done as it is applied. A host
-   * crash at any point leaves the journal on disk; after a restart
-   * {@link reconcileRestores} reports where the restore stopped,
-   * {@link continueRestore} finishes it and {@link rollbackRestore} undoes it
-   * back to the exact pre-restore state. Journal IO itself never fails the
-   * restore (it degrades to a journal-less pass).
-   */
-  async restoreAfter(
-    sessionId: string,
-    targetSeq: number,
-    deleteFile: DeleteFile,
-    probe: DiskProbe = defaultProbe,
-    opts?: RestoreRunOptions,
-  ): Promise<RestoreOutcome> {
-    const restored: string[] = []
-    const deleted: string[] = []
-    const skipped: string[] = []
-    const failed: { path: string; message: string }[] = []
-    const { actions, skipped: skippedPaths, failed: planFailed } = await this.planRestore(sessionId, targetSeq, probe)
-    skipped.push(...skippedPaths)
-    failed.push(...planFailed)
-    // Nothing to do: no journal, no extra IO — exactly the pre-journal no-op.
-    if (actions.length === 0) return { restored, deleted, skipped, failed }
-
-    const journal = await this.beginRestore(sessionId, targetSeq, actions, probe)
-    for (let i = 0; i < actions.length; i++) {
-      const action = actions[i]!
-      opts?.crash?.('before-action', i) // test-only: crash before the fs op
-      const journalAction = journal.actions[i]!
-      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
-      try {
-        applied = await this.applyActionToDisk(
-          action.action,
-          action.path,
-          action.action === 'restore' ? action.before : null,
-          deleteFile,
-          {
-            ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
-            ...(action.parent !== undefined ? { parent: action.parent } : {}),
-          },
-        )
-        if (applied === 'skipped') {
-          // The directory moved between planning and this write: refuse, and
-          // record why so the journal cannot claim the op completed.
-          journalAction.failed = `path moved or repointed: ${action.path}`
-          await this.saveJournal(journal)
-          failed.push({ path: action.path, message: journalAction.failed })
-          continue
-        }
-        if (applied === 'enoent') {
-          // Already absent: the delete is already done — the target state is
-          // reached. Mark the action and count nothing (Claude Code tolerates
-          // the same).
-          journalAction.done = true
-          await this.saveJournal(journal)
-          continue
-        }
-      } catch (error) {
-        // Per-file failure, never aborting the pass (unchanged semantics).
-        journalAction.failed = error instanceof Error ? error.message : String(error)
-        await this.saveJournal(journal)
-        failed.push({ path: action.path, message: journalAction.failed })
-        continue
-      }
-      // Test-only crash: right after the fs op, before the done-mark — the
-      // journal then shows done=false while the disk may already match, which
-      // reconciliation resolves from the REAL disk (disk is truth).
-      opts?.crash?.('after-action', i)
-      journalAction.done = true
-      await this.saveJournal(journal)
-      if (applied === 'restored') restored.push(action.path)
-      else deleted.push(action.path)
-    }
-    if (failed.length === 0) {
-      journal.state = 'completed'
-      journal.finishedAt = Date.now()
-    }
-    await this.saveJournal(journal)
-    return { restored, deleted, skipped, failed }
-  }
-
-  /** Absolute path of one restore-op journal file (the current prefix). */
-  private journalPath(sessionId: string, opId: string): string {
-    return join(this.sessionDir(sessionId), `${JOURNAL_PREFIX}${safeFileId(opId)}.json`)
-  }
-
-  /**
-   * Locate an existing journal file for an op: the current prefix first, then
-   * the prefix the released v1 build wrote (a restore interrupted before the
-   * upgrade must still be continuable / rollbackable).
-   */
-  private async findJournalFile(sessionId: string, opId: string): Promise<string | undefined> {
-    const dir = this.sessionDir(sessionId)
-    for (const name of [`${JOURNAL_PREFIX}${safeFileId(opId)}.json`, `${LEGACY_JOURNAL_PREFIX}${safeFileId(opId)}.json`]) {
-      const file = join(dir, name)
-      try {
-        await stat(file)
-        return file
-      } catch {
-        continue
-      }
-    }
-    return undefined
-  }
-
-  /**
-   * Best-effort journal persist: journal IO failures are non-fatal by design —
-   * a restore must never fail because its audit journal could not be written.
-   * reconcileRestores() re-derives the true state from the disk, so a missing
-   * or stale journal only loses the trail, never the recovery ability.
-   *
-   * A journal read back from a legacy file is rewritten IN PLACE (same file),
-   * so a redo / rollback of a pre-upgrade op never leaves two divergent
-   * versions of the same op on disk.
-   */
-  private async saveJournal(journal: RestoreJournal): Promise<void> {
-    try {
-      const file = journal.sourceFile ?? this.journalPath(journal.sessionId, journal.id)
-      await writeJsonAtomic(file, journalToJson(journal, this.sessionDir(journal.sessionId)))
-    } catch {
-      // Non-fatal (see above).
-    }
-  }
-
-  /**
-   * Journal one restore pass before mutating anything: capture the rescue
-   * (pre-restore) state of every planned path as a raw byte copy and persist
-   * the intent (references only) atomically. Returns the in-memory journal; a
-   * persist failure degrades to a journal-less restore (non-fatal, see
-   * {@link saveJournal}).
-   */
-  private async beginRestore(
-    sessionId: string,
-    targetSeq: number,
-    actions: PlannedAction[],
-    probe: DiskProbe,
-  ): Promise<RestoreJournal> {
-    // Recycle terminal journals from earlier restores before persisting the
-    // new intent: a restore-only session never runs recordEntry's prune
-    // pass, so this is what bounds the journal accumulation there.
-    const sessionDir = this.sessionDir(sessionId)
-    try {
-      await this.pruneTerminalJournals(sessionDir, await readdir(sessionDir))
-    } catch (error) {
-      if (!isEnoent(error)) throw error
-      // Session dir does not exist yet (no entries ever recorded): nothing
-      // to recycle.
-    }
-    const id = `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
-    const rescueDir = join(sessionDir, RESCUE_DIR, safeFileId(id))
-    let rescueDirReady = false
-    const journalActions: RestoreJournalAction[] = []
-    for (const [index, action] of actions.entries()) {
-      let rescue: ByteSource | null = null
-      let rescueError: string | undefined
-      const dest = join(rescueDir, `${index}${SIDECAR_SUFFIX}`)
-      try {
-        if (!rescueDirReady) {
-          await mkdir(rescueDir, { recursive: true })
-          rescueDirReady = true
-        }
-        const copied = await probe.copy(action.path, dest)
-        if (copied.kind === 'copied') rescue = { kind: 'blob', path: dest }
-        else if (copied.kind === 'failed') rescueError = copied.message
-        // 'absent': the file is gone — rescue stays null, which is exactly
-        // what rollback should restore (an absent path).
-      } catch (error) {
-        // The restore still proceeds exactly as before; rollback will skip
-        // this path and report it instead of guessing.
-        rescueError = error instanceof Error ? error.message : String(error)
-      }
-      // Pre-restore permissions (best-effort): a rollback must be able to put
-      // back what the restore found, including a read-only file's bits.
-      const rescueMode = (await stat(action.path).catch(() => undefined))?.mode
-      const journalAction: RestoreJournalAction = {
-        path: action.path,
-        action: action.action,
-        before: action.action === 'restore' ? action.before : null,
-        rescue,
-        ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
-        ...(action.parent !== undefined ? { parent: action.parent } : {}),
-        ...(rescueMode !== undefined ? { rescueMode: rescueMode & 0o7777 } : {}),
-        done: false,
-      }
-      if (rescueError !== undefined) journalAction.rescueError = rescueError
-      journalActions.push(journalAction)
-    }
-    const journal: RestoreJournal = {
-      version: 2,
-      id,
-      sessionId,
-      targetSeq,
-      startedAt: Date.now(),
-      state: 'running',
-      actions: journalActions,
-    }
-    await this.saveJournal(journal)
-    return journal
-  }
-
-  /**
-   * Read one journal by op id; undefined when it does not exist. A corrupt
-   * journal THROWS (fail-loud): unlike checkpoint entries, silently dropping
-   * a journal would silently erase the interrupted restore's recovery record.
-   */
-  private async readJournal(sessionId: string, opId: string): Promise<RestoreJournal | undefined> {
-    const file = await this.findJournalFile(sessionId, opId)
-    if (file === undefined) return undefined
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(await readFile(file, 'utf8'))
-    } catch (error) {
-      throw new Error(`restore journal ${file} is corrupt: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    if (!isRestoreJournal(parsed)) throw new Error(`restore journal ${file} failed schema validation`)
-    const journal = journalFromJson(parsed as unknown as Record<string, unknown>, this.sessionDir(sessionId))
-    if (journal === undefined) throw new Error(`restore journal ${file} failed schema validation`)
-    journal.sourceFile = file
-    return journal
-  }
-
-  /**
-   * Every journal file of a session (both prefixes) — valid ones plus corrupt
-   * ones with their error — so reconciliation can report corruption instead of
-   * dropping it.
-   */
-  private async listJournals(sessionId: string): Promise<{ journals: RestoreJournal[]; corrupt: { file: string; message: string }[] }> {
-    const sessionDir = this.sessionDir(sessionId)
-    let names: string[]
-    try {
-      names = await readdir(sessionDir)
-    } catch (error) {
-      if (isEnoent(error)) return { journals: [], corrupt: [] }
-      throw error
-    }
-    const journals: RestoreJournal[] = []
-    const corrupt: { file: string; message: string }[] = []
-    for (const name of names) {
-      if (!isJournalName(name)) continue
-      try {
-        const parsed: unknown = JSON.parse(await readFile(join(sessionDir, name), 'utf8'))
-        if (!isRestoreJournal(parsed)) {
-          corrupt.push({ file: name, message: 'journal failed schema validation' })
-          continue
-        }
-        const journal = journalFromJson(parsed as unknown as Record<string, unknown>, sessionDir)
-        if (journal === undefined) {
-          corrupt.push({ file: name, message: 'journal references are invalid' })
-          continue
-        }
-        journal.sourceFile = join(sessionDir, name)
-        journals.push(journal)
-      } catch (error) {
-        corrupt.push({ file: name, message: error instanceof Error ? error.message : String(error) })
-      }
-    }
-    return { journals, corrupt }
-  }
-
-  /**
-   * Execute ONE fs mutation with exactly the pre-journal semantics: a delete
-   * runs through the injected deleteFile (ENOENT tolerated — the file is
-   * already absent, i.e. the target state is reached), a restore copies the
-   * recorded bytes back over the file (creating the parent if needed).
-   *
-   * This is the only place the store writes restored content to the real FS,
-   * and it is deliberately raw `copyFile`/`writeFile`/`unlink` rather than the
-   * fs service: the caller only ever hands it a path from `planRestore` — one
-   * the session's own write-class tool call recorded and resolved (never a
-   * symlink/hard link) and only when it differs from the live disk. So no
-   * arbitrary path, no model input, never automatic.
-   *
-   * The write is IN PLACE (no temp + rename): it keeps the file's inode and
-   * thus its xattrs/ACL, and crash safety is provided by the journal plus disk
-   * reconciliation instead (a half-written file simply does not match the
-   * goal, so a redo rewrites it).
-   *
-   * Permissions are best-effort (ADR-9/R3): the mode is only ever applied as
-   * part of a CONTENT restore (never as a reason to plan one), and a chmod
-   * failure never fails the restore.
-   */
-  private async applyActionToDisk(
-    kind: 'restore' | 'delete',
-    path: string,
-    content: ByteSource | null,
-    deleteFile: DeleteFile,
-    opts?: { readonly mode?: number; readonly parent?: string },
-  ): Promise<'restored' | 'deleted' | 'enoent' | 'skipped'> {
-    // Containment first: never write, create or unlink through an ancestor
-    // directory that no longer resolves to its checkpoint-time location.
-    if (!(await parentStillMatches(path, opts?.parent))) return 'skipped'
-    // ... and never through a final component that is no longer one regular
-    // file: this is the last check before the mutation, so a link or FIFO
-    // swapped in since planning is refused here rather than followed.
-    if (await isUnsafeTarget(path)) return 'skipped'
-    if (kind === 'delete') {
-      try {
-        await deleteFile(path)
-        return 'deleted'
-      } catch (error) {
-        if (!isEnoent(error)) throw error
-        return 'enoent'
-      }
-    }
-    if (content === null) throw new Error(`restore of ${path} has no recorded content`)
-    // A `lossyText` target only occurs when CONTINUING a legacy journal: the
-    // released build had already decided to write that content, and refusing
-    // now would strand a half-restored workspace. A legacy ENTRY is never
-    // written back (see `planRestore`), which is where the choice matters.
-    await mkdir(dirname(path), { recursive: true })
-    // A read-only target cannot be written: add owner-write for the attempt
-    // and take it back afterwards (R3).
-    const current = (await stat(path).catch(() => undefined))?.mode
-    let widened = false
-    if (current !== undefined && (current & 0o200) === 0) {
-      await chmod(path, current | 0o200).catch(() => undefined)
-      widened = true
-    }
-    try {
-      if (content.kind === 'blob') await copyFile(content.path, path)
-      else if (content.kind === 'text') await writeFile(path, content.bytes)
-      else await writeFile(path, Buffer.from(content.text, 'utf8'))
-    } catch (error) {
-      if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
-      throw error
-    }
-    // Best-effort: a filesystem that refuses chmod must never fail a restore
-    // whose bytes landed (Windows permission bits, exotic mounts, …).
-    if (opts?.mode !== undefined) await chmod(path, opts.mode).catch(() => undefined)
-    // No recorded mode (a legacy entry, or a link materialized without one):
-    // the live bits are not ours to change, so only undo the widening.
-    else if (widened && current !== undefined) await chmod(path, current).catch(() => undefined)
-    return 'restored'
-  }
-
-  /**
-   * Reconcile the session's restore journals against the real disk — the
-   * "host restart" account: for every interrupted op, report which paths
-   * already match its goal (restored) and which are still pending, and expose
-   * any recorded failures. Journals whose goal is already fully reached on
-   * disk (e.g. a later rewind completed the work) are auto-healed to their
-   * terminal state and not reported. A corrupt journal is reported
-   * `recovery-required` — never silently dropped.
-   *
-   * Deliberately NOT gated on the session's `store` marker: a journal is fully
-   * self-describing (`version` plus byte references), and refusing to finish an
-   * interrupted op merely because the SESSION marker looks newer would strand a
-   * half-restored workspace — the outcome the legacy-journal support exists to
-   * prevent. A reference the newer build moved shows up as a per-file failure,
-   * never as a silent write.
-   *
-   * @param sessionId - session whose journals to reconcile.
-   * @param probe - current-disk state probe (defaults to the real FS).
-   * @returns one report per non-terminal journal still needing attention.
-   */
-  async reconcileRestores(sessionId: string, probe: DiskProbe = defaultProbe): Promise<RestoreReconcileReport[]> {
-    const { journals, corrupt } = await this.listJournals(sessionId)
-    const reports: RestoreReconcileReport[] = []
-    for (const bad of corrupt) {
-      reports.push({
-        opId: journalOpIdOf(bad.file),
-        state: 'recovery-required',
-        journalState: 'recovery-required',
-        targetSeq: 0,
-        startedAt: 0,
-        restored: [],
-        pending: [],
-        failed: [],
-        corrupt: bad.message,
-      })
-    }
-    for (const journal of journals) {
-      if (journal.state === 'completed' || journal.state === 'rolled-back') continue
-      const report = await this.reconcileJournal(journal, probe)
-      if (report !== undefined) reports.push(report)
-    }
-    return reports.sort((a, b) => a.startedAt - b.startedAt || a.opId.localeCompare(b.opId))
-  }
-
-  /**
-   * Reconcile ONE non-terminal journal against the real disk. Returns
-   * undefined when the op's goal is already fully reached (auto-heals to the
-   * terminal state); otherwise a report of restored/pending/failed paths.
-   * For `running` journals the goal is the restore target; for
-   * `rollback-running` / `recovery-required` journals it is the rescue
-   * (pre-restore) state.
-   */
-  private async reconcileJournal(journal: RestoreJournal, probe: DiskProbe): Promise<RestoreReconcileReport | undefined> {
-    const rollbackPhase = journal.state === 'rollback-running' || journal.state === 'recovery-required'
-    const restored: string[] = []
-    const pending: string[] = []
-    const failed: { path: string; message: string }[] = []
-    let allReached = true
-    for (const action of journal.actions) {
-      if (action.failed !== undefined) {
-        // A recorded failure keeps the op non-terminal until a redo retries it.
-        failed.push({ path: action.path, message: action.failed })
-        allReached = false
-        continue
-      }
-      let reached: boolean
-      try {
-        const goal = rollbackPhase ? action.rescue : action.action === 'delete' ? null : action.before
-        reached = await probe.matches(goal, action.path) === true
-      } catch {
-        reached = false // probe failure: conservative — never silently dropped
-      }
-      if (reached) restored.push(action.path)
-      else pending.push(action.path)
-      if (!reached) allReached = false
-    }
-    if (allReached && failed.length === 0) {
-      // The op's goal is already fully reached on disk: heal it to its
-      // terminal state so it stops appearing as an interruption.
-      if (rollbackPhase) journal.state = 'rolled-back'
-      else journal.state = 'completed'
-      journal.finishedAt = Date.now()
-      await this.saveJournal(journal)
-      return undefined
-    }
-    return {
-      opId: journal.id,
-      state: journal.state === 'recovery-required' ? 'recovery-required' : 'interrupted',
-      journalState: journal.state,
-      targetSeq: journal.targetSeq,
-      startedAt: journal.startedAt,
-      restored,
-      pending,
-      failed,
-      ...(journal.rollbackError === undefined ? {} : { rollbackError: journal.rollbackError }),
-    }
-  }
-
-  /**
-   * Continue (redo) an interrupted restore: finish the op by applying every action
-   * whose disk state does not yet match its goal — the restore target for
-   * `running` journals. Actions are decided by the REAL disk (the same "disk
-   * is truth" rule as reconciliation), so a crash between an fs op and its
-   * done-mark is completed deterministically and a path the user already
-   * fixed is marked done without being rewritten. Failed actions are retried;
-   * a re-failure re-records the failure. The journal becomes `completed` once
-   * every action reaches the target.
-   */
-  async continueRestore(
-    sessionId: string,
-    opId: string,
-    deleteFile: DeleteFile,
-    probe: DiskProbe = defaultProbe,
-    opts?: RestoreRunOptions,
-  ): Promise<RestoreOutcome> {
-    const journal = await this.readJournal(sessionId, opId)
-    if (journal === undefined) throw new Error(`restore journal ${opId} not found for session ${sessionId}`)
-    if (journal.state !== 'running') {
-      throw new Error(`restore journal ${opId} is in state ${journal.state}; only a running restore can be continued`)
-    }
-    const restored: string[] = []
-    const deleted: string[] = []
-    const failed: { path: string; message: string }[] = []
-    for (let i = 0; i < journal.actions.length; i++) {
-      const action = journal.actions[i]!
-      opts?.crash?.('before-action', i) // test-only: crash before the fs op
-      let reached: boolean
-      try {
-        const goal = action.action === 'delete' ? null : action.before
-        reached = await probe.matches(goal, action.path) === true
-      } catch {
-        reached = false // probe failure: conservatively attempt the apply
-      }
-      if (reached) {
-        // Already at the target (applied before the crash, or user-fixed):
-        // mark it done without touching the disk.
-        action.done = true
-        delete action.failed
-        await this.saveJournal(journal)
-        continue
-      }
-      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
-      try {
-        applied = await this.applyActionToDisk(
-          action.action,
-          action.path,
-          action.action === 'restore' ? action.before : null,
-          deleteFile,
-          {
-            ...(action.action === 'restore' && action.mode !== undefined ? { mode: action.mode } : {}),
-            ...(action.parent !== undefined ? { parent: action.parent } : {}),
-          },
-        )
-        if (applied === 'skipped') {
-          // The directory no longer resolves where the op was pinned: refuse
-          // the redo and keep the journal non-terminal, with the reason.
-          action.failed = `path moved or repointed: ${action.path}`
-          await this.saveJournal(journal)
-          failed.push({ path: action.path, message: action.failed })
-          continue
-        }
-        if (applied === 'enoent') {
-          action.done = true
-          await this.saveJournal(journal)
-          continue
-        }
-      } catch (error) {
-        action.failed = error instanceof Error ? error.message : String(error)
-        await this.saveJournal(journal)
-        failed.push({ path: action.path, message: action.failed })
-        continue
-      }
-      opts?.crash?.('after-action', i) // test-only: crash before the done-mark
-      action.done = true
-      delete action.failed
-      await this.saveJournal(journal)
-      if (applied === 'restored') restored.push(action.path)
-      else deleted.push(action.path)
-    }
-    if (journal.actions.every(action => action.done) && !journal.actions.some(action => action.failed !== undefined)) {
-      journal.state = 'completed'
-      journal.finishedAt = Date.now()
-      await this.saveJournal(journal)
-    }
-    return { restored, deleted, skipped: [], failed }
-  }
-
-  /**
-   * Roll back an interrupted restore: undo every action whose disk
-   * state does not match its rescue (pre-restore) record, returning the
-   * workspace to the exact state it had before the restore started. Decided
-   * by the REAL disk, so actions the crash left applied-but-unmarked are
-   * undone too, and a path already back at its rescue state is skipped —
-   * the pass is idempotent across crashes (a retry finishes the remaining
-   * actions). The journal moves `running` → `rollback-running` → `rolled-back`;
-   * a failed undo leaves it `recovery-required` (retryable), and paths whose
-   * rescue capture failed are reported and left untouched.
-   */
-  async rollbackRestore(
-    sessionId: string,
-    opId: string,
-    deleteFile: DeleteFile,
-    probe: DiskProbe = defaultProbe,
-    opts?: RestoreRunOptions,
-  ): Promise<RestoreOutcome> {
-    const journal = await this.readJournal(sessionId, opId)
-    if (journal === undefined) throw new Error(`restore journal ${opId} not found for session ${sessionId}`)
-    if (journal.state === 'completed' || journal.state === 'rolled-back') {
-      throw new Error(`restore journal ${opId} is already ${journal.state}`)
-    }
-    // A rollback is in flight: a crash between this write and the last rescue
-    // application leaves the journal in 'rollback-running'; the pass is
-    // idempotent, so a retry simply finishes the remaining actions.
-    if (journal.state !== 'rollback-running') {
-      journal.state = 'rollback-running'
-      await this.saveJournal(journal)
-    }
-    const restored: string[] = []
-    const deleted: string[] = []
-    const failed: { path: string; message: string }[] = []
-    let rollbackFailed = false
-    for (let i = 0; i < journal.actions.length; i++) {
-      const action = journal.actions[i]!
-      if (action.rescueError !== undefined) {
-        // The pre-restore state was never captured: this path cannot be
-        // undone — report it and leave it untouched (recovery-required).
-        journal.rollbackError = `rescue unavailable for ${action.path}: ${action.rescueError}`
-        journal.state = 'recovery-required'
-        await this.saveJournal(journal)
-        failed.push({ path: action.path, message: journal.rollbackError })
-        rollbackFailed = true
-        continue
-      }
-      opts?.crash?.('before-action', i) // test-only: crash before the fs op
-      let reached: boolean
-      try {
-        reached = await probe.matches(action.rescue, action.path) === true
-      } catch {
-        reached = false // probe failure: conservatively attempt the undo
-      }
-      if (reached) {
-        // Already back at its pre-restore state: mark it undone.
-        action.done = false
-        await this.saveJournal(journal)
-        continue
-      }
-      let applied: 'restored' | 'deleted' | 'enoent' | 'skipped'
-      try {
-        applied = await this.applyActionToDisk(
-          action.rescue === null ? 'delete' : 'restore',
-          action.path,
-          action.rescue,
-          deleteFile,
-          {
-            ...(action.rescueMode !== undefined ? { mode: action.rescueMode } : {}),
-            ...(action.parent !== undefined ? { parent: action.parent } : {}),
-          },
-        )
-        if (applied === 'skipped') {
-          // A rollback that cannot verify the location must not claim to have
-          // undone the op: leave it retryable as recovery-required.
-          journal.rollbackError = `path moved or repointed: ${action.path}`
-          journal.state = 'recovery-required'
-          await this.saveJournal(journal)
-          failed.push({ path: action.path, message: journal.rollbackError })
-          rollbackFailed = true
-          continue
-        }
-        if (applied === 'enoent') {
-          action.done = false
-          await this.saveJournal(journal)
-          continue
-        }
-      } catch (error) {
-        journal.rollbackError = error instanceof Error ? error.message : String(error)
-        journal.state = 'recovery-required'
-        await this.saveJournal(journal)
-        failed.push({ path: action.path, message: journal.rollbackError })
-        rollbackFailed = true
-        continue
-      }
-      opts?.crash?.('after-action', i) // test-only: crash before the done-mark
-      action.done = false
-      await this.saveJournal(journal)
-      if (applied === 'restored') restored.push(action.path)
-      else deleted.push(action.path)
-    }
-    if (!rollbackFailed) {
-      journal.state = 'rolled-back'
-      journal.finishedAt = Date.now()
-      await this.saveJournal(journal)
-    }
-    return { restored, deleted, skipped: [], failed }
-  }
-
-  /**
-   * Drop the session's oldest anchor groups beyond `keep` (default
-   * {@link MAX_ANCHOR_GROUPS}), deleting their whole directories. Also
-   * recycles terminal restore journals (see {@link pruneTerminalJournals}),
-   * so the per-commit cap bounds BOTH the checkpoint entries and the journal
-   * accumulation.
-   *
-   * Because dedup links reference prior entries, eviction is LINK-AWARE: before
-   * deleting the oldest groups, any SURVIVING (kept-group) link whose `ref`
-   * lands on a real snapshot inside a doomed group is MATERIALIZED (rewritten
-   * as a real snapshot carrying the resolved content), so no kept link is left
-   * dangling. Links form a linear predecessor chain, so materializing the first
-   * link after each doomed real is enough — later links already point at that
-   * materialized entry (or at other kept links), requiring no rewrite.
-   *
-   * `opts.crash` is the test-only seam: a crash fired inside a materialization
-   * write (between its temp write and rename) leaves ONLY a `.tmp` — the doomed
-   * real is still on disk and the kept link still resolves, so nothing dangles
-   * and a later prune simply re-materializes.
-   */
-  async prune(sessionId: string, keep = this.maxAnchorGroups, opts?: { readonly crash?: (point: CrashPoint) => void }): Promise<void> {
-    const sessionDir = this.sessionDir(sessionId)
-    let names: string[]
-    try {
-      names = await readdir(sessionDir)
-    } catch (error) {
-      if (isEnoent(error)) return
-      throw error
-    }
-    // Journal recycling and staged-capture collection must run even when no
-    // anchor group is over the cap (a restore-only session never overflows the
-    // 100 groups).
-    await this.pruneTerminalJournals(sessionDir, names)
-    await this.prunePendingCaptures(join(sessionDir, PENDING_DIR))
-    const seqs = names.map(Number).filter(seq => Number.isSafeInteger(seq)).sort((a, b) => a - b)
-    const excess = seqs.length - keep
-    if (excess <= 0) return
-    const doomed = new Set(seqs.slice(0, excess))
-    // A NON-TERMINAL journal still needs the sidecars its actions reference:
-    // evicting them would make the advertised "continue finishes the
-    // interrupted op" impossible (the redo would fail per file). Those groups
-    // are pinned, so the effective window may exceed `keep` until the op is
-    // resolved — bounded by the number of unresolved journals.
-    for (const seq of await this.pinnedAnchors(sessionDir, names)) doomed.delete(seq)
-    if (doomed.size === 0) return
-    // Materialize surviving links that reference a doomed group's real
-    // snapshot. A link whose referent is ALREADY gone (dangling/corrupt) is
-    // skipped — evicting cannot make it worse. But if a materialization WRITE
-    // fails (transient IO or a crash), we abort prune BEFORE deleting anything,
-    // so a still-needed real is never removed while a kept link references it.
-    for (const seq of seqs.slice(excess)) {
-      const files = await readdir(this.anchorDir(sessionId, seq)).catch(() => [] as string[])
-      for (const file of files) {
-        if (!file.endsWith('.json')) continue
-        const entryFile = join(this.anchorDir(sessionId, seq), file)
-        let entry: StoredEntry | undefined
-        try {
-          entry = await readEntry(entryFile, seq)
-        } catch {
-          // A newer-format entry (or an unreadable one): never touch it and
-          // never let it abort the prune of unrelated groups.
-          continue
-        }
-        if (entry === undefined || !isLinkEntry(entry)) continue
-        if (!isSafeLinkRef(entry.ref)) continue // unsafe/corrupt ref: never follow it
-        const refAnchor = refAnchorOf(entry.ref)
-        if (!Number.isSafeInteger(refAnchor) || !doomed.has(refAnchor)) continue
-        let source: ByteSource | null
-        try {
-          source = await this.resolveBefore(sessionId, entry)
-        } catch (error) {
-          if (error instanceof UnknownStoreVersionError) throw error
-          continue // already-dangling link: not caused by this eviction
-        }
-        // NOTE: the materialized entry keeps the BYTES, not the resolved
-        // entry's `mode` (a link carries no metadata of its own). A later
-        // restore therefore treats the file's live permissions as its own —
-        // the safe default — rather than replaying a mode it only inferred.
-        // The link's own location pin DOES travel with it: dropping it would
-        // silently re-open the repointed-ancestor hole for every entry prune
-        // has materialized.
-        const pin = entry.parent !== undefined ? { parent: entry.parent } : {}
-        let real: CheckpointEntry
-        if (source === null) {
-          real = {
-            callId: entry.callId,
-            anchorSeq: entry.anchorSeq,
-            path: entry.path,
-            before: null,
-            size: 0,
-            ...pin,
-            time: entry.time,
-          }
-        } else {
-          // The bytes live in the doomed group: copy them next to the kept
-          // entry as a sidecar of its own before publishing the real entry.
-          const dest = join(dirname(entryFile), sidecarName(basename(entryFile)))
-          await this.writeSidecar(dest, source)
-          const st = await stat(dest)
-          real = {
-            callId: entry.callId,
-            anchorSeq: entry.anchorSeq,
-            path: entry.path,
-            before: { kind: 'blob', path: dest },
-            size: st.size,
-            ...(source.kind === 'lossyText' ? { lossy: true } : {}),
-            ...pin,
-            time: entry.time,
-          }
-        }
-        await writeJsonAtomic(entryFile, entryToJson(real), () => opts?.crash?.('after-temp-write'))
-      }
-    }
-    for (const seq of doomed) {
-      await rm(this.anchorDir(sessionId, seq), { recursive: true, force: true })
-    }
-    // Dropping groups can invalidate in-memory dedup handles that pointed into
-    // them: forget this session's dedup state so the next commit re-seeds from
-    // the surviving window instead of linking to a deleted sidecar (R1).
-    this.seededSessions.delete(sessionId)
-    for (const key of [...this.lastEntry.keys()]) {
-      if (key.startsWith(`${sessionId}\0`)) this.lastEntry.delete(key)
-    }
-  }
-
-  /**
-   * Collect staged captures that were never committed and are older than
-   * {@link PENDING_MAX_AGE_MS}: a crash between `tools/execute` and
-   * `tools/post-execute` can leak one, and the process that would have
-   * unlinked it is gone.
-   */
-  private async prunePendingCaptures(pendingDir: string): Promise<void> {
-    let names: string[]
-    try {
-      names = await readdir(pendingDir)
-    } catch {
-      return
-    }
-    const cutoff = Date.now() - PENDING_MAX_AGE_MS
-    for (const name of names) {
-      const file = join(pendingDir, name)
-      const st = await lstat(file).catch(() => undefined)
-      if (st === undefined || !st.isFile() || st.mtimeMs >= cutoff) continue
-      await rm(file, { force: true })
-    }
-  }
-
-  /**
-   * Anchor groups a NON-TERMINAL journal still depends on — the groups holding
-   * the sidecars its actions restore from. `prune` must not evict them while
-   * the op can still be finished. Rescue copies live under `rescue/`, never in
-   * an anchor group, so only `before` references matter; a group is pinned only
-   * for a well-formed, safe reference (a corrupt journal pins nothing).
-   */
-  private async pinnedAnchors(sessionDir: string, names: readonly string[]): Promise<Set<number>> {
-    const pinned = new Set<number>()
-    for (const name of names) {
-      if (!isJournalName(name)) continue
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(await readFile(join(sessionDir, name), 'utf8'))
-      } catch {
-        continue // unreadable: nothing to pin, and never a reason to fail prune
-      }
-      if (!isRestoreJournal(parsed)) continue
-      const journal = journalFromJson(parsed as unknown as Record<string, unknown>, sessionDir)
-      if (journal === undefined) continue
-      if (journal.state === 'completed' || journal.state === 'rolled-back') continue
-      for (const action of journal.actions) {
-        const source = action.before
-        if (source === null || source.kind !== 'blob') continue
-        const ref = sessionRelativeRef(sessionDir, source.path)
-        // A byte reference (`<seq>/<base>.before`), not a link ref (`*.json`).
-        if (!isSafeBackupRef(ref)) continue
-        const anchor = refAnchorOf(ref)
-        if (Number.isSafeInteger(anchor)) pinned.add(anchor)
-      }
-    }
-    return pinned
-  }
-
-  /**
-   * Recycle terminal restore journals (`completed` / `rolled-back`): once an
-   * op finished, its journal and its rescue bytes are dead weight that would
-   * otherwise accumulate without bound (one journal per both-mode rewind).
-   * Non-terminal journals (crashed ops awaiting reconcile / continue /
-   * rollback) and unclassifiable (corrupt) ones are ALWAYS kept — a recovery
-   * record that cannot be classified is never destroyed.
-   */
-  private async pruneTerminalJournals(sessionDir: string, names: readonly string[]): Promise<void> {
-    for (const name of names) {
-      if (!isJournalName(name)) continue
-      const file = join(sessionDir, name)
-      try {
-        const parsed = JSON.parse(await readFile(file, 'utf8')) as Partial<RestoreJournal>
-        if (parsed.state === 'completed' || parsed.state === 'rolled-back') {
-          await rm(file, { force: true })
-          // A legacy journal has no rescue directory: force:true is a no-op.
-          await rm(join(sessionDir, RESCUE_DIR, safeFileId(journalOpIdOf(name))), { recursive: true, force: true })
-        }
-      } catch {
-        // Corrupt or unreadable: keep — never destroy a recovery record we
-        // cannot classify.
-      }
-    }
+  /** Whether this store has already loaded `sessionId`. */
+  isLoaded(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.loaded === true
   }
 
   /** True when a path exists on disk. */
@@ -1634,29 +190,230 @@ export class SnapshotStore {
   }
 
   /**
-   * Cross-session retention sweep: remove WHOLE session directories whose
-   * newest member stamp is older than `maxAgeDays` days of idle, keeping the
-   * active session (`keepActiveId`) untouched. This is the anti-growth policy
-   * for finished sessions (rewind only ever reads the active session, so a
-   * finished session's backups are provably dead weight).
-   *
-   * SAFETY:
-   *  - Only whole session directories are removed (dedup refs are
-   *    session-relative, so there is no cross-session dangling to materialize);
-   *  - the active session is never targeted (`keepActiveId`), and everything
-   *    else is protected by its own mtime — a session that is still written to
-   *    keeps scrolling its newest member stamp forward, so it is never old
-   *    enough to be pruned;
-   *  - a non-positive `maxAgeDays` throws instead of degenerating into a
-   *    mass-destructive `cutoff` in the far future;
-   *  - the walk uses `lstat` (no symlink following) and skips dot-prefixed
-   *    temp left overs — except the real `.pending/` area, whose staged bytes
-   *    are content and whose freshness is activity — so measurement stays
-   *    inside the store root.
-   *
-   * `dryRun` computes and reports exactly what would be removed without
-   * deleting anything — the `/snapshot-auto-cleanup run` preview.
+   * Load (or reload) one session: read meta, drop corrupt/orphan manifests,
+   * retain the newest 100, and GC. Returns one-time warnings for the caller to
+   * log. A newer store sets the session unavailable instead of throwing.
    */
+  async loadSession(session: StoreSession, opts?: { readonly force?: boolean }): Promise<{ warnings: string[] }> {
+    return await this.withLock(session.id, async (state) => {
+      if (state.loaded && opts?.force !== true) return { warnings: [] }
+      this.resetState(state)
+      const warnings: string[] = []
+      await this.loadLocked(state, session, warnings)
+      state.loaded = true
+      return { warnings }
+    })
+  }
+
+  /**
+   * Create one dense checkpoint per user message in `messageIds`, all with the
+   * same pre-step file states and increasing times; the last becomes current.
+   * Returns per-file warnings; the caller logs them without blocking the step.
+   */
+  async createCheckpoints(
+    sessionId: string,
+    sessionVersion: number,
+    messageIds: readonly string[],
+  ): Promise<{ warnings: string[] }> {
+    if (messageIds.length === 0) return { warnings: [] }
+    return await this.withLock(sessionId, async (state) => {
+      this.assertUsable(state)
+      // A failed creation leaves no current checkpoint: later first touches in
+      // this turn must not migrate into the previous message's manifest.
+      state.current = undefined
+      const warnings: string[] = []
+      const previous = state.order.at(-1)
+      const files = previous === undefined ? {} : await this.scanFiles(sessionId, previous.files, warnings)
+      const created: StoredCheckpoint[] = []
+      let lastTime = state.lastTime
+      await this.ensureMeta(sessionId, sessionVersion)
+      try {
+        for (const messageId of messageIds) {
+          const time = Math.max(Date.now(), lastTime + 1)
+          lastTime = time
+          const checkpoint: StoredCheckpoint = {
+            store: CURRENT_STORE_VERSION,
+            messageId,
+            time,
+            files: { ...files },
+            file: join(this.checkpointsDir(sessionId), checkpointFileName(messageId)),
+          }
+          await writeJsonAtomic(checkpoint.file, checkpointToJson(checkpoint))
+          created.push(checkpoint)
+        }
+      } catch (error) {
+        for (const checkpoint of created) await rm(checkpoint.file, { force: true })
+        throw error
+      }
+      for (const checkpoint of created) {
+        state.checkpoints.set(checkpoint.file, checkpoint)
+        state.order.push(checkpoint)
+      }
+      state.lastTime = lastTime
+      state.current = created.at(-1)
+      state.tracked = new Set(Object.keys(state.current!.files))
+      this.trimRetained(state)
+      try {
+        warnings.push(...await this.gc(sessionId, state))
+      } catch (error) {
+        warnings.push(`checkpoint GC failed: ${messageOf(error)}`)
+      }
+      return { warnings }
+    })
+  }
+
+  /**
+   * Drop the current checkpoint reference without touching disk. Used when a
+   * step's batch could not be checkpointed: first touches in the rest of that
+   * turn are skipped instead of landing in the previous message's manifest.
+   */
+  async abandonCurrent(sessionId: string): Promise<void> {
+    await this.withLock(sessionId, async (state) => {
+      state.current = undefined
+    })
+  }
+
+  /**
+   * Record the pre-touch state of a path the current step has not seen yet.
+   * A missing current checkpoint means the plugin mounted mid-turn: skip, so
+   * later rows can never migrate into the previous message's manifest.
+   */
+  async captureFirstTouch(sessionId: string, path: string): Promise<{ recorded: boolean; warnings: string[] }> {
+    return await this.withLock(sessionId, async (state) => {
+      if (!state.loaded) throw new Error(`checkpoint store for ${sessionId} is not loaded`)
+      if (state.unavailable !== undefined) throw state.unavailable
+      const current = state.current
+      if (current === undefined) return { recorded: false, warnings: [] }
+      if (Object.hasOwn(current.files, path)) return { recorded: false, warnings: [] }
+      const warnings: string[] = []
+      let live: Stats | undefined
+      try {
+        live = await lstat(path)
+      } catch (error) {
+        if (!isEnoent(error)) {
+          warnings.push(`first-touch probe failed for ${path}: ${messageOf(error)}`)
+          return { recorded: false, warnings }
+        }
+      }
+      const parent = await locationPin(path)
+      if (parent === undefined) {
+        warnings.push(`first-touch skipped ${path}: no location pin`)
+        return { recorded: false, warnings }
+      }
+      let row: FileState
+      if (live === undefined) {
+        row = { v: 1, blob: null, parent }
+      } else {
+        if (!live.isFile() || live.nlink > 1) return { recorded: false, warnings }
+        if (this.isOverFileCap(live.size)) return { recorded: false, warnings }
+        let written: { name: string; size: number }
+        try {
+          written = await this.writeVersion(sessionId, path, 1)
+        } catch (error) {
+          warnings.push(`first-touch copy failed for ${path}: ${messageOf(error)}`)
+          return { recorded: false, warnings }
+        }
+        row = { v: 1, blob: written.name, size: written.size, mode: live.mode & 0o7777, parent }
+      }
+      current.files[path] = row
+      try {
+        await writeJsonAtomic(current.file, checkpointToJson(current))
+      } catch (error) {
+        delete current.files[path]
+        throw error
+      }
+      state.tracked.add(path)
+      return { recorded: true, warnings }
+    })
+  }
+
+  /**
+   * Compute one target's preview in a single plan pass: the actions that would
+   * change the disk and the tracked paths currently over the per-file cap.
+   */
+  async preview(sessionId: string, messageId: string): Promise<{
+    readonly files: readonly FileImpact[]
+    readonly uncovered: readonly UncoveredPath[]
+  }> {
+    return await this.withLock(sessionId, async (state) => {
+      this.assertUsable(state)
+      const plan = await this.planLocked(state, messageId)
+      return {
+        files: plan.actions
+          .map(action => ({ path: action.path, action: action.action }))
+          .sort((a, b) => a.path.localeCompare(b.path)),
+        uncovered: plan.uncovered,
+      }
+    })
+  }
+
+  /** Restore the workspace to one message's checkpoint. */
+  async restoreAfter(sessionId: string, messageId: string): Promise<RestoreOutcome> {
+    return await this.withLock(sessionId, async (state) => {
+      this.assertUsable(state)
+      const plan = await this.planLocked(state, messageId)
+      const restored: string[] = []
+      const deleted: string[] = []
+      const skipped: SkippedPath[] = [...plan.skipped]
+      const failed: { path: string; message: string }[] = [...plan.failed]
+      if (plan.noCheckpoint) {
+        return { restored, deleted, skipped, failed, noCheckpoint: true }
+      }
+      for (const action of plan.actions) {
+        if (!(await parentStillMatches(action.path, action.parent))) {
+          skipped.push({ path: action.path, reason: 'parent' })
+          continue
+        }
+        if (await isUnsafeTarget(action.path)) {
+          skipped.push({ path: action.path, reason: 'unsafe' })
+          continue
+        }
+        if (action.action === 'delete') {
+          try {
+            await unlink(action.path)
+            deleted.push(action.path)
+          } catch (error) {
+            if (!isEnoent(error)) failed.push({ path: action.path, message: messageOf(error) })
+          }
+          continue
+        }
+        try {
+          await this.applyRestore(action)
+          restored.push(action.path)
+        } catch (error) {
+          failed.push({ path: action.path, message: messageOf(error) })
+        }
+      }
+      return { restored, deleted, skipped, failed, noCheckpoint: false }
+    })
+  }
+
+
+  /** Read the store format marker, or `null` when absent/unreadable. */
+  async readStoreVersion(sessionId: string): Promise<number | null> {
+    try {
+      const raw = JSON.parse(await readFile(join(this.sessionDir(sessionId), META_FILE), 'utf8')) as unknown
+      return parseMeta(raw)?.store ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Remove one session's entire directory and reset its in-memory state. */
+  async clearSession(sessionId: string, opts?: { readonly dryRun?: boolean }): Promise<ClearSessionReport> {
+    const dryRun = opts?.dryRun ?? false
+    return await this.withLock(sessionId, async (state) => {
+      const entries = await this.countCheckpoints(sessionId)
+      const bytes = await dirBytes(this.sessionDir(sessionId))
+      if (!dryRun) {
+        await rm(this.sessionDir(sessionId), { recursive: true, force: true })
+        this.resetState(state)
+      }
+      return { sessionId, entries, bytes, dryRun }
+    })
+  }
+
+  /** Remove idle session directories, keeping the active one. */
   async pruneStale(opts: { readonly keepActiveId?: string; readonly maxAgeDays: number; readonly dryRun?: boolean }): Promise<PruneStaleReport> {
     const { keepActiveId, dryRun = false } = opts
     const maxAgeDays = opts.maxAgeDays
@@ -1676,22 +433,14 @@ export class SnapshotStore {
     try {
       names = await readdir(this.root)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return report()
+      if (isEnoent(error)) return report()
       throw error
     }
     for (const name of names) {
-      if (name.startsWith('.')) continue
       const full = join(this.root, name)
-      let st: Stats
-      try {
-        st = await lstat(full)
-      } catch {
-        continue // raced away or unreadable: skip
-      }
-      if (!st.isDirectory()) continue
+      const st = await lstat(full).catch(() => undefined)
+      if (st === undefined || !st.isDirectory()) continue
       scanned++
-
-      // Active-session guard: never delete the session the caller is driving.
       if (keepActiveId !== undefined && safeSessionId(keepActiveId) === name) {
         skippedActive++
         remainingBytes += (await dirSizeAndLastActive(full)).size
@@ -1707,364 +456,509 @@ export class SnapshotStore {
         remainingBytes += size
       }
     }
-    // A dry run must not touch memory (its contract): only a real sweep drops
-    // the in-memory state of the sessions it removed.
     if (!dryRun) await this.forgetMissingSessions()
     return report()
   }
 
   /**
-   * All distinct paths ever recorded for a session — the "tracked files"
-   * set. Mirrors Claude Code's global `trackedFiles` collection (files stay
-   * tracked once a write-class tool touched them), derived from the disk
-   * entries so no extra persistence is needed.
+   * Number of snapshots in one session directory for the clear report: current
+   * manifests plus legacy per-call entry JSONs (whole-session cleanup reports
+   * everything it removes). Legacy members are counted by name only; their
+   * contents are never read.
    */
-  async trackedPaths(sessionId: string): Promise<Set<string>> {
-    const paths = new Set<string>()
-    for (const entry of await this.entriesAfter(sessionId, 0)) {
-      paths.add(entry.path)
+  private async countCheckpoints(sessionId: string): Promise<number> {
+    let count = (await readdir(this.checkpointsDir(sessionId)).catch(() => [] as string[]))
+      .filter(name => name.endsWith('.json')).length
+    const legacyDirs = (await readdir(this.sessionDir(sessionId)).catch(() => [] as string[]))
+      .filter(name => /^\d+$/.test(name))
+    for (const name of legacyDirs) {
+      count += (await readdir(join(this.sessionDir(sessionId), name)).catch(() => [] as string[]))
+        .filter(file => file.endsWith('.json')).length
     }
-    return paths
+    return count
   }
 
-  /**
-   * The session's recorded paths whose current size is over the cap, so no
-   * backup of that state exists. One `stat` per recorded path; a path first seen
-   * over the cap was never recorded and is therefore not listed.
-   */
-  async uncoveredPaths(
-    sessionId: string,
-    probe: DiskProbe = defaultProbe,
-  ): Promise<UncoveredPath[]> {
-    const sizeOf = probe.size?.bind(probe)
-    if (this.maxFileBytes <= 0 || sizeOf === undefined) return []
-    const uncovered: UncoveredPath[] = []
-    for (const path of await this.trackedPaths(sessionId)) {
-      const size = await sizeOf(path)
-      // Unknown size (deleted/unreadable): nothing to report.
-      if (this.isOverFileCap(size)) uncovered.push({ path, ...(size !== undefined ? { size } : {}) })
-    }
-    return uncovered
+  /** Store directories for one session. */
+  private checkpointsDir(sessionId: string): string {
+    return join(this.sessionDir(sessionId), CHECKPOINTS_DIR)
   }
 
-  /**
-   * Summarize a session's on-disk footprint for a clear dry-run: anchor-group
-   * count, committed checkpoint-entry count (one per `.json` in an anchor
-   * group), restore-journal count (both journal prefixes), and the total bytes
-   * the session dir occupies — entry JSONs, raw byte sidecars, `rescue/**` and
-   * the staged `.pending/**` copies alike, so the number matches what a `du` of
-   * that directory reports.
-   *
-   * Walks with `lstat` (never follows a symlink, so a hostile symlink cannot
-   * escape the store root or inflate the measurement) and skips dot-prefixed
-   * temp leftovers (the one exception is `.pending/`, whose staged bytes are
-   * real store content).
-   */
-  private async sessionStats(sessionId: string): Promise<{ anchorGroups: number; entries: number; journals: number; bytes: number }> {
-    const sessionDir = this.sessionDir(sessionId)
-    let names: string[]
+  private versionsDir(sessionId: string): string {
+    return join(this.sessionDir(sessionId), VERSIONS_DIR)
+  }
+
+  /** Create the per-session meta file at the first checkpoint. */
+  private async ensureMeta(sessionId: string, sessionVersion: number): Promise<void> {
+    const dir = this.sessionDir(sessionId)
+    const metaPath = join(dir, META_FILE)
+    // A valid meta from an earlier run can outlive a removed checkpoints dir
+    // (out-of-band cleanup); every checkpoint write needs its parent.
+    await mkdir(this.checkpointsDir(sessionId), { recursive: true })
     try {
-      names = await readdir(sessionDir)
+      await stat(metaPath)
+      return
     } catch (error) {
-      if (isEnoent(error)) return { anchorGroups: 0, entries: 0, journals: 0, bytes: 0 }
+      if (!isEnoent(error)) throw error
+    }
+    await mkdir(dir, { recursive: true })
+    await writeJsonAtomic(metaPath, metaToJson({ store: CURRENT_STORE_VERSION, sessionFormat: sessionVersion }))
+  }
+
+  /** Re-read every tracked path for one new message boundary. */
+  private async scanFiles(
+    sessionId: string,
+    previous: Record<string, FileState>,
+    warnings: string[],
+  ): Promise<Record<string, FileState>> {
+    const next: Record<string, FileState> = {}
+    for (const [path, row] of Object.entries(previous)) {
+      next[path] = await this.recheckRow(sessionId, path, row, warnings)
+    }
+    return next
+  }
+
+  /** Reconcile one path's recorded row against the live disk. */
+  private async recheckRow(
+    sessionId: string,
+    path: string,
+    previous: FileState,
+    warnings: string[],
+  ): Promise<FileState> {
+    let live: Stats | undefined
+    try {
+      live = await lstat(path)
+    } catch (error) {
+      if (!isEnoent(error)) {
+        warnings.push(`checkpoint probe failed for ${path}: ${messageOf(error)}`)
+        return previous
+      }
+    }
+    const parent = await locationPin(path)
+    if (live === undefined) {
+      if (previous.blob === null) return previous
+      if (parent === undefined) {
+        warnings.push(`checkpoint skipped ${path}: no location pin`)
+        return previous
+      }
+      return { v: previous.v + 1, blob: null, parent }
+    }
+    if (!live.isFile() || live.nlink > 1) return previous
+    if (this.isOverFileCap(live.size)) return previous
+    if (parent === undefined) {
+      warnings.push(`checkpoint skipped ${path}: no location pin`)
+      return previous
+    }
+    const same = await this.contentUnchanged(sessionId, path, previous, live)
+    if (same) {
+      return { ...previous, mode: live.mode & 0o7777, parent }
+    }
+    let written: { name: string; size: number }
+    try {
+      written = await this.writeVersion(sessionId, path, previous.v + 1)
+    } catch (error) {
+      warnings.push(`checkpoint copy failed for ${path}: ${messageOf(error)}`)
+      return previous
+    }
+    return {
+      v: previous.v + 1,
+      blob: written.name,
+      size: written.size,
+      mode: live.mode & 0o7777,
+      parent,
+    }
+  }
+
+  /** `(size, mtime)` fast path, then a streaming byte compare. */
+  private async contentUnchanged(
+    sessionId: string,
+    path: string,
+    previous: FileState,
+    live: Stats,
+  ): Promise<boolean> {
+    if (previous.blob === null || previous.size === undefined) return false
+    const versionPath = join(this.versionsDir(sessionId), previous.blob)
+    const version = await lstat(versionPath).catch(() => undefined)
+    if (version === undefined || !version.isFile() || version.size !== previous.size) return false
+    if (live.size === previous.size && live.mtimeMs < version.mtimeMs) return true
+    try {
+      return await sameFileBytes(versionPath, path)
+    } catch {
+      return false
+    }
+  }
+
+  /** Copy current bytes into a version file (temp + rename). */
+  private async writeVersion(sessionId: string, path: string, v: number): Promise<{ name: string; size: number }> {
+    const dir = this.versionsDir(sessionId)
+    await mkdir(dir, { recursive: true })
+    const name = versionFileName(path, v)
+    const dest = join(dir, name)
+    const temp = `${dest}.tmp`
+    try {
+      // A crash leftover is inert; EXCL also refuses a symlink planted at the
+      // temp name instead of following it.
+      await rm(temp, { force: true }).catch(() => undefined)
+      await copyFile(path, temp, constants.COPYFILE_EXCL)
+      const copied = await stat(temp)
+      await rename(temp, dest)
+      return { name, size: copied.size }
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => undefined)
       throw error
     }
-    let anchorGroups = 0
-    let entries = 0
-    let journals = 0
-    let bytes = 0
-    for (const name of names) {
-      // Dot-prefixed temp leftovers are never store members; `.pending/` (and
-      // the `rescue/` tree below) is the exception — staged and rescue bytes
-      // are real store content.
-      if (name.startsWith('.') && name !== PENDING_DIR) continue
-      const full = join(sessionDir, name)
-      const st = await lstat(full).catch(() => undefined)
-      if (st === undefined) continue // raced away or unreadable: skip
-      if (st.isDirectory()) {
-        // Staged captures and pre-restore rescue copies are real store content:
-        // they have no entry/journal count, but their bytes belong in the total.
-        if (name === PENDING_DIR || name === RESCUE_DIR) {
-          bytes += await dirBytes(full)
+  }
+
+  /** Compute the restore plan while holding the session lock. */
+  private async planLocked(state: SessionState, messageId: string): Promise<RestorePlan> {
+    const target = state.order.find(checkpoint => checkpoint.messageId === messageId)
+    if (target === undefined || state.order.length === 0) {
+      return { actions: [], skipped: [], failed: [], uncovered: [], noCheckpoint: true }
+    }
+    const latest = state.order[state.order.length - 1]!
+    const actions: PlannedAction[] = []
+    const skipped: SkippedPath[] = []
+    const failed: { path: string; message: string }[] = []
+    const uncovered: UncoveredPath[] = []
+    for (const path of Object.keys(latest.files)) {
+      const row = Object.hasOwn(target.files, path)
+        ? target.files[path]!
+        : this.firstRowAfter(state, target.time, path)
+      if (row === undefined) {
+        skipped.push({ path, reason: 'missing' })
+        continue
+      }
+      if (row.parent === undefined) {
+        skipped.push({ path, reason: 'parent' })
+        continue
+      }
+      if (row.blob === null) {
+        const live = await lstat(path).catch((error: unknown) => {
+          if (!isEnoent(error)) return undefined
+          return null
+        })
+        if (live === null) continue
+        if (live !== undefined && live.isFile() && this.isOverFileCap(live.size)) {
+          uncovered.push({ path, size: live.size })
+        }
+        if (live !== undefined && !(await parentStillMatches(path, row.parent))) {
+          skipped.push({ path, reason: 'parent' })
           continue
         }
-        if (!Number.isSafeInteger(Number(name))) continue
-        anchorGroups++
-        for (const file of await readdir(full).catch(() => [] as string[])) {
-          if (file.endsWith('.json')) entries++
+        if (await isUnsafeTarget(path)) {
+          skipped.push({ path, reason: 'unsafe' })
+          continue
         }
-        // Count EVERY member (entry JSONs and raw byte sidecars alike) so the
-        // reported footprint matches what the session dir actually occupies.
-        bytes += await dirBytes(full)
+        actions.push({ path, action: 'delete', parent: row.parent })
         continue
       }
-      if (!st.isFile()) continue
-      if (isJournalName(name)) journals++
-      bytes += st.size
-    }
-    return { anchorGroups, entries, journals, bytes }
-  }
-
-  /**
-   * Remove a session's ENTIRE snapshot directory — every anchor group, every
-   * checkpoint entry, and every restore journal — and reset the store's
-   * in-memory dedup state so the session starts recording fresh from the
-   * current workspace state. This is the manual "get rid of this session's
-   * records NOW" action on the ACTIVE session the user is driving (it is never
-   * targetable by id; that is a directory-manipulation concern the user can do
-   * directly).
-   *
-   * SEMANTICS — clearing is an explicit abandonment: issuing the command means
-   * the user accepts that this session's snapshot archive goes away. It is
-   * therefore NOT gated on the state of any restore journal. A clear and a
-   * restore are both slash commands the host runs to completion for an agent,
-   * so they never interleave — any non-terminal journal present on disk is a
-   * stale orphan from a previous (crashed) process, and discarding it is the
-   * correct, safe resolution of that abandoned restore.
-   *
-   * SAFETY (this module's real concern is the plugin's ongoing BEHAVIOR, not
-   * losing snapshots):
-   *  - Only the session dir is removed; dedup refs are session-relative, so
-   *    there is no cross-session dangling to materialize (the same rationale as
-   *    {@link pruneStale}'s whole-dir removal).
-   *  - The in-memory dedup state (`lastEntry` / `seededSessions`) is ALWAYS
-   *    reset on an apply — even when the dir was already empty. A stale
-   *    in-memory entry (e.g. a session whose dir was removed out-of-band) would
-   *    otherwise link a later `recordEntry` to a deleted prior entry, leaving a
-   *    dangling ref that breaks restore resolution. This is the primary
-   *    correctness guarantee.
-   *
-   * `dryRun` computes the report without touching disk or memory.
-   */
-  async clearSession(sessionId: string, opts?: { readonly dryRun?: boolean }): Promise<ClearSessionReport> {
-    const dryRun = opts?.dryRun ?? false
-    const stats = await this.sessionStats(sessionId)
-    if (!dryRun) {
-      // Any store member means the dir is worth removing: entries, journals,
-      // and the byte-only members `sessionStats` counts (a staged capture, a
-      // rescue copy, a marker). `bytes > 0` covers the latter, so a dir that
-      // holds ONLY staged bytes does not survive the clear that just reported
-      // freeing them.
-      if (stats.anchorGroups > 0 || stats.journals > 0 || stats.bytes > 0) {
-        await rm(this.sessionDir(sessionId), { recursive: true, force: true })
+      const source = join(this.versionsDir(state.sessionId), row.blob)
+      const version = await lstat(source).catch(() => undefined)
+      if (version === undefined || !version.isFile() || version.size !== row.size) {
+        failed.push({ path, message: 'recorded version is missing or has the wrong size' })
+        continue
       }
-      // Always reset the in-memory dedup state on an apply — even when the dir
-      // was already empty. A stale in-memory entry (e.g. a session whose dir was
-      // removed out-of-band) would otherwise link a later recordEntry to a
-      // deleted prior entry, leaving a dangling ref.
-      this.forgetSession(sessionId)
+      if (!(await parentStillMatches(path, row.parent))) {
+        skipped.push({ path, reason: 'parent' })
+        continue
+      }
+      if (await isUnsafeTarget(path)) {
+        skipped.push({ path, reason: 'unsafe' })
+        continue
+      }
+      const live = await lstat(path).catch(() => undefined)
+      if (live !== undefined && live.isFile() && this.isOverFileCap(live.size)) {
+        uncovered.push({ path, size: live.size })
+        skipped.push({ path, reason: 'oversized' })
+        continue
+      }
+      if (live !== undefined && live.isFile() && live.size === row.size && live.mtimeMs < version.mtimeMs) {
+        continue
+      }
+      if (live !== undefined && live.isFile()) {
+        let same: boolean
+        try {
+          same = await sameFileBytes(source, path)
+        } catch (error) {
+          failed.push({ path, message: messageOf(error) })
+          continue
+        }
+        if (same) continue
+      }
+      actions.push({
+        path,
+        action: 'restore',
+        source,
+        size: row.size!,
+        ...(row.mode !== undefined ? { mode: row.mode } : {}),
+        parent: row.parent,
+      })
     }
-    return { sessionId, ...stats, dryRun }
+    actions.sort((a, b) => a.path.localeCompare(b.path))
+    uncovered.sort((a, b) => a.path.localeCompare(b.path))
+    return { actions, skipped, failed, uncovered, noCheckpoint: false }
   }
 
-  /**
-   * Read the session-format version marker recorded for a session, or `null`
-   * when there is no marker — a pre-marker, legacy snapshot dir, or a session
-   * that never materialized a dir.
-   */
-  private async readFormatVersion(sessionId: string): Promise<number | null> {
+  /** Earliest retained row containing `path` strictly after `time`. */
+  private firstRowAfter(state: SessionState, time: number, path: string): FileState | undefined {
+    for (const checkpoint of state.order) {
+      if (checkpoint.time <= time) continue
+      if (Object.hasOwn(checkpoint.files, path)) return checkpoint.files[path]
+    }
+    return undefined
+  }
+
+  /** Atomically replace one target with a version file. */
+  private async applyRestore(action: Extract<PlannedAction, { action: 'restore' }>): Promise<void> {
+    await mkdir(dirname(action.path), { recursive: true })
+    const temp = `${action.path}.rewind-tmp`
     try {
-      const raw = await readFile(join(this.sessionDir(sessionId), SnapshotStore.FORMAT_FILE), 'utf8')
-      const parsed = Number(raw.trim())
-      return Number.isFinite(parsed) ? parsed : null
-    } catch {
-      return null
+      // The target directory is workspace-writable; never follow a symlink an
+      // attacker planted at the temp name. EXCL refuses an existing entry.
+      await rm(temp, { force: true }).catch(() => undefined)
+      await copyFile(action.source, temp, constants.COPYFILE_EXCL)
+      const copied = await stat(temp)
+      if (copied.size !== action.size) throw new Error(`version ${basename(action.source)} changed size during restore`)
+      await this.hooks.beforeRestoreRename?.()
+      try {
+        await rename(temp, action.path)
+      } catch (error) {
+        // A read-only target can block replacement on some filesystems. The
+        // content is already complete in the temp file; widening the target
+        // for the rename never exposes a half-written file.
+        const current = await stat(action.path).catch(() => undefined)
+        if (current === undefined || (current.mode & 0o200) !== 0) throw error
+        await chmod(action.path, current.mode | 0o200).catch(() => undefined)
+        await rename(temp, action.path)
+      }
+      if (action.mode !== undefined) await chmod(action.path, action.mode).catch(() => undefined)
+    } finally {
+      await rm(temp, { force: true }).catch(() => undefined)
     }
   }
 
-  /**
-   * Record the session-format version a session's snapshots are anchored under
-   * (`session.header.version`: 2 for the v2 format, 3 for the v3 format). The
-   * marker is a tiny non-`.json` file, so it never counts as a checkpoint
-   * entry in `sessionStats`/`clearSession`. Written atomically (temp + rename)
-   * like every other persisted marker, so a crash mid-write can only leave an
-   * inert `format.tmp` — never a partial marker that a later reconcile could
-   * misread as a version mismatch and wrongly clear.
-   */
-  async markFormatVersion(sessionId: string, sessionVersion: number): Promise<void> {
-    const dir = this.sessionDir(sessionId)
-    await mkdir(dir, { recursive: true })
-    const file = join(dir, SnapshotStore.FORMAT_FILE)
-    const tmp = `${file}.tmp`
-    await writeFile(tmp, `${sessionVersion}`, 'utf8')
-    await rename(tmp, file)
-  }
-
-  /**
-   * Set the session-format version the store stamps onto every snapshot it
-   * records. The host sets this once per process from `agent/created`
-   * (`agent.session.header.version`), so a marker is only materialized for a
-   * session that actually records a snapshot.
-   */
-  setFormatVersion(sessionVersion: number): void {
-    this.formatVersion = sessionVersion
-  }
-
-  /**
-   * Read the plugin's STORE-format marker for a session, or null when there is
-   * none (a released-v1 dir, or a session that never recorded a snapshot). The
-   * marker is a quick session-level signal; every entry and journal is also
-   * self-describing (`store` / `version`), so a missing marker never changes
-   * how an entry is read.
-   */
-  async readStoreVersion(sessionId: string): Promise<number | null> {
+  /** Load one session's retained manifests and GC. */
+  private async loadLocked(state: SessionState, session: StoreSession, warnings: string[]): Promise<void> {
+    const dir = this.sessionDir(session.id)
+    let names: string[]
     try {
-      const raw = await readFile(join(this.sessionDir(sessionId), SnapshotStore.STORE_FILE), 'utf8')
-      const parsed = Number(raw.trim())
-      return Number.isFinite(parsed) ? parsed : null
+      names = await readdir(dir)
+    } catch (error) {
+      if (isEnoent(error)) return
+      throw error
+    }
+    if (this.hasLegacyMembers(names) && !this.legacyWarned.has(session.id)) {
+      this.legacyWarned.add(session.id)
+      warnings.push(`legacy snapshot data ignored for ${session.id}`)
+    }
+    const metaPath = join(dir, META_FILE)
+    let raw: string
+    try {
+      raw = await readFile(metaPath, 'utf8')
+    } catch (error) {
+      if (!isEnoent(error)) throw error
+      if (names.includes(CHECKPOINTS_DIR) || names.includes(VERSIONS_DIR)) {
+        warnings.push(`checkpoint metadata missing for ${session.id}; discarded new storage`)
+        await this.discardNewStorage(session.id)
+      }
+      return
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(raw)
     } catch {
-      return null
+      warnings.push(`checkpoint metadata corrupt for ${session.id}; discarded new storage`)
+      await this.discardNewStorage(session.id)
+      return
+    }
+    const meta = parseMeta(parsed)
+    if (meta === undefined) {
+      warnings.push(`checkpoint metadata corrupt for ${session.id}; discarded new storage`)
+      await this.discardNewStorage(session.id)
+      return
+    }
+    if (meta.store > CURRENT_STORE_VERSION) {
+      state.unavailable = new UnknownStoreVersionError(meta.store, metaPath)
+      warnings.push(`file restore disabled for ${session.id}: ${state.unavailable.message}`)
+      return
+    }
+    if (meta.store !== CURRENT_STORE_VERSION) {
+      warnings.push(`checkpoint storage for ${session.id} discarded: store format ${meta.store} is not supported`)
+      await this.discardNewStorage(session.id)
+      return
+    }
+    if (meta.sessionFormat !== session.version) {
+      warnings.push(`checkpoint storage for ${session.id} discarded: session format ${session.version} does not match stored ${meta.sessionFormat}`)
+      await this.discardNewStorage(session.id)
+      return
+    }
+    const messageIds = new Set(session.messageIds)
+    let checkpointNames: string[]
+    try {
+      checkpointNames = await readdir(this.checkpointsDir(session.id))
+    } catch (error) {
+      if (!isEnoent(error)) throw error
+      checkpointNames = []
+    }
+    for (const name of checkpointNames) {
+      if (!name.endsWith('.json')) continue
+      const file = join(this.checkpointsDir(session.id), name)
+      const info = await lstat(file).catch(() => undefined)
+      if (info === undefined || !info.isFile()) {
+        warnings.push(`corrupt checkpoint ${name} discarded for ${session.id}`)
+        await rm(file, { recursive: true, force: true }).catch(() => undefined)
+        continue
+      }
+      let raw: string
+      try {
+        raw = await readFile(file, 'utf8')
+      } catch (error) {
+        if (isEnoent(error)) continue
+        throw error
+      }
+      let checkpoint: Checkpoint | undefined
+      try {
+        checkpoint = parseCheckpoint(JSON.parse(raw) as unknown)
+      } catch (error) {
+        if (!(error instanceof SyntaxError)) throw error
+        checkpoint = undefined
+      }
+      if (checkpoint === undefined) {
+        warnings.push(`corrupt checkpoint ${name} discarded for ${session.id}`)
+        await rm(file, { force: true }).catch(() => undefined)
+        continue
+      }
+      if (!messageIds.has(checkpoint.messageId) || name !== checkpointFileName(checkpoint.messageId)) {
+        await rm(file, { force: true }).catch(() => undefined)
+        continue
+      }
+      state.checkpoints.set(file, { ...checkpoint, file })
+    }
+    state.order = [...state.checkpoints.values()].sort((a, b) => a.time - b.time || a.file.localeCompare(b.file))
+    this.trimRetained(state)
+    if (state.order.length > 0) {
+      const latest = state.order[state.order.length - 1]!
+      state.lastTime = latest.time
+      state.tracked = new Set(Object.keys(latest.files))
+    }
+    state.current = undefined
+    try {
+      warnings.push(...await this.gc(session.id, state))
+    } catch (error) {
+      warnings.push(`checkpoint GC failed for ${session.id}: ${messageOf(error)}`)
     }
   }
 
-  /**
-   * Stamp the store-format marker (atomically, like `format`). Written
-   * alongside every byte-format entry, so a session that only ever holds the
-   * released string format keeps no marker and is read as v1.
-   */
-  async markStoreVersion(sessionId: string, storeVersion: number): Promise<void> {
+  /** True when a legacy per-call snapshot member is present. */
+  private hasLegacyMembers(names: readonly string[]): boolean {
+    return names.some(name =>
+      /^\d+$/.test(name)
+      || name === 'store'
+      || name === 'format'
+      || name === 'rescue'
+      || name === '.pending'
+      || name.startsWith('journal-')
+      || name.startsWith('restore-journal-'))
+  }
+
+  /** Delete only the new storage; legacy members are left untouched. */
+  private async discardNewStorage(sessionId: string): Promise<void> {
     const dir = this.sessionDir(sessionId)
-    await mkdir(dir, { recursive: true })
-    const file = join(dir, SnapshotStore.STORE_FILE)
-    const tmp = `${file}.tmp`
-    await writeFile(tmp, `${storeVersion}`, 'utf8')
-    await rename(tmp, file)
-  }
-
-  /**
-   * Refuse to plan against (or write into) a session whose store format is
-   * NEWER than this build understands (ADR-10): the caller reports it and
-   * changes nothing — no partial restore, no clear, no v2 entry written into a
-   * v3 store. Checked before any entry is read, so the marker alone is enough
-   * to fail closed.
-   */
-  async assertKnownStoreVersion(sessionId: string): Promise<void> {
-    const version = await this.readStoreVersion(sessionId)
-    if (version !== null && version > CURRENT_STORE_VERSION) {
-      throw new UnknownStoreVersionError(version, join(this.sessionDir(sessionId), SnapshotStore.STORE_FILE))
+    for (const name of [META_FILE, CHECKPOINTS_DIR, VERSIONS_DIR]) {
+      await rm(join(dir, name), { recursive: true, force: true }).catch(() => undefined)
     }
   }
 
-  /**
-   * Session-format-version guard: clear a session's snapshot dir when the
-   * format its snapshots were anchored under differs from the current session
-   * format, so seq-anchored references can never survive a format migration
-   * mis-mapped. Runs at `agent/created` — after DSH has migrated/loaded
-   * the session, so `sessionVersion` is the post-migration value.
-   *
-   * Conservative rule (per the "delete stale snapshots" policy): a session
-   * with no recorded marker but with snapshot content is treated as legacy and
-   * cleared; a session whose marker differs from `sessionVersion` is cleared.
-   * A matching version — or an untouched session with nothing to protect — is
-   * left alone. The marker is re-stamped to the current version afterward so a
-   * FUTURE format change is detected on the next start.
-   *
-   * @returns whether a session snapshot dir was cleared.
-   */
-  async reconcileFormatVersion(sessionId: string, sessionVersion: number): Promise<{ cleared: boolean }> {
-    const stored = await this.readFormatVersion(sessionId)
-    if (stored === sessionVersion) return { cleared: false }
-    const stats = await this.sessionStats(sessionId)
-    const hasContent = stats.anchorGroups > 0 || stats.journals > 0
-    if (hasContent) {
-      await this.clearSession(sessionId)
+  /** Keep the newest {@link RETAINED_CHECKPOINTS} manifests in memory. */
+  private trimRetained(state: SessionState): void {
+    if (state.order.length <= RETAINED_CHECKPOINTS) return
+    const evicted = state.order.slice(0, state.order.length - RETAINED_CHECKPOINTS)
+    for (const checkpoint of evicted) state.checkpoints.delete(checkpoint.file)
+    state.order = state.order.slice(-RETAINED_CHECKPOINTS)
+  }
+
+  /** Delete unreferenced versions and non-retained manifests. */
+  private async gc(sessionId: string, state: SessionState): Promise<string[]> {
+    const warnings: string[] = []
+    const retained = state.order.slice(-RETAINED_CHECKPOINTS)
+    const retainedFiles = new Set(retained.map(checkpoint => checkpoint.file))
+    const keep = new Set<string>()
+    for (const checkpoint of retained) {
+      for (const row of Object.values(checkpoint.files)) {
+        if (row.blob !== null) keep.add(row.blob)
+      }
     }
-    // Re-stamp only when there was something worth protecting (snapshots or a
-    // prior marker) — never materialize a session dir for an untouched one.
-    if (hasContent || stored !== null) {
-      await this.markFormatVersion(sessionId, sessionVersion)
+    const checkpointNames = await readdir(this.checkpointsDir(sessionId)).catch(() => [] as string[])
+    for (const name of checkpointNames) {
+      if (!name.endsWith('.json') && !name.endsWith('.tmp')) continue
+      const file = join(this.checkpointsDir(sessionId), name)
+      if (!name.endsWith('.tmp') && retainedFiles.has(file)) continue
+      await rm(file, { force: true }).catch(error => warnings.push(`failed to remove ${file}: ${messageOf(error)}`))
     }
-    return { cleared: hasContent }
+    const versionNames = await readdir(this.versionsDir(sessionId)).catch(() => [] as string[])
+    for (const name of versionNames) {
+      if (!name.endsWith('.tmp') && keep.has(name)) continue
+      const file = join(this.versionsDir(sessionId), name)
+      await rm(file, { force: true }).catch(error => warnings.push(`failed to remove ${file}: ${messageOf(error)}`))
+    }
+    await rm(join(this.sessionDir(sessionId), `${META_FILE}.tmp`), { force: true }).catch(() => undefined)
+    return warnings
+  }
+
+  /** Drop in-memory state after a clear or a removed directory. */
+  private resetState(state: SessionState): void {
+    state.loaded = false
+    state.unavailable = undefined
+    state.checkpoints.clear()
+    state.order = []
+    state.current = undefined
+    state.tracked.clear()
+    state.lastTime = 0
+  }
+
+  /** Drop state for sessions whose directory disappeared out of band. */
+  private async forgetMissingSessions(): Promise<void> {
+    for (const [sessionId, state] of this.sessions) {
+      const present = await this.exists(this.sessionDir(sessionId)).catch(() => true)
+      if (!present) {
+        this.resetState(state)
+        this.sessions.delete(sessionId)
+      }
+    }
+  }
+
+  /** Throw the stored unavailable error, if any. */
+  private assertUsable(state: SessionState): void {
+    if (!state.loaded) throw new Error('checkpoint store session is not loaded')
+    if (state.unavailable !== undefined) throw state.unavailable
+  }
+
+  /** Run `fn` after every earlier mutation of this session. */
+  private async withLock<T>(sessionId: string, fn: (state: SessionState) => Promise<T>): Promise<T> {
+    const state = this.stateOf(sessionId)
+    const run = state.lock.then(() => fn(state))
+    state.lock = run.then(() => undefined, () => undefined)
+    return await run
+  }
+
+  private stateOf(sessionId: string): SessionState {
+    let state = this.sessions.get(sessionId)
+    if (state === undefined) {
+      state = {
+        sessionId,
+        loaded: false,
+        checkpoints: new Map(),
+        order: [],
+        tracked: new Set(),
+        lastTime: 0,
+        lock: Promise.resolve(),
+      } satisfies SessionState
+      this.sessions.set(sessionId, state)
+    }
+    return state
   }
 }
 
-/** Short content hash used to key synthetic recheck entries. */
-function hashPath(path: string): string {
-  return shortHash(path)
-}
-
-/**
- * Re-check every tracked file at a user-message boundary and record the
- * current on-disk state for any file whose state changed since it was last
- * seen — Claude Code's `fileHistoryMakeSnapshot` re-stats every tracked file
- * at each user message and snapshots the new state (changed files get a new
- * backup version, deleted files a null marker). Here the "new version" is a
- * plain before-backup entry anchored at the boundary message, so an EXTERNAL
- * edit or deletion (never seen by the write-class tool capture) enters the
- * record and can be restored by a later rewind.
- *
- * Semantics: the recorded `before` is the file's state at the boundary —
- * the state the boundary message's turn starts from, exactly like the
- * tool-captured entries. An entry is written only when the state differs
- * from the path's most-recent recorded content (`lastKnownContent`); a fresh
- * sighting (never recorded) always records. The state is compared against the
- * SAME single in-memory source `recordEntry` dedups against, so there is one
- * content copy and one comparison — not the two (a boundary map plus the
- * dedup map) the previous model held. Only CHANGED files are recorded, and
- * each is a full snapshot (`dedup: false`): a changed state always differs
- * from the recent record, so the link decision would never apply there.
- *
- * Symlinked / hard-linked paths are never re-checked (restores skip them).
- * A probe failure skips the file with a warning-level no-op; it never aborts
- * the boundary pass, and it never records the path as absent.
- *
- * @param store - the session's snapshot store.
- * @param sessionId - session whose tracked files to re-check.
- * @param anchorSeq - the boundary user-message seq (entry anchor).
- * @param tracked - the session's tracked path set (read-only here).
- * @param probe - current-disk state probe (defaults to the real FS).
- * @returns the number of entries recorded.
- */
-export async function reconcileTracked(
-  store: SnapshotStore,
-  sessionId: string,
-  anchorSeq: number,
-  tracked: ReadonlySet<string>,
-  probe: DiskProbe = defaultProbe,
-): Promise<number> {
-  try {
-    await store.assertKnownStoreVersion(sessionId)
-  } catch {
-    // Snapshots written by a newer build: record nothing rather than mixing
-    // formats into a store this build does not fully understand.
-    return 0
-  }
-  let recorded = 0
-  for (const path of tracked) {
-    try {
-      if (await probe.isUnsafeTarget(path)) continue
-      // SIZE CAP: an over-cap state is never recorded, checked before the
-      // content comparison so its bytes are not read at all. A path first seen
-      // over the cap is simply never tracked, so it can never be mis-restored.
-      if (store.isOverFileCap(await probe.size?.(path))) continue
-      const last = await store.lastKnownContent(sessionId, path)
-      // A legacy record whose bytes were lost cannot be byte-compared: treat it
-      // as "never recorded" and take a faithful byte copy (ADR-12: any doubt
-      // fails toward storing MORE — and it heals the path for later rewinds).
-      if (last !== undefined && last !== null && last.kind !== 'lossyText') {
-        const same = await probe.matches(last, path)
-        // Undecidable (IO failure): leave the file alone rather than guess.
-        if (same === undefined || same) continue
-      }
-      // Changed (or never recorded): capture the current bytes as they are —
-      // through a byte copy, so a binary file is recorded FAITHFULLY instead
-      // of being decoded into U+FFFD or mistaken for an absent file.
-      const callId = `recheck-${anchorSeq}-${hashPath(path)}`
-      const staged = await store.stageCapture(sessionId, callId)
-      const copied = await probe.copy(path, staged)
-      if (copied.kind === 'failed') {
-        await rm(staged, { force: true })
-        continue
-      }
-      await store.recordBackup(sessionId, { callId, anchorSeq, path },
-        copied.kind === 'absent' ? null : { file: staged, size: copied.size },
-        { dedup: false })
-      recorded++
-    } catch {
-      // Probe failure (unreadable file, IO error): skip this file; the
-      // boundary pass never aborts, and `before: null` is only ever recorded
-      // for a copy that proved the file is gone.
-    }
-  }
-  return recorded
+/** Error text for a caught value. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }

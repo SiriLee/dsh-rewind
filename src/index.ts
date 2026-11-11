@@ -8,18 +8,16 @@
  * node after it with itself, cutting only the model-visible surface
  * (`docs/architecture.md`).
  *
- * File restore (mode `both`) follows Claude Code's checkpointing: unless
- * `fileCheckpointingEnabled` is off, the plugin backs up each tracked
- * write-class edit BEFORE it happens (at the
- * `tools/execute` around-dispatch stage, so an approval short-circuit cannot
- * skip the capture and a denied call never records), commits the backup under
- * the turn's anchor message seq at `tools/post-execute`, and a rewind to
- * message N restores every backup anchored at or after N — modified files are
- * written back to their pre-edit content, files created after N are deleted.
- * Backups persist on disk under the dsh data directory (newest 100 message
- * groups per session), so restores work after a host restart, and they
- * read/write the real file system with plain `node:fs` — independent of the
- * fs service. See `src/snapshot.ts`.
+ * File restore (mode `both`) follows the checkpoint model: one dense
+ * `path → FileState` manifest per user message is captured at
+ * `agent/pre-step` after the step is admitted, before any model call or tool
+ * runs. A file first touched by `write`/`edit` after that point gets a v1 row
+ * in the current manifest at the `tools/execute` around-dispatch stage (after
+ * approval, before the body), so the row always holds the pre-touch state and
+ * a denied call records nothing. Versions live as shared raw byte files; a
+ * rewind reconciles the target manifest against the live disk and applies
+ * per-file atomic replaces/deletes. The store keeps the newest 100 manifests
+ * per session and survives a host restart. See `src/snapshot.ts`.
  *
  * @module dsh-rewind
  */
@@ -30,14 +28,13 @@ import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands
 import type { FileSystem } from '@deepseek-ai/dsh-fs'
 import { createUserMessage, type ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent, SessionId, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
-import type { PostToolDecision, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
+import type { ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import type { WorkingDirectoryService } from '@deepseek-ai/dsh-working-directory'
-import { copyFile, rm, stat, unlink } from 'node:fs/promises'
 import type {} from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { preferredLocale, translate, type HostKey, type HostLocaleId } from './locales.ts'
 import { listRewindCandidates, parseRewindTarget, planRewind, REWIND_MARKER_SOURCE, RewindError, type RewindMode, type RewindPlan } from './rewind.ts'
-import { DEFAULT_MAX_FILE_BYTES, MAX_ANCHOR_GROUPS, reconcileTracked, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type FileImpact, type PendingBackup, type PruneStaleReport, type RestoreOutcome, type UncoveredPath } from './snapshot.ts'
+import { DEFAULT_MAX_FILE_BYTES, SnapshotStore, UnknownStoreVersionError, type ClearSessionReport, type FileImpact, type PruneStaleReport, type RestoreOutcome, type StoreSession, type UncoveredPath } from './snapshot.ts'
 import {
   AUTO_SWEEP_INTERVAL_MS,
   DEFAULT_CLEANUP_CONFIG,
@@ -53,7 +50,7 @@ import {
 } from './snapshot-cleanup.ts'
 
 export { SnapshotStore } from './snapshot.ts'
-export type { CheckpointEntry, FileImpact, PruneStaleReport, RestoreOutcome, RestoreJournal, RestoreJournalState, RestoreReconcileReport } from './snapshot.ts'
+export type { Checkpoint, ClearSessionReport, FileImpact, FileState, PruneStaleReport, RestoreOutcome, SkippedPath, StoreSession, UncoveredPath } from './snapshot.ts'
 
 export const name = 'dsh-rewind'
 export const inject = ['commands', 'tools', 'settings']
@@ -75,12 +72,8 @@ export interface RewindConfig {
   readonly snapshotDir?: string
   /** Harness home override (`config.dshHome` > `$DSH_HOME` > `~/.dsh`); feeds the default snapshot/cleanup paths. */
   readonly dshHome?: string
-  /** In-place content dedup (identical before-content → link). Default `true`. */
-  readonly dedup?: boolean
-  /** Per-file backup cap in bytes; `0` disables the cap. Default {@link DEFAULT_MAX_FILE_BYTES}. */
+  /** Per-file checkpoint cap in bytes; `0` disables the cap. Default {@link DEFAULT_MAX_FILE_BYTES}. */
   readonly maxFileBytes?: number
-  /** Newest anchor groups (user messages) kept per session. Default {@link MAX_ANCHOR_GROUPS}. */
-  readonly maxAnchorGroups?: number
   /** Automatic snapshot-sweep cadence in ms. Default {@link AUTO_SWEEP_INTERVAL_MS}. */
   readonly autoSweepIntervalMs?: number
 }
@@ -90,7 +83,7 @@ export const DEFAULT_FILE_CHECKPOINTING_ENABLED = true
 
 /**
  * The live file-checkpointing switch (Claude Code's
- * `fileCheckpointingEnabled`): whether NEW before-backups may be recorded.
+ * `fileCheckpointingEnabled`): whether NEW checkpoints may be recorded.
  */
 export interface FileCheckpointingSettings {
   readonly fileCheckpointingEnabled: Volatile<boolean>
@@ -108,38 +101,31 @@ export interface Config extends RewindConfig, CleanupSettings, FileCheckpointing
 export const Config = z.object({
   snapshotDir: z.string().required(false),
   dshHome: z.string().required(false),
-  dedup: z.boolean().default(true),
   maxFileBytes: z.number().step(1).min(0).default(DEFAULT_MAX_FILE_BYTES),
-  maxAnchorGroups: z.number().step(1).min(1).default(MAX_ANCHOR_GROUPS),
   autoSweepIntervalMs: z.number().step(1).min(1).default(AUTO_SWEEP_INTERVAL_MS),
   fileCheckpointingEnabled: z.boolean().default(DEFAULT_FILE_CHECKPOINTING_ENABLED).volatile(),
   autoCleanupEnabled: z.boolean().default(DEFAULT_CLEANUP_CONFIG.enabled).volatile(),
   autoCleanupMaxAgeDays: z.number().step(1).min(1).default(DEFAULT_CLEANUP_CONFIG.maxAgeDays).volatile(),
 })
 
-/** Whether new before-backups may be recorded. Absent config keeps the default (on). */
+/** Whether new checkpoints may be recorded. Absent config keeps the default (on). */
 function isFileCheckpointingEnabled(config: Config | undefined): boolean {
   return config?.fileCheckpointingEnabled?.get() !== false
 }
 
 /**
- * Tool names whose mutations the checkpoint tracker follows.
- *
- * `str_replace_editor` is deliberately ABSENT even though it still exists as an
- * optional DSH package: it stopped being a DEFAULT tool in DSH 0.1.3, and the
- * plugin dropped it with the rest of the dead branches then (see the 0.10.x
- * "adapt to DSH 0.1.3-alpha.2" commit). Do not re-add it here without also
- * deciding to support opt-in deployments of that tool.
+ * Tool names whose mutations the checkpoint tracker follows. `str_replace_editor`
+ * is not tracked: it is an optional package, not a default tool.
  */
 const TRACKED_TOOLS = new Set(['write', 'edit'])
 
 /**
  * Whether a session is a subagent child: a direct-delegation session this
  * plugin neither tracks nor rewinds. THE single predicate for every skip site —
- * the checkpoint capture, the message-boundary re-check, the agent-created
- * reconcile, and the lazy cleanup trigger. The Harness refuses every generic
+ * checkpoint creation, first-touch capture, the agent-created load, and the
+ * lazy cleanup trigger. The Harness refuses every generic
  * Session RPC for such an identity (`session/agent-busy`, "use subagent
- * delivery for this child session"), so a snapshot recorded under a child
+ * delivery for this child session"), so a checkpoint recorded under a child
  * session id could never be restored by ANY rewind — parent or child — and
  * `/rewind` cannot even execute there. One predicate keeps those facts from
  * drifting apart again (SiriLee/dsh-rewind#26).
@@ -214,25 +200,6 @@ function warnCommandUnavailable(ctx: Context, name: string, error: unknown): voi
   }
 }
 
-/** Before-state captured for one in-flight tool call, keyed by agent+callId. */
-interface PendingCapture {
-  /** Resolved display path (absolute) of the file the call will mutate. */
-  readonly path: string
-  /** Staged raw before-bytes, or null when the file does not exist (a creation). */
-  readonly backup: PendingBackup | null
-}
-
-/** Drop a staged capture's bytes (a no-op when nothing was staged). */
-async function discardCapture(capture: PendingCapture | undefined): Promise<void> {
-  if (capture === undefined || capture.backup === null) return
-  try {
-    await rm(capture.backup.file, { force: true })
-  } catch {
-    // The staged copy lives inside the store's own `.pending/`, which `prune`
-    // collects when stale; a failed unlink is never worth failing a tool call.
-  }
-}
-
 /** Extract the file path a tracked tool call mutates, or undefined. */
 function mutationPathOf(exec: ToolExecution): string | undefined {
   const args = exec.arguments as { file_path?: unknown }
@@ -242,39 +209,28 @@ function mutationPathOf(exec: ToolExecution): string | undefined {
   return undefined
 }
 
-/** One cached anchor computation for a session. */
-interface AnchorCacheEntry {
-  /** Anchor seq as of `eventsLength` events. */
-  readonly anchor: number | undefined
-  /** Number of events the anchor was computed against. */
-  readonly eventsLength: number
+/** Build the host-independent session facts the store loader needs. */
+function storeSessionOf(session: Session): StoreSession {
+  const messageIds: string[] = []
+  for (const event of session.snapshotEvents()) {
+    if (event.type === 'user/message') messageIds.push(event.data.id)
+  }
+  return { id: session.id, version: session.header.version, messageIds }
 }
 
 /**
- * Latest `user/message` seq in the session log — the turn's anchor.
- *
- * Incremental: a cached anchor is reused until a NEW user/message lands. Tool
- * and assistant events appended between two tool results move the log tail but
- * never the anchor, so only the events since the last computation are scanned —
- * amortized O(1) per commit instead of a full backward walk every time.
- *
- * Keyed by the Session OBJECT (WeakMap): a session id is a branded string that
- * an exotic lifecycle could reuse, and a stale `eventsLength`-match against a
- * recycled id would hand back another session's anchor.
+ * Load a session's checkpoint store once, logging its one-time warnings. A
+ * live-mounted plugin has no `agent/created` for already-running agents, so
+ * every entry point calls this before touching the store.
  */
-function anchorSeqOf(session: Session, cache: WeakMap<Session, AnchorCacheEntry>): number | undefined {
-  const events = session.snapshotEvents()
-  const cached = cache.get(session)
-  if (cached !== undefined && cached.eventsLength === events.length) return cached.anchor
-  let anchor: number | undefined = cached?.anchor
-  for (let i = events.length - 1; i >= (cached?.eventsLength ?? 0); i--) {
-    if (events[i]!.type === 'user/message') {
-      anchor = events[i]!.seq
-      break
-    }
-  }
-  cache.set(session, { anchor, eventsLength: events.length })
-  return anchor
+async function ensureStoreSession(
+  store: SnapshotStore,
+  session: Session,
+  log: (message: string) => void,
+): Promise<void> {
+  if (store.isLoaded(session.id)) return
+  const { warnings } = await store.loadSession(storeSessionOf(session))
+  for (const warning of warnings) log(`[dsh-rewind] ${warning}`)
 }
 
 /** Resolve a path against the session's current directory, or undefined on resolution failure. */
@@ -292,174 +248,32 @@ async function resolveTarget(
 }
 
 /**
- * True when an fs-service error means "the path does not exist". Anything else
- * (an abort, a permission or IO failure, a non-local backend) is NOT an
- * absence: recording it as a creation would let a later `both` rewind DELETE a
- * file that exists.
+ * Record the pre-touch state of a path the current step has not tracked yet,
+ * during `tools/execute` (after approval, before the body). The store itself
+ * rejects non-regular targets, hard links, over-cap files and a missing
+ * current checkpoint; this function only resolves and maps the path.
  */
-function isNotFoundError(error: unknown): boolean {
-  const code = (error as { code?: unknown } | undefined)?.code
-  return code === 'ENOENT' || code === 'FS_NOT_FOUND'
-}
-
-/**
- * Capture the before-state of a tracked mutation during `tools/execute` (the
- * around-dispatch wrapper): the file still holds the old content, and this
- * stage only runs after any pre-execute approval gate allowed the call — so a
- * `{ kind: 'ask' }` short-circuit from another plugin (e.g. dsh-edit-approval)
- * cannot skip the capture, and a denied call never captures (no pending leak).
- * The recorded path is the RESOLVED display path, so restores always name the
- * real file regardless of how the model spelled it.
- *
- * The content is staged as a RAW BYTE COPY (`copyFile` into the store's
- * `.pending/`) — never through a decoded string, so binary and non-UTF-8 files
- * survive the round trip byte-exactly. The fs service provides the path
- * resolution and the `stat` fence (`type !== 'file'` is never copied: a
- * directory, FIFO or device must not be handed to `copyFile`), while the bytes
- * move through plain `node:fs` — the same local-worktree assumption the
- * restore path has always made.
- */
-async function captureBefore(
+async function captureFirstTouch(
+  ctx: Context,
   fs: FileSystem,
   workingDirectory: WorkingDirectoryService,
   store: SnapshotStore,
   exec: ToolExecution,
-  pending: Map<string, PendingCapture>,
 ): Promise<void> {
   if (!TRACKED_TOOLS.has(exec.name)) return
-  // No agent Session → no anchor to commit the capture under (see `commitEntry`).
   const agent = exec.agent
   if (agent === undefined) return
-  // Claude Code alignment: subagent edits are NOT tracked (official
-  // checkpointing limitation). A subagent runs its own session, so a backup
-  // recorded under the subagent session id could never be restored by a
-  // rewind of the parent session — it would only leak on disk (the subagent
-  // log is short, so the per-session 100-group prune never fires for it).
-  // Skipping the capture here mirrors Claude Code's behavior exactly.
   if (isSubagentSession(agent.session)) return
   const path = mutationPathOf(exec)
   if (path === undefined) return
-  // The fs tools' own base: the Session's current directory (`ensure` also
-  // recovers a vanished one).
   const cwd = await workingDirectory.ensure(agent, exec.signal)
   const target = await resolveTarget(fs, path, cwd, exec.signal)
   if (target === undefined) return
-  // The backup is restored through host `node:fs`. A backend that cannot name
-  // this path on the host (a remote one, where the display path is a URI or a
-  // remote path) has no file a host-side restore could safely touch — capturing
-  // it would let a rewind delete or overwrite a same-named host file.
+  // A non-local backend has no host path a node:fs restore could safely touch.
   if (fs.processPathFromHostPath(target.displayPath) === undefined) return
-  const info = await fs.stat(target, exec.signal).catch((error: unknown) => {
-    // Only an affirmative "not found" answer becomes a creation. Any other
-    // failure abandons the capture (the caller logs it and the tool proceeds
-    // without a backup) — never a "was created" record, which a rewind would
-    // turn into a delete of a file that exists.
-    if (isNotFoundError(error)) return undefined
-    throw error
-  })
-  // The SERVICE decides whether the file exists. Only `undefined` (no file)
-  // records a creation; a non-regular target (directory / FIFO / device) is
-  // never copied — it would either hang the copy or produce a meaningless
-  // "backup".
-  if (info !== undefined && info.type !== 'file') return
-  // SIZE CAP: too large to back up, so record NOTHING — never a `before: null`
-  // "was created" record, which a rewind would turn into a DELETE of a file
-  // that exists. Uses the `size` the stat above already returned (no extra IO)
-  // and lands before the staged copy, so a very large file is never read
-  // (issue #39). The path is deliberately not registered as tracked: with no
-  // record there is no history to contradict, so nothing can be mis-restored.
-  if (info !== undefined && store.isOverFileCap(info.size)) return
-  const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
-  if (info === undefined) {
-    pending.set(key, { path: target.displayPath, backup: null })
-    return
-  }
-  const staged = await store.stageCapture(agent.session.id, key)
-  let backup: PendingBackup
-  try {
-    await copyFile(target.displayPath, staged)
-    const st = await stat(staged)
-    // Permission bits are recorded best-effort next to the bytes: they belong
-    // to the file's state, but they never decide whether a restore happens.
-    const source = await stat(target.displayPath).catch(() => undefined)
-    backup = {
-      file: staged,
-      size: st.size,
-      ...(source !== undefined ? { mode: source.mode & 0o7777 } : {}),
-    }
-  } catch (error) {
-    // The service reported a regular file, so a failed LOCAL copy is NOT "the
-    // file does not exist": the display path is not a readable host path (a
-    // non-local backend — ADR-11) or the file raced away. Recording a creation
-    // here would let a later rewind DELETE that path, so the capture is
-    // abandoned instead (the caller logs it) and nothing is staged.
-    await rm(staged, { force: true })
-    throw error
-  }
-  pending.set(key, { path: target.displayPath, backup })
-}
-
-/**
- * Commit one tracked mutation during `tools/post-execute`: resolve the turn
- * anchor and MOVE the staged before-bytes into the checkpoint store. Failed
- * calls never commit (the staged capture is dropped); a capture staged before
- * the checkpointing switch flipped off is dropped here too.
- */
-async function commitEntry(
-  store: SnapshotStore,
-  pending: Map<string, PendingCapture>,
-  anchorCache: WeakMap<Session, AnchorCacheEntry>,
-  trackedBySession: Map<string, Set<string>>,
-  exec: ToolExecution,
-  result: ToolExecutionResult,
-  checkpointingEnabled: boolean,
-): Promise<void> {
-  const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
-  const capture = pending.get(key)
-  if (capture === undefined) return
-  pending.delete(key)
-  // A flip between capture and commit drops the staged bytes.
-  if (!checkpointingEnabled) {
-    await discardCapture(capture)
-    return
-  }
-  if (result.isError) {
-    await discardCapture(capture)
-    return
-  }
-  const agent = exec.agent
-  if (agent === undefined) {
-    await discardCapture(capture)
-    return
-  }
-  const anchorSeq = anchorSeqOf(agent.session, anchorCache)
-  if (anchorSeq === undefined) {
-    await discardCapture(capture)
-    return
-  }
-  try {
-    await store.recordBackup(agent.session.id, {
-      callId: exec.callId,
-      anchorSeq,
-      path: capture.path,
-    }, capture.backup)
-  } catch (error) {
-    // A refused commit (a store written by a newer build, an IO failure) leaves
-    // the staged bytes with no owner: the capture already left `pending` above,
-    // so the `tools/result` net cannot reach them, and `.pending/` is collected
-    // only from a LATER successful commit of the same session — which a refused
-    // store never reaches. Drop them here and keep the failure loud.
-    await discardCapture(capture)
-    throw error
-  }
-  // The path is now a tracked file: remember it for the boundary re-check
-  // (the per-session set may not have been loaded yet — seed it lazily).
-  let tracked = trackedBySession.get(agent.session.id)
-  if (tracked === undefined) {
-    tracked = new Set()
-    trackedBySession.set(agent.session.id, tracked)
-  }
-  tracked.add(capture.path)
+  await ensureStoreSession(store, agent.session, message => ctx.logger.warn(message))
+  const { warnings } = await store.captureFirstTouch(agent.session.id, target.displayPath)
+  for (const warning of warnings) ctx.logger.warn(`[dsh-rewind] ${warning}`)
 }
 
 /**
@@ -514,23 +328,36 @@ interface PreviewImpact {
   readonly backupOff: boolean
 }
 
+/** Resolve the `user/message` id a rewind target seq names. */
+function targetMessageIdOf(session: Session, targetSeq: number): string | undefined {
+  const event = session.snapshotEvents().find(candidate => candidate.seq === targetSeq)
+  return event?.type === 'user/message' ? event.data.id : undefined
+}
+
 /** Compute one target's file impact against the current disk. */
 async function previewImpact(
+  ctx: Context,
   store: SnapshotStore,
   session: Session,
   seq: number,
   checkpointingEnabled: boolean,
 ): Promise<PreviewImpact> {
   const plan = resolveOrError(session.snapshotEvents(), session.surface.nodes, `@${seq}`)
-  let impacts: readonly FileImpact[]
-  try {
-    impacts = await store.impactsAfter(session.id, plan.targetSeq)
-  } catch (error) {
-    if (!(error instanceof UnknownStoreVersionError)) throw error
-    throw new Error(t('storeUnsupported', { version: await store.readStoreVersion(session.id) ?? 0 }))
+  await ensureStoreSession(store, session, message => ctx.logger.warn(message))
+  const messageId = targetMessageIdOf(session, plan.targetSeq)
+  let preview: { readonly files: readonly FileImpact[]; readonly uncovered: readonly UncoveredPath[] } = {
+    files: [],
+    uncovered: [],
   }
-  const uncovered = await store.uncoveredPaths(session.id).catch(() => [] as UncoveredPath[])
-  return { files: impacts, uncovered, backupOff: !checkpointingEnabled }
+  if (messageId !== undefined) {
+    try {
+      preview = await store.preview(session.id, messageId)
+    } catch (error) {
+      if (!(error instanceof UnknownStoreVersionError)) throw error
+      throw new Error(t('storeUnsupported', { version: await store.readStoreVersion(session.id) ?? 0 }))
+    }
+  }
+  return { files: preview.files, uncovered: preview.uncovered, backupOff: !checkpointingEnabled }
 }
 
 /** JSON result envelope of one rewind query route. */
@@ -579,6 +406,7 @@ function queryResponse(result: RewindQueryResult): Response {
 
 /** Build the exact-route handler for one read-only query. */
 function createRewindQueryHandler(
+  ctx: Context,
   store: SnapshotStore,
   agentsOf: () => AgentLookup | undefined,
   checkpointingEnabled: () => boolean,
@@ -608,7 +436,7 @@ function createRewindQueryHandler(
       if (query === 'preview') {
         const seq = payload['seq']
         if (!Number.isSafeInteger(seq)) return queryResponse(queryFailure('rewind/bad-request', 'seq must be an integer'))
-        return queryResponse({ ok: true, value: await previewImpact(store, session, seq as number, checkpointingEnabled()) })
+        return queryResponse({ ok: true, value: await previewImpact(ctx, store, session, seq as number, checkpointingEnabled()) })
       }
       return queryResponse({
         ok: true,
@@ -629,17 +457,19 @@ function renderFailures(failed: readonly { path: string; message: string }[]): s
   })
 }
 
-/**
- * One "not restored" line per skipped path the cap caused: a path that is both
- * in the uncovered set (current size over the cap) and skipped by this pass is
- * exactly the cap refusal. Other skips stay summarised by `skip.count`.
- */
-function renderSkipped(outcome: RestoreOutcome, uncovered: readonly UncoveredPath[], maxFileBytes: number): string {
-  const capped = new Set(uncovered.map(item => item.path))
+/** One "not restored" line per skipped path, always with its reason. */
+function renderSkipped(outcome: RestoreOutcome, maxFileBytes: number): string {
   const limit = formatBytes(maxFileBytes)
   return outcome.skipped
-    .filter(path => capped.has(path))
-    .map(path => t('plan.skip', { path, reason: t('skipReason.oversized', { limit }) }))
+    .map((skip) => {
+      const reason = {
+        oversized: () => t('skipReason.oversized', { limit }),
+        parent: () => t('skipReason.parent'),
+        unsafe: () => t('skipReason.unsafe'),
+        missing: () => t('skipReason.missing'),
+      }[skip.reason]()
+      return t('plan.skip', { path: skip.path, reason })
+    })
     .join('\n')
 }
 
@@ -663,7 +493,7 @@ async function resolveObservationTarget(
  * after a both-mode restore. The restore writes/deletes through plain
  * `node:fs`, which the policy layer cannot see — that is about the
  * observation cache, not permission enforcement (the restore still touches
- * only the `planRestore` path set). Without this sync, the same
+ * only the checkpoint plan's path set). Without this sync, the same
  * session's next write of a restored or rewind-deleted file is judged against
  * the STALE pre-restore observation (the file still "present" at its old
  * version), so the write tool's intent becomes `replaceIfVersion` and
@@ -829,23 +659,28 @@ async function executeRewind(
     // mode + steer the message); rewinding the message undoes only the
     // message, leaving plan mode for the user to leave with `/plan off`.
 
+    const targetMessageId = targetMessageIdOf(agent.session, plan.targetSeq)
     let restore = ''
     if (mode === 'both') {
-      // The restore touches the real worktree through raw node:fs (unlink /
-      // writeFile), not the fs service, because it must also reach paths the
-      // service would refuse as stale/absent. That is safe only because the
-      // action set is the closed `planRestore`-derived one: paths the session
-      // recorded, no symlink/hard link, differing from the disk.
+      // The restore touches the real worktree through raw node:fs, not the fs
+      // service, because it must also reach paths the service would refuse as
+      // stale/absent. That is safe only because the action set is the closed
+      // checkpoint plan: paths the session recorded and still trusts.
       let outcome: RestoreOutcome | undefined
-      try {
-        outcome = await store.restoreAfter(agent.session.id, plan.targetSeq, path => unlink(path))
-      } catch (error) {
-        // Snapshots written by a newer build: fail the FILE RESTORE closed
-        // (nothing was changed) while the conversation rewind above already
-        // succeeded — the two are independent.
-        if (!(error instanceof UnknownStoreVersionError)) throw error
-        const version = await store.readStoreVersion(agent.session.id)
-        restore = `${t('sep.clause')}${t('storeUnsupported', { version: version ?? error.version })}`
+      if (targetMessageId === undefined) {
+        restore = `${t('sep.clause')}${t('noCheckpoint')}`
+      } else {
+        await ensureStoreSession(store, agent.session, message => ctx.logger.warn(message))
+        try {
+          outcome = await store.restoreAfter(agent.session.id, targetMessageId)
+        } catch (error) {
+          // A store written by a newer build fails the FILE RESTORE closed
+          // (nothing changed) while the conversation rewind above already
+          // succeeded — the two are independent.
+          if (!(error instanceof UnknownStoreVersionError)) throw error
+          const version = await store.readStoreVersion(agent.session.id)
+          restore = `${t('sep.clause')}${t('storeUnsupported', { version: version ?? error.version })}`
+        }
       }
       if (outcome !== undefined) {
         // The restore wrote through plain node:fs, invisible to the harness
@@ -853,19 +688,22 @@ async function executeRewind(
         // restored/deleted file is not judged against the stale pre-restore
         // observation (see syncRestoreObservations).
         await syncRestoreObservations(ctx, fs, agent, outcome)
-        const parts: string[] = []
-        if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
-        if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
-        if (outcome.skipped.length > 0) {
-          parts.push(t('skip.count', { count: outcome.skipped.length }))
-          // Name the cap refusals: the conservative choice (leave a file alone)
-          // must still be visible, never a silent omission.
-          const capped = await store.uncoveredPaths(agent.session.id).catch(() => [] as UncoveredPath[])
-          const skippedLines = renderSkipped(outcome, capped, store.fileCapBytes)
-          if (skippedLines !== '') parts.push(skippedLines)
+        if (outcome.noCheckpoint) {
+          restore = `${t('sep.clause')}${t('noCheckpoint')}`
+        } else {
+          const parts: string[] = []
+          if (outcome.restored.length > 0) parts.push(t('restore.count', { count: outcome.restored.length }))
+          if (outcome.deleted.length > 0) parts.push(t('delete.count', { count: outcome.deleted.length }))
+          if (outcome.skipped.length > 0) {
+            parts.push(t('skip.count', { count: outcome.skipped.length }))
+            // A conservative leave-alone must still be visible, never a silent
+            // omission.
+            const skippedLines = renderSkipped(outcome, store.fileCapBytes)
+            if (skippedLines !== '') parts.push(skippedLines)
+          }
+          if (!checkpointingEnabled) parts.push(t('backupOff'))
+          restore = parts.length > 0 ? `${t('sep.clause')}${parts.join(t('sep.list'))}` : t('noRestorable')
         }
-        if (!checkpointingEnabled) parts.push(t('backupOff'))
-        restore = parts.length > 0 ? `${t('sep.clause')}${parts.join(t('sep.list'))}` : t('noRestorable')
         restore += renderFailures(outcome.failed)
       }
     }
@@ -1027,7 +865,6 @@ async function handleSnapshotCleanup(
   store: SnapshotStore,
   invocation: CommandInvocation,
   dshHome: string | undefined,
-  trackedBySession: Map<string, Set<string>>,
 ): Promise<CommandResult> {
   const parsed = parseCleanupCommand(invocation.rawInput)
   if ('error' in parsed) return { kind: 'error', text: t('cleanup.usage') }
@@ -1070,7 +907,7 @@ async function handleSnapshotCleanup(
       // snapshots (the "clear this session now" path); without it, `run` keeps
       // its age-based stale-session sweep semantics.
       if (parsed.target === 'current') {
-        return handleClearCurrent(store, invocation, apply, trackedBySession)
+        return handleClearCurrent(store, invocation, apply)
       }
       const loaded = await readCleanupPolicy()
       if (!loaded.ok) return { kind: 'error', text: t('cleanup.cfgInvalid', { detail: loaded.error }) }
@@ -1103,33 +940,27 @@ function formatClearReport(report: ClearSessionReport): string {
 /**
  * Handle the `run --current` manual clear of the ACTIVE session. Without
  * `--apply` it is a dry-run preview (disk and memory untouched); with it, the
- * session's entire snapshot directory is deleted and the in-memory tracked set
- * dropped, so the next user-message boundary re-derives an empty tracked set
- * instead of re-scanning every formerly-tracked file (the lag relief).
+ * session's entire checkpoint directory is deleted and the in-memory state is
+ * reset, so the next admitted step starts from an empty tracked set.
  *
  * The `--apply` mutation must only run once the session is STOPPED: a running
  * turn (the LLM thinking/outputting/editing, actively driving write tools)
- * would otherwise let a concurrent `recordBackup` at `tools/post-execute`
- * interleave with this directory `rm` and the in-memory dedup reset, leaving a
- * dangling dedup link (restore resolution then fails per-file). Mirroring
- * `rewind`, we ACTIVELY pause the running turn — cancel it and wait for
- * quiescence — before clearing; if it cannot stop, we error (`stopFailed`) and
- * never clear, so the plugin is never left corrupted. `agent.status` reads
- * `idle` during a maintenance phase and the boundary re-check is fire-and-forget,
- * so a mere status read is not enough — the `whenIdle` race is required, exactly
- * as in `executeRewind`.
+ * would otherwise let a concurrent first-touch write interleave with this
+ * directory `rm`. Mirroring `rewind`, we ACTIVELY pause the running turn —
+ * cancel it and wait for quiescence — before clearing; if it cannot stop, we
+ * error (`stopFailed`) and never clear, so the plugin is never left corrupted.
+ * `agent.status` reads `idle` during a maintenance phase, so a mere status read
+ * is not enough — the `whenIdle` race is required, exactly as in
+ * `executeRewind`.
  *
- * Clearing is an explicit abandonment of this session's snapshot archive, so it
- * is not gated on any restore-journal state (a clear and a restore never
- * interleave; any non-terminal journal found is a stale orphan from a previous
- * process). The memory reset is the part that must never be skipped — it is
- * what keeps restore resolution and the boundary re-check correct afterwards.
+ * Clearing is an explicit abandonment of this session's checkpoint archive.
+ * The memory reset is part of `clearSession`; it is what keeps the next
+ * checkpoint and restore correct afterwards.
  */
 async function handleClearCurrent(
   store: SnapshotStore,
   invocation: CommandInvocation,
   apply: boolean,
-  trackedBySession: Map<string, Set<string>>,
 ): Promise<CommandResult> {
   const { agent } = invocation
   const sessionId = agent.session.id
@@ -1148,7 +979,6 @@ async function handleClearCurrent(
   }
   try {
     const report = await store.clearSession(sessionId, { dryRun: !apply })
-    if (!report.dryRun) trackedBySession.delete(sessionId)
     return { kind: 'success', text: formatClearReport(report) }
   } catch (error) {
     return { kind: 'error', text: t('cleanup.clearFailed', { detail: error instanceof Error ? error.message : String(error), sessionId }) }
@@ -1180,27 +1010,27 @@ export function profileEntryKey(entryId: string | undefined): string | undefined
 
 
 /**
- * Register the `/rewind` command and the checkpoint pipeline (before-capture
- * at `tools/execute`, disk commit at `tools/post-execute`).
+ * Register the `/rewind` command and the checkpoint pipeline: dense manifests
+ * at `agent/pre-step` and first-touch rows at `tools/execute`.
  *
  * The command is fs-independent and registers immediately. The checkpoint
- * pipeline needs `fs` to resolve tracked paths to their real display paths,
- * so it mounts through a dynamic `ctx.inject(['fs'])` — it takes effect
- * whenever the fs service becomes available (and never fails the plugin's
- * load when a deployment has no fs; without it, no entries are recorded and
- * `both` restores report "no tracked changes").
+ * pipeline mounts through a dynamic `ctx.inject(['fs', 'workingDirectory'])`:
+ * it takes effect whenever those services become available and never fails the
+ * plugin's load in a deployment without them (without fs, no checkpoints are
+ * recorded and `both` restores report no checkpoint).
  *
+ * The pre-step listener is prepended so it observes the final decision after
+ * every other listener, then `await next()`; a rejected step creates nothing.
  * Capture runs in `tools/execute` (the around-dispatch stage), NOT in
  * `tools/pre-execute`: a pre-execute `{ kind: 'ask' }` short-circuit from
  * another plugin (e.g. dsh-edit-approval) skips later pre-execute listeners,
  * and a denied call never dispatches — so approved calls are still captured,
- * denied calls never leave a pending entry behind. Entries are committed to
- * disk at `tools/post-execute` under the turn's anchor message seq.
+ * denied calls record nothing.
  *
  * @param ctx - context carrying `commands`, `tools`, and an optional `fs`.
  * @param config - resolved plugin config: the store options (`snapshotDir`,
- *  `dshHome`, `dedup`) plus the live policy (`fileCheckpointingEnabled`, cleanup
- *  `enabled`/`maxAgeDays`).
+ *  `dshHome`, `maxFileBytes`) plus the live policy
+ *  (`fileCheckpointingEnabled`, cleanup `enabled`/`maxAgeDays`).
  */
 export function apply(ctx: Context, config?: Config): void {
   // Fresh per-mount host state: these live at module scope because module-level
@@ -1224,10 +1054,8 @@ export function apply(ctx: Context, config?: Config): void {
 
   const dshHome = config?.dshHome
   const store = new SnapshotStore(config?.snapshotDir, {
-    dedup: config?.dedup,
     dshHome,
     maxFileBytes: config?.maxFileBytes,
-    maxAnchorGroups: config?.maxAnchorGroups,
   })
   // The cleanup policy reads the config's live references, so a settings write
   // is visible here without a remount; writes go through the settings service's
@@ -1246,27 +1074,8 @@ export function apply(ctx: Context, config?: Config): void {
     }
     cleanupStore = volatileCleanupStore(config, writer)
   }
-  // Pending before-captures keyed by agent id + callId (callIds are unique,
-  // but scoping by agent makes cross-session collisions impossible).
-  const pending = new Map<string, PendingCapture>()
-  // A capture staged at `tools/execute` is consumed at `tools/post-execute` (or
-  // dropped at `tools/result`); neither runs for a fiber disposed in between, so
-  // the bytes would linger until `prune` calls them stale. `discardCapture` is
-  // idempotent, and the async disposer keeps the fiber inert until they are gone.
-  ctx.effect(() => () => {
-    const captures = [...pending.values()]
-    pending.clear()
-    return Promise.all(captures.map(capture => discardCapture(capture))).then(() => undefined)
-  }, 'dsh-rewind dispose pending captures')
-  // Incremental turn-anchor cache, keyed by the Session object (see
-  // anchorSeqOf).
-  const anchorCache = new WeakMap<Session, AnchorCacheEntry>()
   // Sessions with a rewind currently executing (per-session in-flight guard).
   const inflight: InflightRewinds = new Set()
-  // Per-session tracked path sets (seeded lazily from the snapshot store; a
-  // path joins as soon as a write-class tool commits an entry for it). Used
-  // by the user-message boundary re-check below.
-  const trackedBySession = new Map<string, Set<string>>()
   // The fs service, captured from the dynamic `ctx.inject(['fs'])` scope and
   // handed to the command path for the post-restore observation sync.
   // Undefined until the service mounts (or in fs-less deployments): the sync
@@ -1332,100 +1141,72 @@ export function apply(ctx: Context, config?: Config): void {
         name: 'snapshot-auto-cleanup',
         description: t('cleanup.description'),
         input: { hint: t('cleanup.inputHint') },
-        handler: withHostLocale(invocation => handleSnapshotCleanup(store, invocation, dshHome, trackedBySession)),
+        handler: withHostLocale(invocation => handleSnapshotCleanup(store, invocation, dshHome)),
       })
     } catch (error) {
       warnCommandUnavailable(ctx, 'snapshot-auto-cleanup', error)
     }
   }, 'dsh-rewind command')
 
-  // Session-format-version guard: after DSH migrates/loads a session, clear
-  // that session's snapshots when they were anchored under a DIFFERENT session
-  // format — their seq references would be mis-mapped by the v2→v3 migration.
-  // Conservative per the "delete stale snapshots" policy: a legacy dir with no
-  // recorded format marker is discarded too. Subagent sessions are skipped
-  // (they are never rewind targets and record no snapshots).
-  // Not gated by the switch: this guard deletes incompatible snapshots, never creates them.
-  ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
+  // Load the session's checkpoint store before queued work runs. This is where
+  // the store reconciles meta, drops orphans/corrupt manifests, retains the
+  // newest window and GCs; a store from a newer build is marked unavailable
+  // (conversation rewind still works). Subagent sessions are skipped: their
+  // edits are not tracked and a rewind cannot execute there.
+  ctx.on('agent/created', async ({ agent }: { agent: Agent }) => {
     const session = agent.session
     if (isSubagentSession(session)) return
-    void (async () => {
-      try {
-        // An unload between the event and this body must not write under a
-        // disposed owner (the fiber's disposer aborts this signal).
-        if (lifecycle.signal.aborted) return
-        // Stamp snapshots recorded after this point with the loaded session's
-        // format, so a future format change is detected.
-        store.setFormatVersion(session.header.version)
-        // Plugin store-format guard FIRST: snapshots written by a NEWER build
-        // are never touched (no clear, no write, no restore plan — ADR-10).
-        // The order matters: the session-format reconcile below CLEARS the
-        // whole session dir on a mismatch, which would delete snapshots this
-        // build cannot even read.
-        try {
-          await store.assertKnownStoreVersion(session.id)
-        } catch (error) {
-          ctx.logger.warn(`[dsh-rewind] file restore disabled for ${session.id}: ${error instanceof Error ? error.message : String(error)}`)
-          return
-        }
-        if (lifecycle.signal.aborted) return
-        // Clear snapshots anchored under a different (now-migrated) session
-        // format: their seq references would be mis-mapped by the migration.
-        const result = await store.reconcileFormatVersion(session.id, session.header.version)
-        if (result.cleared) {
-          ctx.logger.warn(`[dsh-rewind] cleared snapshots for ${session.id}: session format changed (v${session.header.version})`)
-        }
-      } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] session-format reconcile failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    })()
+    try {
+      if (lifecycle.signal.aborted) return
+      const { warnings } = await store.loadSession(storeSessionOf(session), { force: true })
+      for (const warning of warnings) ctx.logger.warn(`[dsh-rewind] ${warning}`)
+    } catch (error) {
+      ctx.logger.warn(`[dsh-rewind] checkpoint store load failed for ${session.id}: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }, { global: true })
 
-  // User-message boundary re-check (Claude Code's fileHistoryMakeSnapshot
-  // analog): every time a user/message lands in a session log, re-read every
-  // tracked file of that session and record a before-backup for any whose
-  // on-disk state changed since it was last recorded (including EXTERNAL
-  // edits and deletions the write-class capture never saw). The change test
-  // uses the store's single last-known-state source, so only CHANGED files
-  // are recorded (a full snapshot; unchanged ones stay in memory, no per-
-  // message dedup file). The entry is anchored at the boundary message, so a
-  // later rewind to this message restores the file to this exact state — and
-  // a rewind to an earlier message restores an earlier entry. Subagent
-  // sessions are skipped (their edits are not tracked, matching captureBefore).
-  // Runs async off the append hot path; failures are logged, never blocking
-  // the message.
-  ctx.on('session/event', (session: Session, event: SessionEvent) => {
-    if (event.type !== 'user/message') return
-    if (isSubagentSession(session)) return
-    // A rewind in flight must never start a pass that reads the tracked files:
-    // `executeRewind` appends its marker through `Session.append`, which
-    // dispatches this listener SYNCHRONOUSLY, so the marker's own pass would
-    // run while `restoreAfter` is writing those very files (mode `both`) and
-    // record a torn or pre-restore state. A pass skipped here is re-derived at
-    // the next real boundary, so deferring loses nothing.
-    if (inflight.has(session.id)) return
-    void (async () => {
-      try {
-        if (lifecycle.signal.aborted) return
-        const sessionId = session.id
-        // Lazy auto-cleanup: a user message is the practical first trigger of a
-        // day; it runs in the background and fail-closes on config error.
-        void maybeRunAutoCleanup(ctx, store, sessionId, dshHome, config?.autoSweepIntervalMs, lifecycle.signal)
-        // Cleanup above stays independent; the switch stops NEW checkpoints only.
-        if (!isFileCheckpointingEnabled(config)) return
-        let tracked = trackedBySession.get(sessionId)
-        if (tracked === undefined) {
-          tracked = await store.trackedPaths(sessionId)
-          trackedBySession.set(sessionId, tracked)
-        }
-        if (tracked.size === 0) return
-        if (lifecycle.signal.aborted) return
-        await reconcileTracked(store, sessionId, event.seq, tracked)
-      } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] boundary re-check failed: ${error instanceof Error ? error.message : String(error)}`)
+  // Pre-step is the message boundary: after `next()` so a rejected step or a
+  // later listener's rewrite is honored, before `step()` appends the user
+  // messages and before any model/tool work. `prepend` makes this the
+  // outermost listener, so the decision is final. The boundary only needs the
+  // store, so it is registered globally: a missing or remounted fs service
+  // cannot silently stop checkpoint creation.
+  ctx.on('agent/pre-step', async ({ agent }, next) => {
+    const decision = await next()
+    if (decision.kind !== 'enter' || lifecycle.signal.aborted) return decision
+    const session = agent.session
+    if (isSubagentSession(session)) return decision
+    // Subagents returned above; only a real session may claim the sweep's
+    // active-session exemption.
+    void maybeRunAutoCleanup(ctx, store, session.id, dshHome, config?.autoSweepIntervalMs, lifecycle.signal)
+    try {
+      if (!isFileCheckpointingEnabled(config)) {
+        // The off period is a coverage gap: the previous message's manifest
+        // must not receive first-touch rows after the switch flips back on.
+        await store.abandonCurrent(session.id).catch(() => undefined)
+        return decision
       }
-    })()
-  }, { global: true })
+      if (inflight.has(session.id)) return decision
+      await ensureStoreSession(store, session, message => ctx.logger.warn(message))
+      const batch: string[] = []
+      const seen = new Set<string>()
+      for (const message of decision.messages) {
+        if (message.source.kind !== 'user' || seen.has(message.id)) continue
+        seen.add(message.id)
+        batch.push(message.id)
+      }
+      if (batch.length === 0) return decision
+      const { warnings } = await store.createCheckpoints(session.id, session.header.version, batch)
+      for (const warning of warnings) ctx.logger.warn(`[dsh-rewind] ${warning}`)
+    } catch (error) {
+      // A checkpoint failure must not consume the user's message. Drop the
+      // current reference so this turn's later first touches are skipped, and
+      // let the next admitted step retry from the same tracked set.
+      await store.abandonCurrent(agent.session.id).catch(() => undefined)
+      ctx.logger.warn(`[dsh-rewind] checkpoint creation failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return decision
+  }, { prepend: true, global: true })
 
   // Read-only queries travel over exact `/api` routes; the Fetch registry does
   // not read `webServer` from Connection's own context. See audit U10.
@@ -1440,7 +1221,7 @@ export function apply(ctx: Context, config?: Config): void {
           path,
           methods: ['POST'],
           requestBody: 'buffered',
-          fetch: createRewindQueryHandler(store, agentsOf, checkpointingEnabled, query),
+          fetch: createRewindQueryHandler(ctx, store, agentsOf, checkpointingEnabled, query),
         }), `dsh-rewind ${path} route`)
       } catch (error) {
         ctx.logger.error(`[dsh-rewind] route registration failed for ${path}: ${error instanceof Error ? error.message : String(error)}`)
@@ -1459,52 +1240,25 @@ export function apply(ctx: Context, config?: Config): void {
     // The scope disposes with either service: drop the captured reference so the
     // command path can never hand a released instance to the observation sync.
     scope.effect(() => () => { fsService = undefined }, 'dsh-rewind fs capture')
+
     scope.on('tools/execute', async (exec: ToolExecution, next): Promise<ToolExecutionResult> => {
+      if (lifecycle.signal.aborted) return next()
+      const session = exec.agent?.session
+      if (session !== undefined && !isSubagentSession(session)) {
+        void maybeRunAutoCleanup(ctx, store, session.id, dshHome, config?.autoSweepIntervalMs, lifecycle.signal)
+      }
       try {
-        if (isFileCheckpointingEnabled(config)) {
-          await captureBefore(fs, workingDirectory, store, exec, pending)
+        if (!isFileCheckpointingEnabled(config)) {
+          if (session !== undefined && !isSubagentSession(session)) {
+            await store.abandonCurrent(session.id).catch(() => undefined)
+          }
+        } else {
+          await captureFirstTouch(ctx, fs, workingDirectory, store, exec)
         }
       } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] before-capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
+        ctx.logger.warn(`[dsh-rewind] first-touch capture failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
       }
       return next()
-    })
-
-    scope.on('tools/post-execute', async (exec: ToolExecution, result: ToolExecutionResult, next): Promise<PostToolDecision> => {
-      try {
-        // Lazy 24h auto-cleanup: a tool result is the fallback trigger (covers
-        // LLM work that never landed a user/message); the session id is the
-        // directory that must never be pruned. A subagent session is SKIPPED:
-        // it owns no snapshot, so its id would claim the sweep's
-        // active-session exemption while shielding nothing, and the session the
-        // user is actually in (the parent) would lose that exemption. Nothing
-        // is lost — the parent's own tool result (the subagent call itself)
-        // triggers the same one-shot sweep with the correct id.
-        const session = exec.agent?.session
-        if (session !== undefined && !isSubagentSession(session)) {
-          void maybeRunAutoCleanup(ctx, store, session.id, dshHome, config?.autoSweepIntervalMs, lifecycle.signal)
-        }
-        await commitEntry(store, pending, anchorCache, trackedBySession, exec, result, isFileCheckpointingEnabled(config))
-      } catch (error) {
-        ctx.logger.warn(`[dsh-rewind] checkpoint commit failed for ${exec.name}: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      return next()
-    })
-
-    scope.on('tools/result', (exec: ToolExecution): undefined => {
-      // A THROW inside the `tools/execute` waterfall — from another wrapper,
-      // not from the tool body (`dispatchToolBody` catches body errors and
-      // still produces a post-result, so the body path keeps post-execute) —
-      // short-circuits the registry's catch straight to `final-result`,
-      // skipping `tools/post-execute`; its before-capture would otherwise leak
-      // in `pending` forever (staged bytes on disk, not just memory).
-      // `tools/result` fires on BOTH the normal and the throw path: drop the
-      // staged copy here as the safety net (a no-op once commit consumed it).
-      const key = `${exec.agent?.id ?? 'anon'}:${exec.callId}`
-      const capture = pending.get(key)
-      pending.delete(key)
-      void discardCapture(capture)
-      return undefined
     })
   })
 }

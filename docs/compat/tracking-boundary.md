@@ -1,227 +1,197 @@
 # File-rewind tracking boundary
 
-> When it rewinds files, the plugin **writes back only content it actually backed
-> up**: a file changed by a write-class tool (`write`, `edit`) can always be restored
-> exactly, while a stretch of state that **was not backed up** makes the restore
-> **incomplete** — it prefers to do nothing rather than guess.
+> When it rewinds files, the plugin **writes back only state it recorded in a
+> file checkpoint**: one dense manifest per user message. A file enters the
+> record when a write-class tool (`write`, `edit`) first touches it; from then
+> on every retained checkpoint carries a row for it. Restores reconcile against
+> the live disk and never guess.
 >
-> This document describes how it works, the two boundaries that follow, and why
-> they sit there. All of it is a **deliberate trade-off** (matching Claude Code's
-> checkpoint semantics).
+> Because manifests are dense at every message boundary, a target normally has a
+> row for every path tracked at that point. Recording has two kinds of gaps:
+> history before a file ever entered tracking (Boundary 1), and the few below.
+> These are current limits;
+> the rationale is in [design boundaries](../boundaries.md).
 
-## 1. The two modes of file change
+## 1. What a checkpoint is
 
-A file in DSH can change in exactly two ways, and the plugin observes them very
-differently.
+A checkpoint is the answer to one question:
 
-**The model calls a write-class tool** (`write`, `edit`): the call's arguments carry
-the exact path, so the plugin can capture the file's current content **before** the
-write lands. This path is deterministic — once handled, the file is certainly
-restorable.
+> **What was every tracked file when that message began?**
 
-**An external edit** (a command-line Bash, a PowerShell write, a build script
-rewriting files, or saving by hand in an editor): nothing declares the modified path
-to the plugin, so **there is no object to capture in advance**; the plugin can only
-discover it after the fact.
+- **One checkpoint per user message**, including a steering message: DSH claims
+  steering at a step boundary, appends it as a normal `user/message`, and it is
+  a normal rewind target.
+- **Dense**: the manifest holds a `path → state` row for every tracked path at
+  that moment. It is not a delta against the previous message.
+- **State** is either a reference to a version file (the exact bytes) or `null`,
+  meaning the file did not exist at that point; restoring `null` deletes the
+  file.
+- **Content is shared**: a file whose content did not change reuses the same
+  version across checkpoints. A new version is written only when the bytes
+  differ.
+- **Tracked list**: a path joins the list the first time a write-class tool
+  touches it, and stays. The plugin does not scan the workspace, and a file that
+  never joins the list has no checkpoint row.
 
-## 2. How it works
+## 2. When the record is built
 
-### One backup = the state when one message began
+**At the message boundary.** Before the step appends the message and before any
+model call or tool runs, the plugin re-reads every tracked path and writes the
+dense manifest for each user message in the claimed batch (steering included).
+A file that changed since the previous checkpoint gets a new version now; an
+unchanged file reuses its version. This is how an external edit — a Bash
+command, a build script, an editor save — enters the record: the next message
+boundary sees it.
 
-The plugin does not store the workspace's current state; it stores **state
-transitions**. Every backup answers one question:
+**At first touch.** When `write` / `edit` targets a path that is not tracked yet,
+the plugin records its state *before the tool body runs*: `null` for a file that
+does not exist yet, otherwise its current bytes. That row is added to the
+current message's checkpoint as version 1. A call that is denied or cancelled
+before dispatch never reaches this point and records nothing; a tool that fails
+or is cancelled after dispatch leaves the harmless pre-touch row.
 
-> **What was this file when that message began?**
+**Not on unchanged edits.** Once a path is tracked, an edit does not create a
+new row by itself; the next message boundary records the changed content. An
+unchanged file produces no new version.
 
-Its content has two forms: `null` means the file **did not exist** (a restore then
-deletes it), otherwise it is a full copy. Together these backups are the session's
-**snapshot** (grouped by message). A backup belongs to **the user message that
-triggered it**; within a single message's turn, every write-class tool call leaves a
-backup of its own, and a restore takes the **earliest** of them.
+## 3. Restore: recorded state is the only standard
 
-### Where backups come from: the tracked list
+1. Resolve the target seq to its `user/message` event and then to that message's
+   `id`; the checkpoint file is keyed by the id.
+2. If the target message has **no checkpoint**, do nothing to files. The
+   conversation rewind runs and the result reports `no file checkpoint`
+   for the target.
+3. Otherwise walk the **newest** retained checkpoint's key set (the current
+   tracked set), so files created after the target and tracked later are
+   included.
+4. For each path, use the target checkpoint's row; if the target predates the
+   path, use the **earliest later row** for it — the v1 fallback, i.e. its state
+   just before the first touch.
+5. Compare with the live disk. A matching file is a no-op; otherwise write the
+   recorded version back (or delete for a `null` row). Only paths with a row are
+   touched, and each write is an atomic replace in the target's own directory.
 
-The plugin does not scan the workspace; it follows one **tracked list**: a file joins
-it as soon as a write-class tool handles it **once**; from then on, every new user
-message makes the plugin re-check the files **on that list**; a file that never joins
-it has no backup at all.
+Repeated rewinds are idempotent: the plan is recomputed from the live disk each
+time, and a file already at its target state is not touched. An interrupted
+restore can be run again to converge.
 
-Backups come from two sources:
+A few paths are skipped and reported, not written: a final component that
+is not one regular file (symlink, hard link, FIFO, device), a parent directory
+that resolves somewhere other than its captured location, a restore whose live
+file is over the size cap, and a path with no recorded row. Every skipped path is listed
+with its reason, and every failed file is listed separately. A delete is not
+blocked by the cap.
 
-- **Before-write backup**: when the model calls a write-class tool, the plugin takes
-  the current content **before** the change lands and stores it under **the user
-  message that started this turn**;
-- **Message-boundary re-check**: when a new message arrives, if a file on the list
-  now differs from its **latest backup**, the current content is recorded as **that
-  message's** backup. This is the only way an external edit gets backed up.
+The comparison uses a `(size, mtime)` fast path before reading bytes. A tool that
+sets a file's mtime backwards while keeping its size can therefore hide one
+change from the comparison — the same trade-off Claude Code makes.
 
-### Several cases where no backup is produced
-
-- **Unchanged, not stored**: when the boundary re-check finds the disk identical to
-  the latest backup, this re-check writes nothing; if a write-class tool edits that
-  file later in the same turn, that before-write backup is still recorded. A message
-  that changed no file therefore produces no backup of its own.
-- **Over the cap, not stored**: before writing a backup, if a single file is found to
-  exceed the size cap (8 MiB by default, adjustable with the `maxFileBytes` plugin
-  config, `0` disables it), the plugin **refuses the backup**; until that file is back
-  under the cap, no new backup is written for it (the earlier backups remain).
-- **Snapshot backups turned off**: while off, neither the before-write capture nor the
-  message-boundary re-check records anything; after it is turned back on, the off
-  period is still a gap, so a rewind may be incomplete.
-
-### Restore: backups are the only standard
-
-A restore reads nothing else in the workspace and infers nothing:
-
-1. **Find the backup**: per file, take the **earliest** backup at or after the
-   **target message**; when the target message has no backup of its own, look toward
-   the later messages for the earliest one.
-2. **Compare with the disk**: if it matches the current disk content, nothing is
-   done; otherwise the backup's content is written back (a `null` backup deletes the
-   file).
-
-Looking toward later messages works because "unchanged, not stored" means the target
-message began from the same state as its latest backup — so the earliest later backup
-holds exactly that state (the premise being that nothing between the target message
-and that backup went unrecorded; see boundary 2). Conversely, the nearest backup
-*before* the target is not used because it may predate a **coverage gap**
-(boundary 2, case 3): writing it back would overwrite the current file with an
-older version.
-**Restore less rather than write something wrong.**
-
-### An example
-
-| Msg | In the turn | File content | Backup: what it was when that message began |
-| :---: | --- | :---: | --- |
-| 1 | `write` creates it | `—` → `A` | `null` (the file did not exist before the write; backed up before the write and added to tracking) |
-| 2 | — | `A` | `A` (the disk differs from the previous backup `null`) |
-| 3 | — | `A` | (none: identical to the latest backup, and nothing was edited in this turn, unchanged, not stored) |
-| 4 | `edit` | `A` → `B` | `A` (the content before that edit, a before-write backup) |
-| 5 | `bash` rewrite | `B` → `C` | `B` (msg 4's edit had already taken effect, so the disk held `B` when msg 5 arrived) |
-
-The disk now holds `C`. Rewinding gives: target 1 → the backup is `null`, the file is
-deleted; target 2 → `A`; target 3 → no backup of its own, so looking toward later
-messages finds msg 4's `A`, exactly the state msg 3 began from; target 4 → `A`;
-target 5 → `B`.
-
-## 3. The boundary
-
-Both boundaries share one root cause: **a stretch of state was not backed up**.
-Boundary 1 results in **no restore at all**, boundary 2 in an **incomplete
-restore**.
-
-### Boundary 1: history that never entered tracking — no restore
+## 4. Boundary 1: history before a file ever entered tracking
 
 **Being handled by a write-class tool is the prerequisite for a file to join the
-tracked list and produce backups.** Before that, every external edit it went through
-has no backup, and neither source will write one for it. Two cases:
+tracked list.** Before that, every external edit it went through has no row, and
+no later source writes one for it. Two cases:
 
-**Nothing in the session ever handled it.** Rewinding to any message can only report
-"no restorable changes" for that file.
+**Nothing in the session ever handled it.** Rewinding to any message can only
+report no restorable changes for that file.
 
-**Something handled it later (the more common case).** Backups exist only from that
-moment on, so earlier history cannot be restored — in the example below, `v0` is
-history the plugin has never seen:
+**Something handled it later (the more common case).** Recording starts at the
+first touch, so earlier history cannot be restored. In the example below `v0` is
+history the plugin never saw:
 
-| Msg | In the turn | File content | Backup: what it was when that message began |
+| Msg | In the turn | File content | Row: what that message began with |
 | :---: | --- | :---: | --- |
-| 1 | — | `v0` | (none: the file has not joined the tracked list) |
+| 1 | — | `v0` | (none: the file is not tracked) |
 | 2 | a manual edit | `v0` → `v1` | (none: as above) |
 | 3 | a manual edit | `v1` → `v2` | (none: as above) |
-| 4 | `edit`, the first time it is handled | `v2` → `v3` | `v2` (before-write backup: the file joins the tracked list at this moment) |
-| 5 | — | `v3` | `v3` (the disk differs from the previous backup `v2`) |
+| 4 | `edit`, the first touch | `v2` → `v3` | `v2` (the pre-touch state; the file joins the tracked list now) |
+| 5 | — | `v3` | `v3` (the boundary sees the changed content) |
 
-Rewinding to msg 5 → `v3`; to msg 4 → `v2`; and **rewinding to msg 1, 2 or 3 also
-gives `v2`** — the earliest backup after them is msg 4's `v2`. `v2` really is the
-content at the moment the file was first handled, but what those three messages began
-from was `v0`, `v0` and `v1`; the plugin never saw them and cannot restore them.
+Rewinding to msg 5 → `v3`; to msg 4 → `v2`; and **rewinding to msg 1, 2 or 3
+also gives `v2`** — the earliest later row is msg 4's pre-touch row. `v2` really
+is the content at the moment the file was first touched, but what those three
+messages began from was `v0`, `v0` and `v1`; the plugin never saw them and
+cannot restore them.
 
-### Boundary 2: a stretch of state that was not backed up — an incomplete restore
+## 5. Remaining gaps in the record
 
-"Unchanged, not stored", "over the cap, not stored", and turning snapshot backups
-off all leave a stretch of state without a backup. When the target message has no
-backup of its own, the plugin looks toward later messages for the backup; as soon as
-an **unrecorded change** happened between the target and that backup, what it takes
-is no longer the state the target message began from. The cases below stack one more
-scenario each.
+Every message-boundary manifest is dense: the target message has its own row for
+every path tracked at that point. A path first tracked later gets its pre-touch
+row (Boundary 1's first-touch state). The gaps that remain are these.
 
-**Case 1: the change does not belong to any message yet**
+### Over the size cap
 
-| Msg | In the turn | File content | Backup |
+A tracked file above the cap (8 MiB by default, adjustable with `maxFileBytes`,
+`0` disables it) produces no new version. At each message boundary the plugin
+keeps the **previous row**. While the live file is over the cap, a restore skips
+it and reports it. If it returns under the cap, a rewind to a message inside
+the over-cap stretch restores the **last recorded state**, which may predate
+that stretch — those bytes were never
+recorded and are unrecoverable.
+
+| Msg | In the turn | File content | Row |
 | :---: | --- | :---: | --- |
 | 1 | `write` creates it | `—` → `A` | `null` |
-| 2 | — | `A` | `A` (differs from the previous backup `null`) |
-| 3 | — | `A` | (none: identical to the previous backup, and nothing was edited in this turn) |
-| (after) | a manual edit | `A` → `X` | (none: no new message has claimed it yet) |
+| 2 | grows past the cap | `A` → `G1` | `A` (over the cap: the previous row is kept) |
+| 3 | another edit | `G1` → `G2` | `A` (over the cap) |
+| 4 | shrinks | `G2` → `B` | `A` (over the cap when the message arrived) |
+| 5 | `edit` | `B` → `X` | `B` (under the cap again: the boundary records it) |
 
-Rewinding to msg 3: neither it nor anything later has a backup, the plugin does not
-know the file changed, so it **does nothing and the file stays at `X`** (msg 3
-actually began with `A`). To recover `A`, rewind to msg 2 — the backup under it is
-`A`. A later message only makes the state **at that time** (`X`) rewindable; the `A`
-msg 3 began from still cannot come back.
+Rewinding to msg 5 → `B`. Rewinding to msg 2, 3 or 4 → `A`, the last recorded
+state; the `G1`/`G2` stretch is not in the record. While the file is over the
+cap at rewind time, any target skips it and reports the cap.
 
-**Case 2: what is backed up is the state after the change**
+A file **first seen** over the cap is not added to tracking at all, so it has no
+row and does not appear in the preview's over-cap list.
 
-| Msg | In the turn | File content | Backup |
-| :---: | --- | :---: | --- |
-| 1 | `write` creates it | `—` → `A` | `null` |
-| 2 | — | `A` | `A` (differs from the previous backup `null`) |
-| 3 | — | `A` | (none: identical to the latest backup) |
-| 4 | a command changes it to `B` | `A` → `B` | (none: the disk was still `A` when msg 4 arrived) |
-| 5 | — | `B` | `B` (differs from the previous backup `A`) |
+### Checkpointing switched off
 
-Rewinding to msg 3 or 4: neither has a backup of its own, so looking toward later
-messages finds msg 5's `B` — the state **after** the change, while they began with
-`A`. The disk matches that backup, so the plugin does nothing and the file stays at
-`B`; if the file changed again afterwards, the plugin writes `B` (overwriting
-whatever is newer); and if the change in msg 4's turn had been a command **deleting**
-the file, msg 5's backup would be `null` and rewinding to 3 or 4 would **delete the
-current file**. The difference from case 1 is that a message followed this change and
-recorded the state after it — in case 1 nothing was recorded at all.
+While `fileCheckpointingEnabled` is off (the configuration card labels this
+"snapshot backups"), no new checkpoints or first-touch rows are written. Messages sent in that period have no checkpoint, so rewinding to
+one performs only the conversation rewind and reports no file checkpoint. A file
+first touched while off is not tracked; after re-enabling, the next message
+boundary starts recording tracked files again. When a step or tool observes the
+switch off, the current checkpoint reference is dropped; if it is turned back on
+before any such observation, the off period is an unrecorded gap and a first
+touch can only capture its post-off pre-touch state.
 
-**Case 3: the file exceeded the cap while it changed**
+### Mounted mid-turn, or into a session with no checkpoint
 
-| Msg | In the turn | File content | Backup |
-| :---: | --- | :---: | --- |
-| 1 | `write` creates it | `—` → `A` | `null` |
-| 2 | the edit grows it past the cap | `A` → `G1` | `A` (differs from the previous backup `null`) |
-| 3 | a write-class tool or an external edit | `G1` → `G2` | (none: over the cap, not backed up) |
-| 4 | shrinks back to `B` | `G2` → `B` | (none: still over the cap on arrival, so the re-check skipped it) |
-| 5 | `edit` | `B` → `X` | `B` (a before-write backup; tracking resumes) |
+After the plugin mounts, there is no current checkpoint until the next admitted
+step. First touches in the rest of that turn
+are skipped, so new files touched then do not enter tracking. Messages from
+before the plugin's checkpoints existed — an old session, an old-format store,
+or a fresh mount — have no checkpoint and restore no files.
 
-In the "small → big → small" scenario the stretch over the cap has no backup at all —
-a **coverage gap**. Rewinding to msg 3 or 4 finds msg 5's `B`, so the plugin writes
-`B`; the "big" state they began from falls inside the gap and can never be restored.
-And if the file is currently over the cap, **no** target touches it: it prefers to do
-nothing rather than write back an older backup.
+### Mode-only changes
 
-**Case 4: backups were turned off and back on**
+A permission-only change refreshes the `mode` stored in the row but does not
+create a new version and does not trigger a restore. `mode` is reapplied only
+when content is restored.
 
-| Msg | In the turn | File content | Backup |
-| :---: | --- | :---: | --- |
-| 1 | `write` creates it | `—` → `A` | `null` |
-| 2 | `edit` | `A` → `B` | (none: snapshot backups were off) |
-| 3 | `edit` | `B` → `C` | `B` (back on; a before-write backup) |
+## 6. Other limits
 
-Snapshot backups can be switched off in the plugin settings. Changes made while they
-are off are not in the record, so a rewind across that period may be incomplete. In
-the example, backups were turned off before msg 2 and back on before msg 3; msg 2 has
-no backup of its own, so rewinding to msg 2 finds msg 3's `B`.
+| Limit | Effect |
+| --- | --- |
+| Outside the retention window | Only the newest 100 checkpoints are kept; older targets have no checkpoint and restore no files |
+| Old history | Messages from before this store existed have no checkpoint |
+| Subagents | A subagent runs its own session; its edits are not tracked by the parent, and there is no rewind inside it |
+| Fork / new session id | A new session id gets an empty store and does not inherit file history |
+| Symlinks and hard links | Not captured when first seen; a tracked path that later becomes a symlink, hard link or other non-regular file is skipped and reported on restore |
+| Repointed parent | A parent directory that resolves somewhere other than its captured location is skipped and reported |
+| Crash during restore | Each file is replaced atomically, but the pass is not one cross-file transaction; a crash can leave some files restored and others not. Running the same rewind again converges |
+| Power loss | No fsync; the last checkpoint write can be lost, and the next boundary rebuilds it |
 
-## 4. Why the boundary sits here
+## 7. Why the boundary sits here
 
-The boundary follows from the model: a before-write checkpoint covers the edits an
-agent makes through `write`/`edit`, and everything beyond that is workspace
-history. Workspace history already has an owner — Git, or the snapshot tool the
-project uses — and reproducing it here would duplicate an authority that is
-already maintained. The full reasoning — precedent, division of labour, and what
-a whole-tree store would cost here — is in
-[design boundaries](../boundaries.md).
+Checkpoints cover the agent's `write`/`edit` edits plus external changes to those
+tracked files; everything beyond that is workspace history, which already belongs
+to Git or the project's snapshot tool. Reproducing it here would duplicate that
+authority. The full reasoning is in [design boundaries](../boundaries.md).
 
-Restore less rather than write something wrong: that rule is why the plugin only
-writes back content it actually backed up.
-
-For precise workspace-level history, use Git.
+The plugin writes back only recorded state and reports every path it leaves
+alone; it does not guess unrecorded content. For precise
+workspace history, use Git.
 
 ## See also
 

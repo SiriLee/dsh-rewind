@@ -20,9 +20,12 @@ The module map:
 ```
 src/index.ts            host plugin: /rewind, /undo, /snapshot-auto-cleanup + checkpoint pipeline
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
-src/snapshot.ts         checkpoint store: before-backups, restore/preview, bounded prune
-src/snapshot-format.ts  on-disk format: naming, entry/journal codecs, ref guards
-src/snapshot-fs.ts      filesystem primitives: atomic write, byte compares, disk probe
+src/snapshot.ts         checkpoint store: dense manifests, first-touch capture,
+                        restore/preview, retention/GC, whole-session cleanup
+src/snapshot-format.ts  durable format: naming, meta/checkpoint codecs,
+                        structural validation
+src/snapshot-fs.ts      filesystem primitives: atomic JSON, streaming compares,
+                        location pin, unsafe-target rejection
 src/snapshot-cleanup.ts cleanup policy + config persistence + auto-sweep throttle
 src/locales.ts          host i18n (t() renderer, HostKey)
 src/client/index.ts     client entry: command decoration, mounts, locale, teardown
@@ -44,9 +47,9 @@ src/client/build-info.ts  client build identity (__DSH_REWIND_VERSION__ / __DSH_
 src/client/log.ts       client logger (namespaced, dsh-rewind.debug-gated)
 scripts/build.mjs       esbuild: lib/index.js (host ESM) + lib/client.js (loader closure) + .d.ts
 scripts/update-badge.mjs       regenerate the tests badge (CI only)
-scripts/verify-host.mjs end-to-end host verification (full check suite)
+scripts/verify-host.mjs end-to-end host verification (checkpoint pipeline + restore + clear)
 scripts/session-decode.mjs / session-encode.mjs  `.jsonl.zstd` codec (test fixtures)
-tests/                  vitest suites (rewind / snapshot / client / hidden / integration)
+tests/                  vitest suites (rewind / checkpoint / client / lifecycle / compatibility)
 docs/                   maintainer docs: compat/, release/ subdirectories
 assets/screenshots/     UI screenshots
 cordis.patch.yml        bundle patch (mounts the dual-face plugin row)
@@ -61,11 +64,10 @@ Two dependency rules keep the design testable:
 1. **`rewind.ts` is pure** — no I/O, no `Session` dependency; everything
    derives from the event log + ordered surface, so the whole planning layer
    is unit-testable without a host.
-2. **`snapshot.ts` is host-independent** — it talks to the disk only through
-   `snapshot-fs.ts` (plain `node:fs` primitives plus injected seams
-   `DiskProbe`, `DeleteFile`, and a test-only `crash` hook), and the on-disk
-   shape lives in `snapshot-format.ts`, so the store is testable without the
-   harness and the format is testable without the store.
+2. **`snapshot.ts` is host-independent** — it talks to the disk through
+   `snapshot-fs.ts` (plain `node:fs` primitives and a test-only restore-rename
+   hook), and the on-disk shape lives in `snapshot-format.ts`, so the store is
+   testable without the harness and the format is testable without the store.
 
 ## Rewind pipeline
 
@@ -78,8 +80,10 @@ Two dependency rules keep the design testable:
   → append the rewind marker = a user/message with surfaceOp
     { op: 'replace', startSeq, endSeq } over the target and every surface
     node after it (+ sourceEventSeqs = shadowed seqs)  [a single event]
-  → if mode 'both': store.restoreAfter(targetSeq) + syncRestoreObservations
-  → result text reports the restored/deleted counts (human copy, never parsed)
+  → if mode 'both': target seq → user/message.data.id →
+    store.restoreAfter(messageId) + syncRestoreObservations
+  → result text reports restored/deleted counts and every skipped/failed path
+    (human copy, never parsed)
   → client: hides withdrawn rows through the Chat snapshot visibility input,
     refills composer with the target message's text
 ```
@@ -99,10 +103,11 @@ Key invariants:
 - **No ghost step frame is needed**: the token-meter step machine ignores
   `user/message`, and the session invariant imposes no open-turn requirement
   on it, so the marker is appended while idle, outside any turn, as one event.
-- **Restore is reconciled against the live disk** (`planRestore`), so repeated
-  rewinds are idempotent and a rewind whose target state already matches is a
-  no-op. A path whose directory no longer resolves to its commit-time location
-  is skipped and reported, never written through (see `security-model.md`).
+- **Restore is reconciled against the live disk** (the checkpoint plan), so
+  repeated rewinds are idempotent and a target state that already matches is a
+  no-op. A path whose directory no longer resolves to its checkpoint-time
+  location is skipped and reported, never written through (see
+  `security-model.md`).
 
 ### Marker format history
 
@@ -113,35 +118,20 @@ unreadable once v2 reserved surface `replace` to a node that cites
 `sourceEventSeqs`; the `/dsh-rewind-fix` migration command rewrote them and was
 removed in the `0.10.x` line.
 
-## Checkpoint pipeline (Claude Code before-backup model)
+## Checkpoint pipeline
 
 ```
-tools/execute        captureBefore: for write / edit, stage a raw byte copy of
-                     the file's BEFORE state into the store's .pending/
-                     (node:fs copyFile, never through a string);
-                     subagent sessions are NOT tracked and get no rewind
-                     surface at all (Claude Code alignment — the Harness
-                     refuses generic Session RPCs for a subagent-owned
-                     identity, so /rewind cannot execute there).
-tools/post-execute   commitEntry: anchor = latest user/message seq; skip
-                     failed calls; publish the staged bytes as the entry's
-                     sidecar and write the metadata beside them — including
-                     where the directory resolved (`realpath`), the location
-                     pin a restore re-checks.
-session/event        user/message boundary: reconcileTracked re-reads every
-  (user/message)     tracked file and records a new before-backup for any
-                     whose disk state changed since last seen — external
-                     edits/deletions enter the record this way.
-prune                keeps the newest 100 anchor groups per session, storing
-                     identical before-content as in-place links that are
-                     materialized before their group is dropped, never dropping
-                     a group a non-terminal restore journal still references,
-                     and recycles terminal restore journals.
-pruneStale            cross-session auto-cleanup (default off): whole
-                     long-inactive session dirs past the cutoff are removed;
-                     the active session is never targeted (a subagent's tool
-                     result never triggers the sweep — it owns no dir and would
-                     claim that exemption).
+agent/pre-step      message boundary: after claim and before the user messages
+                    are appended, writes one dense manifest per user-sourced
+                    message in the batch; the last is current.
+tools/execute       first touch: for write / edit, before the body runs, a path
+                    not yet in the current manifest gets a v1 row with its
+                    pre-touch state.
+load / GC           read meta, drop malformed/orphan manifests, retain the
+                    bounded window, reclaim unreferenced versions; current
+                    stays undefined until the next admitted step.
+clearSession /      whole-session cleanup deletes the session directory
+pruneStale          (new storage and old members), independent of references.
 ```
 
 ## Open directions

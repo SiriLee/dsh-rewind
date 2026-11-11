@@ -62,7 +62,6 @@ export function rewindMarker(): UserMessage {
 export function testConfig(overrides: {
   readonly snapshotDir?: string
   readonly dshHome?: string
-  readonly dedup?: boolean
   readonly fileCheckpointingEnabled?: boolean
   readonly autoCleanupEnabled?: boolean
   readonly autoCleanupMaxAgeDays?: number
@@ -70,7 +69,6 @@ export function testConfig(overrides: {
   return {
     snapshotDir: overrides.snapshotDir,
     dshHome: overrides.dshHome,
-    dedup: overrides.dedup,
     fileCheckpointingEnabled: createVolatile(overrides.fileCheckpointingEnabled ?? true),
     autoCleanupEnabled: createVolatile(overrides.autoCleanupEnabled ?? false),
     autoCleanupMaxAgeDays: createVolatile(overrides.autoCleanupMaxAgeDays ?? 30),
