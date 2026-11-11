@@ -10,6 +10,42 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
+### 新增功能
+
+- **文件检查点改为按用户消息的 checkpoint 机制。** 每条用户消息（含中途插话）一张稠密检查点，记录当时每个已跟踪文件的状态；外部修改在下一个消息边界进入记录。「不变不存」只针对实际备份：未变的文件仍保留记录，只复用版本、不写新副本；每个会话保留最新 100 张检查点。（#87）@slev-agent @SiriLee
+
+### 问题修复
+
+- **回退与写前备份不再留下多余状态。** 回退直接取目标消息自己的行；目标之后才被追踪的文件用首次触碰前的状态兜底，不再向更晚的消息找。写前备份只在文件尚未被记录时执行，已跟踪文件的编辑不再产生没有消费者的额外副本（#85）。（#87）@slev-agent @SiriLee
+
+### 体验优化
+
+- **回退结果更明确。** 目标没有文件检查点时明确报告；每个被跳过的路径（超限、符号/硬链接、父目录被重指、没有记录行）都带原因逐项列出。（#87）@slev-agent @SiriLee
+
+### 其他变更
+
+- **升级与还原行为有变。** 旧快照不再读取或迁移；旧会话的文件回退历史不可用，旧数据会随会话目录的既有清理一并移除，不需要单独处理。`dedup` / `maxAnchorGroups` 旧配置照常加载但被忽略。还原不再提供回滚、续做或撤销；每个文件原子替换，整轮非事务，崩溃后重跑同一回退收敛。（#87）@slev-agent @SiriLee
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### New Features
+
+- **File checkpoints now use the per-user-message checkpoint model.** Each user message (steering included) gets one dense checkpoint of every tracked file's state; external changes enter the record at the next message boundary. "Store only on change" applies to the actual backup: an unchanged file keeps its record and only reuses the version, without a new copy; each session keeps the newest 100 checkpoints. (`#87`) @slev-agent @SiriLee
+
+### Bug Fixes
+
+- **Rewind and the pre-write backup no longer leave redundant state.** A rewind takes the target message's own row and no longer looks forward to a later message; a path tracked later falls back to its pre-touch state. The pre-write backup runs only for a file that is not recorded yet, so editing a tracked file no longer creates an extra copy with no consumer (#85). (`#87`) @slev-agent @SiriLee
+
+### Improvements
+
+- **Rewind results are more explicit.** A target with no file checkpoint is reported; every skipped path (over the cap, symlink/hard link, repointed parent, no recorded row) is listed with its reason. (`#87`) @slev-agent @SiriLee
+
+### Chores
+
+- **Upgrade and restore behavior changed.** Old snapshots are no longer read or migrated; file-rewind history for old sessions is unavailable, and the old data is removed with the rest of the session directory by the existing cleanup, with no separate migration. An old settings document carrying `dedup` or `maxAnchorGroups` still loads, but the fields are ignored. Restore no longer offers rollback, resume or undo: each file is replaced atomically, but the pass is not a cross-file transaction, and rerunning the same rewind converges after a crash. (`#87`) @slev-agent @SiriLee
+
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.21.2...vNEXT
 
 ## [0.21.2] - 2026-11-07
