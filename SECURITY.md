@@ -50,14 +50,16 @@ If the problem is in DSH itself or in another plugin, report it to that project.
 
 - a restore that writes outside the paths and locations the session recorded, or
   that runs without an explicit user action;
-- path traversal, or a symlink/hard-link escape, through a session id, a store
-  entry, or restore planning;
+- path traversal, or a symlink/hard-link escape, through a session id, a
+  checkpoint row, or restore planning;
 - rewriting, deleting, or truncating the session log, or otherwise changing
   recorded history;
 - a restore crossing sessions, or touching a path the session's own tools did
   not record;
-- a crash or a corrupt journal that loses a live file, or that silently drops a
-  recovery journal;
+- a crash, a corrupt checkpoint, or a missing/wrong-sized recorded version that
+  loses a live file or lets unrecorded state be written back;
+- parsing, modifying, or deleting old-format snapshot data instead of leaving it
+  to whole-session cleanup;
 - a hostile session-log entry or tool argument escaping the containment that
   document describes.
 

@@ -42,14 +42,14 @@ adapted line: a runtime outside it is refused at load rather than admitted into 
 
 | Invariant | Meaning | Probe |
 |---|---|---|
-| I1 log replayability | A rewound log passes token-meter replay and `Session.create` (the resume-preflight validation) without throwing | `compat-invariants` I1, `verify-host` 12/13 |
+| I1 log replayability | A rewound log passes token-meter replay and `Session.create` (the resume-preflight validation) without throwing | `compat-invariants` I1, `compact-compat` |
 | I2 surface consistency | After a cut, the surface has no duplicate nodes, every node exists in the log, the withdrawn target never returns, and `deriveMessages()` is legal | `compat-invariants` I2 |
 | I3 step/turn structure | Client turn-tail ordering, unique `step/start` (real turns), no ghost turns; the `user/message` rewind marker adds no step frame | `compat-invariants` I3, `helpers.assertTurnTailOrdering` |
 | I4 fold-service safety | stats / title / goal / projection fold a marker-bearing log without throwing, with predictable values | `compat-invariants` I4, `compat-gaps` G4 |
-| I5 compact interop | A tool call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is refused; rewind-then-compact stays legal | `compat-interop` I5, `verify-host` 12/14 |
-| I6 tool pipeline | before-snapshot capture/commit/restore is correct for `write` / `edit`, and cancellation timing never hangs. (`str_replace_editor` is a standalone package for custom compositions and is mounted in no shipped composition, so it is not tracked; a composition that mounts it leaves its edits outside restore coverage) | `verify-host` 4–9 |
+| I5 compact interop | A tool call orphaned by a cancelled turn is pair-balanced once shadowed by a rewind; a rewind across a compaction checkpoint is refused; rewind-then-compact stays legal | `compat-interop` I5, `compact-compat` |
+| I6 tool pipeline | checkpoint capture (a dense manifest at `agent/pre-step`, first touch at `tools/execute`) and restore are correct for `write` / `edit`, and cancellation timing never hangs. (`str_replace_editor` is a standalone package for custom compositions and is mounted in no shipped composition, so it is not tracked; a composition that mounts it leaves its edits outside restore coverage) | `verify-host` 2–9 |
 | I7 client ordering | A log carrying tool turns and rewind markers (a single `user/message` replace) satisfies the client builder ordering | `compat-interop` I7 |
-| I8 runtime safety | `rewind` / `compact` combinations never leave a dangling step/turn frame | `verify-host` 13 |
+| I8 runtime safety | `rewind` / `compact` combinations never leave a dangling step/turn frame | `compat-interop` R-OPENSTEP, `compact-compat` |
 | I9 tool-update projection | `Session.toolHistory()` folds the whole log, so a withdrawn `tool-addition` stays recorded; after a withdrawal no `tool-addition` / `tool-removal` block reaches the provider and the current declarations stay complete | `compat-tool-updates` I9 |
 
 ## Findings

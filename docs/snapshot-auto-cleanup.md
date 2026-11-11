@@ -1,8 +1,10 @@
 # Snapshot cleanup
 
-The plugin saves a backup of each file before it's edited, so you can rewind your
-code to an earlier point. These backups are called **snapshots**, and they're
-grouped by message and stored per session.
+The plugin records a **file checkpoint for each user message**, so a rewind can
+restore the files a turn changed. Checkpoints live per session: one dense
+manifest per message under `checkpoints/`, shared content versions under
+`versions/`, and a `meta.json` marker. Together they are the session's
+**snapshots**.
 
 `/snapshot-auto-cleanup` helps you manage those snapshots — whether you want to
 reclaim disk space from old sessions or clear the **current** session so its
@@ -11,8 +13,8 @@ rewind history starts fresh.
 ## What it does
 
 **Automatic cleanup** (off by default): the plugin can remember which sessions
-you've stopped using, and now and then remove their snapshots to keep disk usage
-down. It never touches your active session, and it never touches your
+you've stopped using, and now and then remove their snapshot directories to keep
+disk usage down. It never touches your active session, and it never touches your
 conversation.
 
 **Manual**: even with automatic cleanup off, you can run the cleanup yourself —
@@ -55,25 +57,27 @@ can't make it run early. To clean up right now instead of waiting, use
 
 ## Safety
 
-- Only rewind **snapshots** are ever removed: a session's snapshot directory
-  holds the before-write file backups plus their bookkeeping (staged captures,
-  rescue copies, restore journals), and that is all the cleanup touches. Your
-  conversation is never touched, and the plugin never rewrites or deletes your
-  session history.
+- Cleanup removes whole **session snapshot directories** — the per-message
+  checkpoints, their shared versions, the `meta.json` marker, and any old-format
+  snapshot members still sitting in that directory. New storage and old data are
+  deleted together; nothing is parsed or migrated first. Your conversation is
+  never touched, and the plugin never rewrites or deletes your session history.
 - Automatic cleanup never removes your **active** session's snapshots — only
   sessions that have been idle past the cutoff.
-- `run --current` clears the current session's snapshots; if a turn is currently
-  running, the plugin pauses it first, then clears. This is one-way for that
-  session's file-rewind history: you can't rewind code to before the clear, but
-  your conversation stays intact, and the session starts recording fresh
-  snapshots from now on.
+- `run --current` clears the current session's snapshot directory; if a turn is
+  currently running, the plugin pauses it first, then clears. This is one-way
+  for that session's file-rewind history: you can't rewind code to before the
+  clear, but your conversation stays intact, and the session starts recording
+  fresh checkpoints from now on.
 
 ## Retention cap (by design)
 
-The plugin keeps the most recent **100 anchor groups'** snapshots per session (one
-group per user message). If you rewind or compact a lot in one long session,
-those 100 slots can be taken up by messages that are no longer reachable, so you
-may find you can't rewind as far back as you'd like. (Claude Code behaves the
-same way.) To get back to a clean state, run
+Separately from cleanup, each session keeps only the newest **100 checkpoints**
+(one per user message). Shared versions are retained while any of those
+checkpoints references them and deleted once none does, so the on-disk cost
+follows the changes that actually happened. If you rewind or compact a lot in one
+long session, those 100 slots can be taken up by messages that are no longer
+reachable, so you may find you can't rewind as far back as you'd like. (Claude
+Code behaves the same way.) To get back to a clean state, run
 `/snapshot-auto-cleanup run --current --apply` to clear the current session and
 start fresh.

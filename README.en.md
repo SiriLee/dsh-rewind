@@ -1,7 +1,7 @@
 # dsh-rewind
 
 Conversation rewind for DeepSeek Harness: **rewind the conversation to any earlier user message in one click, in the same window**.<br />
-No new branch, no window switch, with optional workspace-file restore — the full Claude Code `/rewind` semantics.
+No new branch, no window switch, with optional workspace-file restore — Claude Code-style `/rewind` semantics.
 
 English | [中文](README.md)
 
@@ -132,18 +132,18 @@ The file half follows Claude Code's checkpoint semantics — **partial tracking 
 
 - **Before-write backup**: tracks only the write-class tools (`write`, `edit`) — backs up the original content before a write and records/tracks the files it touches; it never backs up the whole workspace, so it's lightweight; **a single file that is too large is not backed up**.
 - **External changes count too**: at every user-message boundary the plugin re-checks all tracked files — external changes such as a command run or a manual edit are recorded as well and restored by a later rewind. "Lightweight" but not "incomplete".
-- **Unchanged-not-recorded**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); at before-write time, when the new content matches the path's prior record, only a **link to it** (`ref`) is stored instead of a copy.
+- **Unchanged-not-recorded**: an entry is written only when something changed — at the message-boundary re-check, an unchanged file is never backed up (no record); the same version from the previous checkpoint is reused instead of a copy.
 - **Accurate restore**: backups are the sole standard, checked against the real disk — **only files that actually differ are touched**. Backups are stored byte for byte, so the restored result matches the backups exactly, with no "ghost impact". Coverage is bounded by design: [File-rewind tracking boundary](docs/compat/tracking-boundary.md).
-- **Safety and integrity**: paths are sanitized so nothing ever escapes the backup root; symlinks / hard links are skipped so one restore can't clobber another name of the same file; a per-file failure never aborts the pass; backups and the restore journal are written atomically and kept across restarts, so a half-applied restore after a crash can be continued or rolled back.
+- **Safety and integrity**: paths are sanitized so nothing ever escapes the backup root; symlinks / hard links are skipped so one restore can't clobber another name of the same file; a per-file failure never aborts the pass; checkpoints and versions are written atomically and kept across restarts, so a target file is never half-written; a crash can be rerun to converge.
 
-> **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and content-as-link drop the repetition; only the files that differ are touched at restore time.
+> **Design highlight**: this checkpoint's light footprint comes from **recording only what was actually touched and really changed** — before-write backup makes it restorable, unchanged-not-recorded and version reuse drop the repetition; only the files that differ are touched at restore time.
 
 ## Scope and division of labour
 
 This plugin deliberately stays lightweight and focused on one thing — "conversation rewind". The following are **out of its scope**, and each has a better owner (see [design boundaries](docs/boundaries.md)):
 
 - **Whole-tree / Git-level snapshots** — only write-class tool edits plus external changes to already-tracked files are backed up; files never touched by a tool are not restored. Workspace history — any file, any moment — belongs to Git; the agent already uses it, and the plugin does not rebuild that layer. For a worktree-level full snapshot rollback, use Git or the snapshot tool the project already uses.
-- **Subagent edits** — not tracked, and no rewind inside a subagent session (same as Claude Code): a subagent runs its own session, so its backups could never be restored by a rewind of the parent session, and none are kept for one.
+- **Subagent edits** — not tracked, and no rewind inside a subagent session: a subagent runs its own session, so its backups could never be restored by a rewind of the parent session, and none are kept for one.
 - **Fork / branch rewind** — DSH already provides this ("branch in new chat"); no need to reinvent the wheel.
 
 ## Compatibility
