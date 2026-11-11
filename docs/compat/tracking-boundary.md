@@ -8,8 +8,8 @@
 >
 > Because manifests are dense at every message boundary, a target normally has a
 > row for every path tracked at that point. Recording has two kinds of gaps:
-> history before a file ever entered tracking (Boundary 1), and the few below.
-> These are current limits;
+> history before a file ever entered tracking (Boundary 1), and the remaining
+> gaps in the record (Boundary 2). These are current limits;
 > the rationale is in [design boundaries](../boundaries.md).
 
 ## 1. What a checkpoint is
@@ -113,7 +113,7 @@ is the content at the moment the file was first touched, but what those three
 messages began from was `v0`, `v0` and `v1`; the plugin never saw them and
 cannot restore them.
 
-## 5. Remaining gaps in the record
+## 5. Boundary 2: remaining gaps in the record
 
 Every message-boundary manifest is dense: the target message has its own row for
 every path tracked at that point. A path first tracked later gets its pre-touch
