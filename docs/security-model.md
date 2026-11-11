@@ -29,8 +29,8 @@ the host's own authority boundaries.
 
 ## Mutation gates
 
-When snapshot backups are on, the plugin **automatically captures**
-before-backups of tracked mutations, but **never automatically applies** one.
+When checkpointing is on, the plugin **automatically captures** checkpoint
+state of tracked mutations, but **never automatically applies** one.
 A workspace restore happens only through an explicit user action (the
 per-message ↶ button or `/rewind`), and only when all of the following hold:
 
@@ -38,40 +38,40 @@ per-message ↶ button or `/rewind`), and only when all of the following hold:
    surface.
 2. **A fresh plan** — derived from the current events and surface at execution
    time, never cached across events.
-3. **Committed backups exist** — every planned action comes from a committed
-   checkpoint entry anchored at or after the target.
-4. **Live-disk reconciliation** — each entry is compared with the current disk
+3. **A target checkpoint exists** — every planned action comes from its recorded
+   state, or from the earliest later state for a path first tracked after the
+   target.
+4. **Live-disk reconciliation** — each path is compared with the current disk
    and only actions that would actually change it are planned; an
    already-matching state is a no-op (restores are idempotent).
 5. **Exclusive execution** — a per-session in-flight guard rejects concurrent
    rewinds; a running turn is cancelled (queued messages are kept) and
    quiescence is awaited before the surface is cut.
 6. **Session binding** — the restore reads and writes only the rewound
-   session's store, over paths that session's own tools touched.
+   session's store, over paths that session's own tools tracked.
 
 **Concurrency scope:** the guard serializes concurrent *rewinds* of one session;
 it does not stop other processes from changing the workspace. The plan is
-reconciled against the live disk at plan time, with no re-validation before
-apply, so a file changed in that window is overwritten by the restore. The
-pre-restore state is captured at apply start, so a rollback still returns the
-workspace to exactly that state, and per-file failures are reported rather than
-hidden.
+reconciled against the live disk at plan time; apply re-checks the location and
+final component but not content, so a file changed in that window is overwritten
+by the restore. There is no pre-restore capture or rollback, and per-file
+failures are reported rather than hidden.
 
-A failed gate fails closed: an invalid target, a missing store, an absent
-backup, or a cancelled invocation aborts the rewind with an error. A store
-written by a **newer** build is refused as a whole — no partial restore, no new
-entry, and no automatic format-change clear — while the conversation rewind
-still works. An explicit clear or the age-based sweep, being user-directed
-deletion of whole session directories, is deliberately not version-gated.
+A failed gate fails closed: an invalid target, a missing store, a missing
+checkpoint, or a cancelled invocation aborts the rewind with an error. A store
+written by a **newer** build is refused as a whole — no checkpoint or version is
+read, written or restored — while the conversation rewind still works. An
+explicit clear or the age-based sweep is a whole-directory operation, so it does
+not consult the store version.
 
-**Automatic store deletion.** Two things delete session snapshots: the opt-in
+**Automatic store deletion.** Two things delete session checkpoint directories: the opt-in
 `snapshot-auto-cleanup` sweep (off by default) removes whole directories of
-long-inactive sessions; separately, a session's snapshots are cleared when the
-session format has changed (a DSH upgrade), because the backups are anchored to
-message positions that no longer line up. Both stay confined to the store root,
-never follow a symlink out of it, never touch the conversation log, and the
-sweep never targets the active session. The format guard runs before the clear,
-so a store newer than this build is not cleared by it. See
+long-inactive sessions; separately, the new storage is discarded when the
+session format has changed (a DSH upgrade) or the store marker is not this
+build's; old members are untouched. Both stay confined to the store root, never
+follow a symlink out of it, never touch the conversation log, and the sweep
+never targets the active session. The newer-store check runs before the format
+check, so a store newer than this build is not discarded by it. See
 [snapshot auto-cleanup](snapshot-auto-cleanup.md) and
 [the store format](format.md).
 
@@ -92,8 +92,8 @@ rendered transcript. The marker shape is specified in
 - **Store root**: `<dsh home>/rewind-snapshots/` by default (`$DSH_HOME` feeds
   the base, `~/.dsh` is the fallback); the `snapshotDir` config overrides the
   whole path. The plugin reads no environment variable of its own. Deleting the
-  root only removes file backups; the store rebuilds.
-- **Path sanitization**: session and call ids are scrubbed to a safe character
+  root only removes checkpoints and their versions; the store rebuilds.
+- **Path sanitization**: session and message ids are scrubbed to a safe character
   set before joining the store root; bare `.` and `..` are replaced — hostile
   ids cannot traverse out of the root.
 - **Unsafe targets are refused**: planning and the apply pass skip a path
@@ -104,57 +104,47 @@ rendered transcript. The marker shape is specified in
   where its directory resolved when the file was captured — or where a missing
   directory would resolve — and a restore refuses the path when it no longer
   resolves there; a missing parent chain is recreated only inside that
-  location. A record with no pin (released-v1 data, or a location that cannot
-  be resolved) falls back to the link check, as in Claude Code.
+  location. This build never writes a record without a location pin; such a
+  record is skipped as untrusted and reported, never followed.
 - **Observation sync (best-effort)**: after a restore, the plugin re-emits the
   host's `fs/observed` event for the paths it changed (absent, or present with
   the current version), so a host with the observation policy enabled does not
   judge the next write against a pre-restore observation. It heals only the
   inconsistency the restore itself created; later external changes are still
   seen normally.
-- **Restores name only recorded paths**: the store contains resolved display
-  paths of the session's own write-class tool calls (plus boundary re-checks
-  over that same tracked set) — a restore can never write an arbitrary path.
+- **Restores name only recorded paths**: the plan walks the current tracked set,
+  and each action comes from recorded state — a restore can never write an
+  arbitrary path.
 - **Path resolution**: relative paths resolve against the session's current
   working directory, read from the service the fs tools resolve through.
-- **Bounded backups**: the store keeps a bounded number of anchor groups per
-  session, except groups a non-terminal restore still references (pinned so the
-  operation can be finished); the exact cap is in
-  [the store format](format.md). Across sessions, the opt-in sweep removes
-  whole long-inactive session directories and never targets the active session.
+- **Bounded storage**: each session keeps a bounded retention window; content
+  versions stay while a retained checkpoint references them and are reclaimed
+  once none does. A tracked file over the per-file cap produces no new version;
+  while it stays over the cap a restore skips it. Across sessions, the opt-in
+  sweep removes whole long-inactive session directories and never targets the
+  active session.
 
 ## Crash safety
 
-- **Ordered commits**: a checkpoint writes the before-sidecar (a raw byte copy)
-  before publishing the entry, so a crash can leave an unreferenced sidecar but
-  never an entry whose bytes are missing. Every JSON write goes to a sibling
-  temp file and is renamed over the target: a crash can leave only an inert
-  `.tmp`, never a readable half-written file, and readers never pick up temp
-  files.
-- **Journaled restores**: before mutating anything, a restore captures each
-  planned path's pre-restore state and persists an intent journal, then marks
-  each action done as it is applied. A crash at any point leaves the journal on
-  disk.
-- **Disk is truth**: an interrupted operation keeps its journal, and recovery
-  re-derives the true state from the real disk — which paths already match the
-  goal and which are pending, can finish the operation, and can undo it to the
-  exact pre-restore state. A journal whose goal is already reached auto-heals.
-  The plugin never runs recovery on its own: an interrupted operation stays
-  interrupted until an explicit caller resumes or undoes it.
-- **Fail-loud vs fail-soft**: a corrupt journal is reported as
-  `recovery-required`, never silently dropped — dropping it would erase the
-  recovery record. Corrupt entries are ignored (they lose one backup, not the
-  recovery path), and a missing or truncated sidecar fails only that file —
-  never a delete of the live file.
-- **Journal IO never fails the restore**: if the journal cannot be written, the
-  restore proceeds with pre-journal semantics; crash safety degrades, behavior
-  does not.
+Atomic-write and restore mechanics are specified in [the store format](format.md).
+The security-relevant consequences:
+
+- every restore target is either its old self or the complete new content, never
+  half-written;
+- recorded content is stored before a checkpoint references it, so a crash leaves
+  at worst unreferenced data;
+- the pass is not a cross-file transaction: a crash can leave some files restored
+  and others not, and rerunning the same rewind converges;
+- a malformed/orphan checkpoint is dropped and missing or wrong-sized recorded
+  content fails only that file — neither can write or delete unverified live
+  content;
+- a power loss may lose the last checkpoint update; the next message boundary
+  rebuilds it.
 
 ## Explicit non-goals
 
-This section declares scope, not a gap list: each item names what stays outside
-the plugin and what remains the host's or the user's responsibility. The
-boundary contract is in [design boundaries](boundaries.md).
+The plugin does not take on these responsibilities. The boundary contract is in
+[design boundaries](boundaries.md).
 
 - It does **not** sandbox other processes or stop them from changing files
   concurrently.
@@ -165,14 +155,13 @@ boundary contract is in [design boundaries](boundaries.md).
   best-effort), while a mode difference alone never triggers a restore.
 - It does **not** exclude paths from the store, and it introduces no authority of
   its own: sensitive files (e.g. a `.env` the model may edit) and files outside
-  the workspace the model may touch are backed up and restorable, unless over
-  the size cap. Keeping a path out is a **DSH model-permission** concern, not a
+  the workspace the model may touch are recorded and restorable, unless over the
+  size cap. Keeping a path out is a **DSH model-permission** concern, not a
   rewind feature.
 - It does **not** touch git, make network requests, or access credentials.
 - It does **not** roll back whole-log state: search, telemetry and `/export`
   still see withdrawn messages (by design; see [boundaries](boundaries.md)).
-- It does **not** restore files written by a cancelled tool call that never
-  committed a backup.
+- It does **not** restore files that never entered tracking.
 - **Subagent session edits are not tracked**: a subagent runs its own session,
   so its files cannot be restored by a rewind of the parent, and the plugin
   offers no rewind inside one. See [boundaries](boundaries.md).

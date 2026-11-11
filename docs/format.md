@@ -1,9 +1,11 @@
 # Durable format
 
 The on-disk format of the dsh-rewind checkpoint store, pinned as a spec. The
-implementation is `src/snapshot.ts`; this document is the reference for what
-readers may rely on and what a future incompatible change must do. If the code
-and this spec disagree, the code wins and this spec is a bug.
+implementation is `src/snapshot-format.ts` (naming and codecs), `src/snapshot.ts`
+(lifecycle) and `src/snapshot-fs.ts` (byte-level guarantees); this document is
+the reference for what readers may rely on and what a future incompatible change
+must do. If the code and this spec disagree, the code wins and this spec is a
+bug.
 
 ## State root
 
@@ -11,264 +13,229 @@ The store root defaults to `<dsh home>/rewind-snapshots/` — the dsh data
 directory (`~/.dsh/rewind-snapshots/` when `$DSH_HOME` is unset, resolved via
 `resolveDshHome`) — and is overridden by the `snapshotDir` plugin config. The
 plugin reads no environment variable of its own. It is a sibling of the
-workspace, never a subtree of it. Deleting the root only removes file backups;
-the store rebuilds from scratch.
+workspace, never a subtree of it. Deleting the root only removes file
+checkpoints and their versions; the store rebuilds from scratch.
 
 ```
 <root>/
 └── <sessionId>/                        # safeSessionId(sessionId)
-    ├── store                           # store-format marker ("2")
-    ├── format                          # DSH session-format marker (session.header.version)
-    ├── <anchorSeq>/                    # decimal seq of the anchoring user/message
-    │   ├── <base>.json                 # one committed before-backup (metadata)
-    │   └── <base>.before               # its raw byte sidecar (the before content)
-    ├── .pending/                       # captures staged but not yet committed
-    │   └── <base>.before
-    ├── rescue/<opId>/<n>.before        # one pre-restore ("rescue") copy per op
-    └── journal-<opId>.json             # one restore-op journal
+    ├── meta.json                       # store format + DSH session format
+    ├── checkpoints/
+    │   ├── <safe(messageId)>-<hash8>.json
+    │   └── …
+    └── versions/
+        ├── 3f2a1b2c3d4e5f60@v1
+        ├── 3f2a1b2c3d4e5f60@v2
+        └── 9c1e8d7f6a5b4c3d@v1
 ```
+
+There is no `.pending/`, journal, rescue directory or persistent temp marker.
+Old snapshot members may exist in the same session directory; this build never
+reads them (see [Old data](#old-data)).
 
 - `sessionId` is sanitized to `[a-zA-Z0-9._-]`; the bare values `.` and `..`
   are replaced (`safeSessionId`) so a hostile id cannot traverse out of the
   root.
-- `callId` is sanitized to `[a-zA-Z0-9._-]` (`safeFileId`) and extended with an
-  8-hex digest of the unsanitized id — `<base>` is
-  `<safeFileId(callId)>-<sha256(callId)[0..8]>`, so two call ids that sanitize
-  to the same name (e.g. `a:b` / `a_b`) cannot collide. Readers never infer a
-  name: every reference names its file, so pre-digest (released v1) names keep
-  resolving.
-- `<anchorSeq>` is a decimal integer; directories with non-integer names are
-  ignored by readers.
-- Checkpoint entries are read from those numeric directories only
-  (`<anchorSeq>/<base>.json`). Neither marker is `.json`, and a stray `.json` in
-  the session root is ignored.
-- Journal files are recognized by the `journal-` prefix (current format) or the
-  released `restore-journal-` prefix (read-only compatibility).
-- `store` is the session's store-format marker (a decimal version, written
-  atomically); a missing marker means the released v1 string format. `format` is
-  the DSH **session**-format marker the snapshots were anchored under (see
-  `security-model.md`) — the two are independent.
+- A checkpoint file is named from its message id:
+  `safeFileId(messageId)` plus an 8-hex digest of the unsanitized id. The digest
+  keeps two ids that sanitize to the same name (e.g. `a:b` / `a_b`) from
+  colliding. Readers do not infer a message id from a file name.
+- Version file names are restricted to `[0-9a-f]{16}@v[1-9][0-9]*`; every store
+  path is joined inside the session directory and nowhere else.
+- `hash8` is the first eight hex digits of SHA-256; `pathHash` in a version name
+  is the first sixteen hex digits.
 
-## Checkpoint entry
+## `meta.json`
 
-One JSON file per before-backup, named `<base>.json` next to its `<base>.before`
-sidecar:
-
-```ts
-interface CheckpointEntryJson {   // one `<base>.json`
-  store: 2              // on-disk store format (absent/1 = the released v1 string format)
-  callId: string        // the tool call that mutated the file
-  file: string          // resolved display path (absolute)
-  parent?: string       // location pin: where the file's directory resolved at capture (or would)
-  blob: string | null   // sibling sidecar file name; null = the file was created
-  size: number          // byte length of the sidecar (0 when `blob` is null)
-  mode?: number         // permission bits, applied when content is restored
-  lossy?: true          // recorded from v1 content that had already lost bytes
-  time: number          // epoch ms, strictly increasing within a store instance
-}
+```jsonc
+{ "store": 3, "sessionFormat": 4 }
 ```
 
-A dedup link (see below) carries `callId`, `file`, `ref`, `time` and an
-optional `parent` instead of `blob` and `size`.
+- `store` is this plugin's store format. A value **above** the supported version
+  makes the whole file store fail closed: nothing is read, written or restored,
+  while conversation rewind keeps working.
+- `sessionFormat` is the DSH session format (`session.header.version`) the
+  manifests were anchored under. When it does not match the current session, the
+  new storage is discarded.
+- The file is written atomically (temp + rename) and is created at the first
+  checkpoint, not for an empty session.
+
+Load decision:
+
+| On disk | Result |
+| --- | --- |
+| no session directory | empty store; nothing to do |
+| no `meta.json`, but `checkpoints/` or `versions/` exists | discard the new storage and warn |
+| unreadable `meta.json` (an IO/permission error, not absence) | load fails closed; nothing is discarded |
+| corrupt or structurally invalid `meta.json` | warn; discard the new storage members (`meta.json` and any `checkpoints/` / `versions/`) |
+| `store > 3` | mark the session unavailable (fail-closed); new storage is kept untouched |
+| `store !== 3`, or `sessionFormat` mismatch | discard the new storage and warn; old members are untouched |
+| valid and matching | load `checkpoints/`, prune orphans, retain 100, GC |
+
+"Discard the new storage" removes exactly `meta.json`, `checkpoints/` and
+`versions/`; it never touches old snapshot members.
+
+## Checkpoint file
+
+One JSON file per user message, named
+`<safe(messageId)>-<hash8>.json`:
+
+```ts
+interface CheckpointJson {
+  store: 3                    // must equal this store version
+  messageId: string           // the DSH UserMessage.id; the lookup key
+  time: number                // monotonic epoch-ms order key
+  files: Record<string, FileState>
+}
+
+interface FileState {
+  v: number                   // per-path version, positive, monotonic, never reused
+  blob: string | null         // version file name; null = the file did not exist
+  size?: number               // present exactly when blob is non-null
+  mode?: number               // captured permission bits (0..0o7777)
+  parent?: string             // parent-directory realpath at capture (location pin)
+}
+```
 
 Semantics:
 
-- **`blob` is the pre-edit state**: a string names the sidecar holding the exact
-  before bytes (copied raw, never through a JS string, so binary and non-UTF-8
-  files round-trip byte-exactly); `null` means the call created the file — valid
-  only with `size: 0` and never with `lossy`. The name is an invariant: it must
-  equal the entry's own file name minus `.json` plus `.before`.
-- **`anchorSeq` is the parent directory**, deliberately not a field of the
-  entry: rewinding to message N applies every entry anchored at or after N (the
-  boundary is inclusive).
-- **`parent` is the location pin**: where `dirname(file)` resolved when the
-  entry was captured, or where a missing directory would resolve (nearest
-  surviving ancestor plus the missing segments). A restore refuses the path
-  when its directory no longer resolves there, and the final component must be
-  one regular file (no symlink, hard link, FIFO or device; see
-  `security-model.md`). Absent means "no pin" (released-v1 data, or a location
-  that cannot be resolved): the restore falls back to the final-component
-  check alone.
-- **`time` is the ordering key within an anchor group**: it is monotonic per
-  store instance (bumped past the previous commit), so same-millisecond
-  commits stay capture-ordered and a re-read always picks the same "earliest"
-  entry per path.
-- **`mode` never decides an action** (a mode-only difference is a no-op); it is
-  applied, best-effort, only when content is written back.
-- **`lossy` marks a record that had already lost bytes** (v1 content that was
-  decoded lossily, or a materialized link to one): it is comparable but never
-  written back, so a lossy record can never overwrite a live file.
-- Synthetic re-check entries (external edits/deletions seen at a user-message
-  boundary) use `callId = recheck-<anchorSeq>-<sha256(path) first 8 hex>`.
+- **Dense manifest.** Every path tracked at that message boundary has a row.
+  `files` is the tracked set at that moment, not a delta against the previous
+  message.
+- **What the manifest means.** It is the state at the moment the step that
+  claimed the message was admitted — before the step appended the message and
+  before any model call or tool ran. A path first touched later in that step is
+  appended to the current checkpoint (the batch's last message) with its
+  **pre-touch** state and `v: 1`; `blob: null` records a creation. An earlier
+  message in the same batch recovers it through the v1 fallback. The manifest is
+  rewritten atomically.
+- **The key is the message id.** `agent/pre-step` runs before `user/message` is
+  appended, so no seq exists at capture time. A reader maps a target seq to its
+  `user/message` event, then to `data.id`, then to the checkpoint file.
+- **`time`** is strictly increasing within a session and within one admitted
+  batch. It orders the retention window and the v1 fallback; a reader sorts by
+  `time`, then by file name for ties.
+- **`files` keys are absolute paths** as resolved by the session's own
+  write-class tool calls.
+- **`blob`** names a version file; `null` means the file did not exist at that
+  point, so a restore deletes it. `size` is present exactly when `blob` is
+  non-null. `v` advances only when the recorded state really changes, and is
+  retained across `null` rows so a delete-then-recreate never reuses an earlier
+  version number.
+- **`parent`** is the location pin: where `dirname(path)` resolved at capture,
+  or where a missing directory would resolve (the nearest surviving ancestor's
+  realpath plus the missing segments). This build writes it on every row. A row
+  without a pin is structurally readable but not actionable: restore planning
+  skips it with reason `parent`, and never follows it.
+- `mode` never decides an action; a permission-only difference is a no-op. It is
+  applied, best-effort, only when content is restored.
 
-### Dedup link entry
+Restore semantics — the target row, the v1 fallback for a path first tracked
+later, the traversal set, and the skip reasons — are specified in the
+[file-rewind tracking boundary](compat/tracking-boundary.md).
 
-A tracked file that records the same `before` content as its immediately-prior
-entry for that path is stored as a **link** instead of a second byte copy: the
-entry carries a `ref` (the `<anchorSeq>/<base>.json` of that prior entry) and
-omits `blob`/`size`, so identical content is never duplicated across entries. A
-reader resolves the `ref` back to the terminal real snapshot; `blob: null` (i.e.
-a recorded creation) still means "the file was created". A `ref` is validated as
-a single-level, `<digits>/<file>.json` relative reference (no traversal) so a
-corrupt or hostile ref cannot escape the store root when followed; because refs
-name the actual file, a link may point at a released-v1 entry. Because links
-reference prior entries, `prune` materializes a surviving link whose `ref` lands
-on a group it is about to drop before deleting that group, so no kept link is
-left dangling; the materialized entry keeps the bytes and the link's own
-location pin, but not the referent's `mode` (a link records no permissions of
-its own).
+### Validation
 
-## Restore journal
+A checkpoint is parsed **all-or-nothing**: any malformed row drops the whole
+checkpoint (a partially trusted manifest could plan a wrong action for a path it
+does not describe). A checkpoint that fails parsing, or whose `messageId` is not
+present in the session log (an orphan left by a crash between the checkpoint
+write and the message append), is deleted on load.
 
-One JSON file per restore operation, written **before any mutation** and
-updated as the pass applies:
+Fields are validated as follows:
 
-```ts
-type ByteRef = { blob: string } | { text: string }   // session-relative byte file, or inline text
+- `store` must equal `3`; `messageId` is a non-empty string; `time` is a finite,
+  non-negative number; `files` is a plain object whose keys are absolute paths.
+- `v` is a positive safe integer.
+- `blob` is `null` or a string matching the version-name pattern. `size` must be
+  absent when `blob` is `null`, and a non-negative safe integer otherwise.
+- `mode`, when present, is an integer in `0..0o7777`.
+- `parent`, when present, is a non-empty string.
 
-interface RestoreJournal {
-  version: 2
-  id: string                    // `op-<base36 ms>-<random>`; file name suffix
-  sessionId: string
-  targetSeq: number             // rewind target the restore belongs to
-  startedAt: number             // epoch ms
-  finishedAt?: number           // set on a terminal state
-  state: 'running' | 'rollback-running' | 'completed' | 'rolled-back' | 'recovery-required'
-  actions: RestoreJournalAction[]
-  rollbackError?: string        // set when a rollback pass failed partway
-}
+Unknown JSON fields are ignored. A version file that is missing, not a regular
+file, or whose `stat().size` differs from `size` is a per-file failure at
+restore time — never a reason to write or delete.
 
-interface RestoreJournalAction {
-  path: string
-  action: 'restore' | 'delete'  // restore = write the content back; delete = unlink
-  before: ByteRef | null        // target content for restore; null for delete
-  rescue: ByteRef | null        // pre-restore disk state; null = file was absent
-  mode?: number                 // recorded target permissions
-  rescueMode?: number           // recorded pre-restore permissions
-  parent?: string               // checkpoint-time location pin (see the entry)
-  rescueError?: string          // set when the rescue capture failed (rollback skips it)
-  done: boolean                 // true once the action's fs op completed and was marked
-  failed?: string               // per-action failure message (the pass never aborts)
-}
-```
+## Version file
 
-A `{blob}` reference is safe and session-relative: `<anchorSeq>/<base>.before`
-(an entry sidecar) or `rescue/<opId>/<n>.before` (a rescue copy), validated on
-both write and read so a corrupt or hostile journal can never point a restore or
-a rollback outside the store. `{text}` refs carry content that has no sidecar:
-released-v1 entry content, or a legacy journal's inline strings.
+A version file holds the raw bytes of one path at one version:
 
-States: `running` and `rollback-running` are non-terminal; `completed` /
-`rolled-back` are terminal. Reconciliation *reports* a still non-terminal op as
-`interrupted` (or `recovery-required` when the journal is corrupt or a rollback
-could not complete), while the journal itself stays `running` /
-`rollback-running`. A journal read back from a legacy file (`restore-journal-`
-prefix, `version: 1`, inline strings) is rewritten IN PLACE as `version: 2` once
-a redo or rollback pass completes, so the same op never leaves two divergent
-versions on disk.
+- content is the file's bytes, stored verbatim (never through a JS string, so
+  binary and non-UTF-8 content round-trips);
+- the name is `<pathHash>@v<N>`, where
+  `pathHash = sha256(absolutePath).hex().slice(0, 16)` and `N` is the `v` from
+  the row;
+- a version may be referenced by any number of checkpoints. The store writes it
+  once and the manifests only hold the name;
+- writing is a raw copy to `<name>.tmp` in `versions/`, followed by `rename`;
+- the copy's size is recorded as `FileState.size`. A reader refuses a version
+  whose size no longer matches.
+
+Because content is shared, a checkpoint row that did not change reuses the same
+`blob` from the previous checkpoint (refreshing only `mode` / `parent`); a new
+version is written only when the content differs.
 
 ## Write guarantees
 
-- **Atomicity**: every JSON write serializes to a sibling `<target>.tmp` and
-  renames over the target. A crash between the two steps leaves only the temp
-  file — never a readable half-written target — and readers ignore temp files
-  (they do not end in `.json`). The next write of the same target overwrites
-  a leftover temp.
-- **Bytes before metadata**: a checkpoint commit places the sidecar first
-  (a staged capture is `rename`d out of `.pending/`; other sources are written
-  temp-then-rename) and only then publishes the entry JSON, so a crash can
-  leave an unreferenced sidecar but never an entry whose bytes are missing.
-  A sidecar that is missing, or whose size differs from `size`, is a per-file
-  failure — never a silent "the file was created".
-- **Pinned location**: every record this build writes — entry, link and
-  journal action — carries where the tracked file's directory resolved when it
-  was captured (the `parent` pin, projected through a missing directory), and
-  a restore re-checks it before touching the path — the initial pass, a
-  `continueRestore` and a `rollbackRestore` alike (the journal carries the
-  pin). A path that resolves elsewhere is refused and reported, so a restore
-  never writes or unlinks outside the recorded location; a record with no pin
-  (released-v1 data, or a commit whose parent could not be resolved) falls
-  back to the final-component check alone. A gone parent chain is recreated —
-  but only while its nearest surviving ancestor resolves inside the pin — and
-  a stable symlinked ancestor is never refused, because both sides are
-  `realpath`s.
-- **Journal before mutation**: the rescue state of every planned path is
-  captured as a raw byte copy and the intent journal — references only —
-  persisted atomically BEFORE the first fs mutation; each action is marked
-  `done` as it is applied.
-- **Disk is truth**: reconciliation compares the real disk against each action's
-  goal (the restore target for `running` journals, the rescue state for
-  `rollback-running` / `recovery-required` ones); a path whose disk already
-  matches is marked done without being touched. It is a store API an explicit
-  caller runs — the plugin never reconciles on its own, so an interrupted op
-  stays interrupted until then.
-- **Bounded storage**: `prune` keeps the newest 100 anchor groups per session
-  (`MAX_ANCHOR_GROUPS`), materializing any surviving dedup link that references
-  a group being dropped before deleting whole anchor directories; it also
-  recycles terminal journals (`completed` / `rolled-back`) together with their
-  `rescue/<opId>/` bytes, and collects `.pending/` captures older than 24 h that
-  no commit consumed. A group a non-terminal journal still references is pinned
-  — evicting it would make "continue finishes the interrupted op" impossible —
-  so the effective window may exceed `keep` until that op is resolved.
-  Non-terminal and corrupt journals are always kept. Across sessions,
-  `pruneStale` removes whole long-inactive session directories whose newest
-  member stamp is older than a configurable idle cutoff (default off), so the
-  store root does not grow without bound either.
+- **Atomic JSON.** Every checkpoint and `meta.json` write goes to a sibling
+  `<target>.tmp` and is renamed over the target. A crash between the steps
+  leaves only an inert temp — never a readable half-written target — and readers
+  never select a `.tmp` file. A leftover temp is overwritten by the next write
+  and collected by GC.
+- **Atomic versions.** A version is copied to a temp file and renamed; a crash
+  leaves an unreferenced temp or version, never a manifest pointing at bytes
+  that were never written. A version is complete before a manifest references
+  it.
+- **Atomic restore.** A restore copies the version to `<target>.rewind-tmp` in
+  the target's own directory, verifies the copied size, then renames over the
+  target; the recorded `mode` is reapplied best-effort afterwards. The target is
+  therefore either its old self or the complete new content, never half-written.
+  A delete is an `unlink` after the location and target checks. Per-file
+  failures are collected and the pass continues.
+- **No fsync.** A power loss may lose the last rename. The next message boundary
+  rebuilds the checkpoint and an unreferenced version becomes GC garbage; a
+  target file is still never left half-written.
 
-## Validation and failure policy
+## Retention and GC
 
-- **Entries**: a missing, malformed, or self-contradictory entry is read as
-  `undefined` (silently skipped) — losing one backup, never the recovery path.
-  Contradictions are never guessed at: a `blob: null` with `size !== 0` or with
-  `lossy`, a `blob` that is not this entry's sidecar name, and a non-string
-  `before` in a v1 record are all corruption, and guessing an entry's kind is
-  how a restore turns into a delete. An absent or malformed `parent` is not
-  corruption: it means "no pin", so the entry falls back to the released
-  final-component rule. Two cases are *not* silent skips: an entry
-  whose `store` is newer than this build fails the whole operation closed (see
-  Versioning), and a record whose sidecar is missing or too short is a per-file
-  failure that the restore reports — never a delete of the live file.
-- **Journals**: a corrupt or schema-invalid journal **fails loud** —
-  `reconcileRestores` reports it as `recovery-required` and never drops it,
-  because dropping it would silently erase the interrupted restore's recovery
-  record. A `ref` with a traversal, absolute, or unknown-root segment counts as
-  corrupt.
-- **Journal IO**: best-effort by design — if a journal cannot be written, the
-  restore proceeds with pre-journal semantics (crash safety degrades,
-  behavior does not).
+The store keeps the newest **100** checkpoints per session, measured by `time`.
+
+After each new checkpoint, and on load:
+
+1. retain the newest 100 manifests;
+2. compute `keep` = the union of every non-null `blob` referenced by a retained
+   manifest;
+3. delete every version not in `keep`;
+4. delete checkpoint files not in the retained set, and leftover `*.tmp` files
+   in `checkpoints/`, `versions/` and `meta.json.tmp`.
+
+This is pure reference counting: a version shared by several checkpoints lives
+until the last retained manifest that references it is gone. There is no
+first-version retention (the v1 fallback row always lies in the window) and no
+journal pin — there is no journal. A crash during GC can only leave garbage; it
+never deletes a referenced version.
+
+Load drops malformed and orphan checkpoints, retains the newest 100, runs one
+GC, sets the tracked set from the newest manifest, and leaves the current
+checkpoint undefined until the next admitted step creates a new one.
+
+Whole-session cleanup (`clearSession` / `pruneStale`) is a separate whole-directory
+operation that does not read references, versions or the store marker; see
+[snapshot auto-cleanup](snapshot-auto-cleanup.md).
+
+## Old data
+
+This build reads only `meta.json`, `checkpoints/` and `versions/`. Old snapshot
+members — numeric anchor directories, `store`, `format`, `journal-*`, `rescue/`,
+`.pending/` — are never parsed, modified or deleted. They may coexist with the
+new storage in the same session directory and still count toward its size and
+activity; only [whole-session cleanup](snapshot-auto-cleanup.md) removes them. A
+one-time `legacy snapshot data ignored` warning is logged on load.
 
 ## Versioning policy
 
-The format is versioned twice: a session-level `store` marker (the value is the
-current `CURRENT_STORE_VERSION`, 2) and a self-describing field on every record
-(`store` on entries, `version` on journals). A missing `store` marker (or `1`)
-means the released v1 string format, which is still read but never migrated. A
-`store` **above** the current version fails the whole operation closed — no file
-restore and no new entry written into a store a newer build owns (an explicit
-clear or the age-based sweep is not version-gated) — while the conversation
-rewind itself keeps working (it does not depend on snapshots). A journal whose
-`version` is present but neither 1 nor 2 is corrupt and is reported
-`recovery-required` (see Validation).
-
-Because compatibility is not safe in both directions, the byte format reuses
-none of v1's path/state keys (`path`, `anchorSeq`, `before`) and does not carry
-`anchorSeq` (it equals the parent directory). A released v1 build therefore
-rejects each such entry instead of reading it as "the file was created", so a
-downgrade cannot delete workspace files; that field-name contract is pinned by
-`tests/downgrade-safety.test.ts`. Compatibility means reading old data, not
-repairing it: bytes the v1 build had already lost cannot be recovered.
-
-A future incompatible format should raise the marker/version (readers already
-fail closed above their own version) or move the state root and ship an explicit
-migration tool. Old-format data is never silently re-interpreted.
-
-## Cleanup policy persistence
-
-The snapshot auto-cleanup policy (the `autoCleanupEnabled` switch and the
-`autoCleanupMaxAgeDays` idle cutoff) is no longer a file: it is this plugin
-entry's own live configuration (both fields declared `.volatile()`, validated by
-the entry's schemastery `Config` schema, defaults on the schema). The policy was
-previously persisted in a legacy `<dsh home>/snapshot-cleanup.json` file; that
-file store and its one-time startup migration have been removed. The last-sweep
-clock stays in its own `<dsh home>/snapshot-cleanup-last-sweep.json` state file,
-which is unchanged.
+`meta.store` and `meta.sessionFormat` are independent. A `store` above 3 fails
+the file store closed while the conversation rewind still works; a lower store,
+or a `sessionFormat` mismatch, discards the new storage only. A future
+incompatible format raises `store` or moves the state root and ships an explicit
+migration tool; this build performs no migration.
