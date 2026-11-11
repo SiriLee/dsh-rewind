@@ -2,7 +2,7 @@
 
 > Maintainer doc: the harness subsystems this plugin depends on, the seams it
 > hooks, and the key source files behind each interface. Targeted version is the
-> one locked in `package-lock.json` (`@deepseek-ai/*@0.2.2-rc.1`). Official repo:
+> one locked in `package-lock.json`. Official repo:
 > [github.com/deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 
 ## Seams this plugin uses
@@ -14,12 +14,6 @@
 | `tools/execute` | The around-dispatch wrapper, after `tools/pre-execute` approval/guards and before the tool body. | First-touch capture for `write` / `edit`; a denied or pre-dispatch-cancelled call never reaches it, so it records nothing. |
 | Session format | `session.header.version` identifies the session format. | Written as `meta.sessionFormat`; a mismatch discards the new storage. |
 | User message id | `UserMessage.id` is stable and is assigned when the message is created (`createUserMessage`). | Checkpoint file key; a rewind resolves target seq → `user/message` event → `data.id` → checkpoint. |
-
-Source: `packages/core/agent-loop/src/agent.ts` (`preStep`, `step`),
-`packages/core/agent-loop/src/inbox.ts` (`claim`),
-`packages/core/tools/src/pipeline.ts` (`prepare` / `dispatch`),
-`packages/core/session/src/types.ts` (`SESSION_FORMAT_VERSION`),
-`packages/llm/llm/src/message.ts` (`createUserMessage`).
 
 ## Subsystem docs (`docs/subsystems/`)
 
@@ -56,8 +50,7 @@ Also in the harness repo's `docs/`: `persistence-catalog.md` (full
 | `Agent` (`status` / `session`) | [packages/core/agent/src/runtime-types.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/agent/src/runtime-types.ts) |
 | `agent/pre-step` waterfall, `step()` ordering | [packages/core/agent-loop/src/agent.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/agent-loop/src/agent.ts) |
 | `inbox.claim` batch shape | [packages/core/agent-loop/src/inbox.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/agent-loop/src/inbox.ts) |
-| `tools/execute` ordering (after approval, before body) | [packages/core/tools/src/pipeline.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/pipeline.ts) |
-| `tools/pre-execute` / `execute` events, `ToolExecution` | [packages/core/tools/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/index.ts) |
+| `tools/pre-execute` / `tools/execute` ordering, `ToolExecution` | [packages/core/tools/src/pipeline.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/pipeline.ts), [packages/core/tools/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/core/tools/src/index.ts) |
 | Chat node slot entries (`conversation.chat.node`, keys `user` / `steering`) | [packages/client/ui-chat/src/client/chat/register-node-renderers.ts](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/register-node-renderers.ts) |
 | User/steering row: `actions(text)` prop, `extraActions`, `data-pending-steering`, `data-message-attachments` | [packages/client/ui-chat/src/client/chat/MessageItem.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/MessageItem.tsx), [MessageIconActions.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/MessageIconActions.tsx), [UserContent.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-chat/src/client/chat/UserContent.tsx) |
 | Client DOM anchors (`data-conversation-session`, `data-composer-input`) | [packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx), [ComposerContentEditable.tsx](https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/client/ui-conversation/src/client/input/editor/ComposerContentEditable.tsx) |
