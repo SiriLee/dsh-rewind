@@ -10,6 +10,12 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.0...vNEXT
+
+## [0.22.0] - 2026-11-11
+
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
 ### 新增功能
 
 - **文件检查点改为按用户消息的 checkpoint 机制。** 每条用户消息（含中途插话）一张稠密检查点，记录当时每个已跟踪文件的状态；外部修改在下一个消息边界进入记录。「不变不存」只针对实际备份：未变的文件仍保留记录，只复用版本、不写新副本；每个会话保留最新 100 张检查点。（#87）@slev-agent @SiriLee
@@ -46,7 +52,7 @@ and the release steps are documented in
 
 - **Upgrade and restore behavior changed.** Old snapshots are no longer read or migrated; file-rewind history for old sessions is unavailable, and the old data is removed with the rest of the session directory by the existing cleanup, with no separate migration. An old settings document carrying `dedup` or `maxAnchorGroups` still loads, but the fields are ignored. Restore no longer offers rollback, resume or undo: each file is replaced atomically, but the pass is not a cross-file transaction, and rerunning the same rewind converges after a crash. (`#87`) @slev-agent @SiriLee
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.21.2...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.21.2...v0.22.0
 
 ## [0.21.2] - 2026-11-07
 
