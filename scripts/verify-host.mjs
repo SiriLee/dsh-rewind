@@ -1,373 +1,176 @@
 #!/usr/bin/env node
 /**
  * Host-half verification: boots the built plugin (`lib/index.js`) on a real
- * cordis context with a real dsh-session, then drives the `/rewind` command
- * handler and the checkpoint pipeline end to end — no model, no UI. Files are
- * real files under a temporary directory, so a restore is verified against
- * actual on-disk content, and the checkpoint store root is overridden to that
- * temporary directory.
+ * cordis context with a real dsh-session, drives the checkpoint pipeline
+ * (pre-step manifests + tools/execute first touches), the read-only API routes
+ * and the `/rewind` command end to end — no model, no UI. Files are real files
+ * under a temporary directory, so restores are checked against real content.
  *
  * Run: `npm run build && node scripts/verify-host.mjs`
  *
  * What it proves:
- *  1. the plugin registers a `rewind` command on the ctx;
- *  2. `/rewind` (no args) withdraws the most recent user message;
- *  3. `/rewind @<seq> chat` cuts the surface in-place (log untouched);
- *  4. a successful write through the tools pipeline commits a before-backup
- *     under the turn's anchor seq;
- *  5. a denied call never commits (no phantom entry in the store);
- *  6. relative file paths resolve against the session cwd;
- *  7. the `/api/dsh-rewind/preview` route reports the checkpoint impact;
- *  7b. bad requests use the `/api` bridge's 415/400 statuses; business
- *      failures stay in the HTTP 200 result envelope;
- *  8. `/rewind @<seq> both` restores the real file to its pre-edit content
- *     and deletes files created after the target;
- *  9. a running agent is force-stopped before the rewind (not refused);
- * 10. a cancel that never quiesces aborts the rewind (timeout path);
- * 11. subagent edits are NOT tracked (Claude Code alignment);
- * 12. the REAL `/compact` command (command-compact + compaction-basic with a
- *     stubbed summarizer, no LLM) lands a compaction/start…end transaction on
- *     top of a rewind marker and the log stays replayable (token-meter +
- *     Session.create resume preflight);
- * 12b. a small post-rewind surface makes /compact a legal no-op that never
- *     fires a transaction and stays replayable;
- * 13. rewind → real turn → rewind → real /compact stays replayable and the
- *     compaction bookkeeping stays balanced;
- * 14. rewinding across a compaction checkpoint is refused with the plugin's
- *     own error (not a crash);
- * 15. no rewind/compact combination ever leaves a dangling step/start or
- *     turn/start frame in the log;
- * 16. the per-file size cap: an over-cap edit is recorded by NOTHING, the
- *     preview names it as uncovered, and a rewind leaves it exactly as it is
- *     (never deleted, never clobbered by an older smaller version).
+ *  1. the plugin registers `/rewind`, `/undo`, the engine channel and the
+ *     cleanup command;
+ *  2. one dense checkpoint per user message is written at `agent/pre-step`;
+ *  3. a `write` first touch records the pre-touch state before the body;
+ *  4. preview and both-mode restore agree on the target manifest;
+ *  5. a file created after the target is deleted;
+ *  5b. a running turn is cancelled and quiesced before the cut;
+ *  6. a target without a checkpoint performs only the conversation rewind and
+ *     reports it;
+ *  7. a newer store fails the file operation closed while the conversation
+ *     rewind still works;
+ *  8. an over-cap tracked file is skipped and reported, never overwritten;
+ *  9. a path that becomes a symlink is skipped, never written through;
+ * 10. `/snapshot-auto-cleanup run --current` clears the session directory.
  */
 import { Context } from '@deepseek-ai/cordis'
-import { HostConnectionService } from '@deepseek-ai/dsh-client-connection'
 import { CommandId } from '@deepseek-ai/dsh-commands'
 import { FileSystem, FsTargetKey, FsVersion } from '@deepseek-ai/dsh-fs'
-import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { Session, SessionId, SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session'
-import { TokenMeter } from '@deepseek-ai/dsh-token-meter'
-import { planProjectionDefinition as planProjection } from '@deepseek-ai/dsh-plan-mode'
-import { BasicCompactionEngine } from '@deepseek-ai/dsh-compaction-basic'
-import { apply as applyCommandCompact } from '@deepseek-ai/dsh-command-compact'
-import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
-import { chmod, mkdtemp, mkdir, rename, rm, symlink, writeFile, readFile, readdir, utimes, stat } from 'node:fs/promises'
-import { createHash, randomBytes } from 'node:crypto'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
-import { apply as applyRewind, Config } from '../lib/index.js'
-import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
+import { apply, Config } from '../lib/index.js'
 
 const aborted = () => new AbortController().signal
-
-/** Fold rc.1 plan-mode projection over the log: whether plan mode is active. */
-function foldPlanMode(events) {
-  let state = planProjection.init()
-  for (const event of events) state = planProjection.apply(state, event)
-  return planProjection.wire.view(state).active
-}
-
-/** Build a token meter whose context has the session-projections service. */
-function newMeter() {
-  const ctx = new Context()
-  new SessionProjectionRegistry(ctx)
-  return new TokenMeter(ctx)
-}
-
 const tmpRoot = await mkdtemp(join(tmpdir(), 'dsh-rewind-verify-'))
 const wsDir = join(tmpRoot, 'ws')
 const snapRoot = join(tmpRoot, 'snapshots')
+const CAP_BYTES = 1024
 await mkdir(wsDir, { recursive: true })
 
-// A deliberately TINY per-file backup cap so the size-cap checks below cross it
-// with a few KiB instead of 8 MiB. Every other fixture in this file is far
-// smaller, so the cap is transparent to them. It travels through the plugin's
-// own `Config` (there is no env override any more), so it is pinned on the
-// config the store is constructed from.
-const CAP_BYTES = 1024 * 1024
-
-/** Real-filesystem fs double: resolve returns the real display path. */
 class FakeFs extends FileSystem {
   async resolve(path, opts = {}) {
-    // isAbsolute: on Windows absolute paths look like `C:\...` (or `C:/...`),
-    // so a leading-`/` probe would misclassify them as relative.
-    const displayPath = opts?.cwd !== undefined && !isAbsolute(path) ? join(opts.cwd, path) : path
+    const displayPath = opts.cwd !== undefined && !isAbsolute(path) ? join(opts.cwd, path) : path
     return { targetKey: FsTargetKey(displayPath), displayPath }
   }
   processPath(target) { return target.displayPath }
-  processPathFromHostPath(hostPath) { return hostPath }
-  async readText(target) { return readFile(target.displayPath, 'utf8') }
-  async writeText(target, content) { await writeFile(target.displayPath, content, 'utf8'); return { operation: 'update', version: FsVersion('v'), before: null, after: content } }
+  processPathFromHostPath(hostPath) { return isAbsolute(hostPath) ? hostPath : undefined }
   async stat(target) {
-    // Mirror the fs service contract (FsInfo): the plugin's capture guard
-    // depends on `type` (a directory/device is never copied) AND on `size`
-    // (the per-file backup cap). A double that omits `size` would silently
-    // disable the cap — `isOverFileCap(undefined)` answers false on purpose —
-    // and mask exactly the failure the cap exists to prevent.
     try {
       const info = await stat(target.displayPath)
       if (info.isFile()) return { version: FsVersion('v'), type: 'file', size: info.size }
       if (info.isDirectory()) return { version: FsVersion('v'), type: 'directory' }
       return { version: FsVersion('v'), type: 'other' }
-    } catch { return undefined }
+    } catch {
+      return undefined
+    }
   }
 }
 
-const fs = new FakeFs(new Context())
-
-/** Working-directory double the fs doubles resolve through — the same value the plugin reads. */
-let sessionDirectory = wsDir
-const fakeWorkingDirectory = { ensure: async () => sessionDirectory }
-
-// The plugin's own `Config` schema resolves the live cleanup references (the
-// same call the Loader makes), and `tmpRoot` stays unrouted: `snapshotDir` /
-// `dshHome` are pinned by the config below.
-const resolvedConfig = Config({ snapshotDir: snapRoot, dshHome: tmpRoot, maxFileBytes: CAP_BYTES })
-// The fake entry's stored user layer, under the DOCUMENT's field names (what
-// the plugin's writes address): PRESENCE, not value, is what marks an override,
-// exactly like the real document. It starts empty, so every field resolves from
-// the schema defaults.
-const storedPolicy = {}
-// What every write resolves the entry to (the user layer over the defaults),
-// read back as the RESOLVED policy the command reports on.
-const effectivePolicy = {
-  enabled: resolvedConfig.autoCleanupEnabled.get(),
-  maxAgeDays: resolvedConfig.autoCleanupMaxAgeDays.get(),
-}
-
-/** Re-resolve the stored policy into the live references, as the Loader does. */
-function applyFakeWrite() {
-  const next = Config({ snapshotDir: snapRoot, dshHome: tmpRoot, ...storedPolicy })
-  updateVolatile(resolvedConfig.autoCleanupEnabled, createVolatile(next.autoCleanupEnabled.get()))
-  updateVolatile(resolvedConfig.autoCleanupMaxAgeDays, createVolatile(next.autoCleanupMaxAgeDays.get()))
-  effectivePolicy.enabled = resolvedConfig.autoCleanupEnabled.get()
-  effectivePolicy.maxAgeDays = resolvedConfig.autoCleanupMaxAgeDays.get()
-}
-
-/** The entry-write port the plugin's cleanup store addresses. */
+const commands = new Map()
+const agents = new Map()
+const routes = new Map()
 const fakeSettings = {
-  /** Entry ids every write addressed: the profile row id, never the fiber id. */
-  writes: [],
-  /** Descriptors the plugin's language read answers with; empty means English. */
-  localeRows: [],
-  /** Arguments every descriptor read received, in order. */
-  describeCalls: [],
-  /** Page policies registered through `configure()`, with their owner fiber. */
-  presentations: [],
-  configure: (presentation, owner) => { fakeSettings.presentations.push({ presentation, owner }); return () => {} },
-  update: async (entryId, patch) => { fakeSettings.writes.push(entryId); Object.assign(storedPolicy, patch); applyFakeWrite() },
-  mutate: async (entryId, ops) => {
-    fakeSettings.writes.push(entryId)
-    for (const op of ops) if (op.op === 'unset') delete storedPolicy[op.path[0]]
-    applyFakeWrite()
-  },
-  describe: options => { fakeSettings.describeCalls.push(options); return fakeSettings.localeRows },
+  configure() { return () => {} },
+  describe() { return [] },
+  update: async () => {},
+  mutate: async () => {},
 }
-
-const user = text => createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
-const assistant = text => createAssistantMessage({ content: [{ type: 'text', text }], source: { provider: 'test', model: 'test' } })
-
-function buildSession(id, cwd, extra = {}) {
-  const session = Session.create(SessionId(id), undefined,
-    cwd !== undefined
-      ? { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt: Date.now(), cwd, isSeeded: false, ...extra }
-      : undefined)
-  session.append('user/message', user('first question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 0, step: 0, message: assistant('first answer'), stream: [] }, { surfaceOp: 'append' })
-  session.append('user/message', user('second question'), { surfaceOp: 'append' })
-  session.append('assistant/message', { turn: 1, step: 0, message: assistant('second answer'), stream: [] }, { surfaceOp: 'append' })
-  return session
-}
-
-/** Minimal Inbox double: a mutable next-step list with a removing remove(). */
-function makeInbox(initial = []) {
-  const nextStep = [...initial]
-  return {
-    nextStep,
-    remove(messageId) {
-      const index = nextStep.findIndex((message) => message.id === messageId)
-      if (index >= 0) nextStep.splice(index, 1)
-      return index >= 0
-    },
-  }
-}
-
-/** Agents by session id: the query handler resolves the live session through this. */
-const agentRegistry = new Map()
-
-/** Minimal Agent double carrying the fields executeRewind reads today. */
-function makeAgent(id, session, status = 'idle', inbox = makeInbox()) {
-  const agent = {
-    id, session, status, inbox,
-    options: { provider: 'test', model: 'test-model' },
-    // Manual compaction requires an idle agent whose maintenance task runs
-    // with its own signal (ManualCompactAgentContext).
-    runMaintenance: async task => {
-      if (status !== 'idle') throw new Error('agent is not idle')
-      return task(aborted())
-    },
-  }
-  agentRegistry.set(id, agent)
-  return agent
-}
-
-/**
- * A session shaped like a REAL harness session (the agent loop's exact event
- * shape: turn/start → step/start → user → assistant → step/end → turn/end),
- * so the harness token-meter replay accepts it — required to drive the real
- * `/compact` transaction.
- */
-function buildFramedSession(id, turns = 2) {
-  const session = Session.create(SessionId(id))
-  for (let turn = 1; turn <= turns; turn++) {
-    session.append('turn/start', { turn })
-    session.append('step/start', { turn, step: 1 })
-    // Long enough content that a 3-turn retained span out-tokens the
-    // compaction backend's fixed checkpoint preamble — otherwise /compact
-    // legally no-ops ("summary not smaller than the shadowed content").
-    session.append('user/message', user(`framed question ${turn}: the quick brown fox jumps over the lazy dog and keeps running through the deep forest`), { surfaceOp: 'append' })
-    session.append('assistant/message', { turn, step: 1, message: assistant(`framed answer ${turn}: the response covers the requested detail, the follow-up implications, and the remaining open questions for the user to decide on`), stream: [] }, { surfaceOp: 'append' })
-    session.append('step/end', { turn, step: 1 })
-    session.append('turn/end', { turn, reason: { kind: 'completed' } })
-  }
-  return session
-}
-
-/** True when the log holds no unclosed step/start and no unclosed turn/start. */
-function hasNoDanglingFrames(events) {
-  const openSteps = new Map()
-  for (const event of events) {
-    if (event.type === 'step/start') openSteps.set(`${event.data.turn}:${event.data.step}`, true)
-    else if (event.type === 'step/end') openSteps.delete(`${event.data.turn}:${event.data.step}`)
-  }
-  let openTurn = false
-  for (const event of events) {
-    if (event.type === 'turn/start') openTurn = true
-    else if (event.type === 'turn/end') openTurn = false
-  }
-  return openSteps.size === 0 && !openTurn
-}
-
-const session = buildSession('verify-host')
-const agent = makeAgent(session.id, session)
 
 const ctx = new Context()
-// The Loader entry id the plugin reads. A bundled row is mounted under an
-// `include:` scope, so the real id carries that prefix — the configuration key
-// the settings service addresses is the bare profile row id.
 ctx.fiber.entry = { id: 'include:dsh-rewind-plugin' }
-const commands = new Map()
 ctx.provide('commands', {
   register: definition => {
     commands.set(definition.name, definition)
     return () => { commands.delete(definition.name) }
   },
 })
-ctx.provide('fs', fs)
-ctx.provide('workingDirectory', fakeWorkingDirectory)
-ctx.provide('agents', { get: id => agentRegistry.get(id) })
-// The real Connection service with `webServer` on a sibling row, like the
-// shipped Web composition; the exact Fetch registry registers through it.
-const webServerFiber = ctx.plugin(inner => {
-  inner.provide('webServer', {
-    host: '127.0.0.1',
-    protocol: 'http:',
-    register: () => async () => {},
-  })
-})
-await webServerFiber
-const browserAuth = {
-  isAuthenticated: () => true,
-  authenticateApi: () => undefined,
-  authorizeConnect: () => {},
-  authorizeIndex: () => {},
-  authenticatedUrl: url => url,
-}
-let connection
-const connectionFiber = ctx.plugin(inner => {
-  connection = new HostConnectionService(inner, [], browserAuth)
-})
-await connectionFiber
-// The entry-write port the plugin's cleanup store addresses; the policy itself
-// resolves through the config the plugin is mounted with.
+ctx.provide('fs', new FakeFs(new Context()))
+ctx.provide('workingDirectory', { ensure: async () => wsDir })
+ctx.provide('agents', { get: id => agents.get(id) })
 ctx.provide('settings', fakeSettings)
-ctx.provide('sessions', { flush: async () => {} })
-// The real token-meter service, activated so its asynchronous projection
-// registrations settle before the manual `/compact` path, and a real
-// compaction backend whose ONLY hook is a stubbed summarize() — the manual
-// `/compact` command path needs no LLM.
-new SessionProjectionRegistry(ctx)
-await ctx.plugin(TokenMeter)
-class StubCompactionEngine extends BasicCompactionEngine {
-  constructor() { super(ctx, { summarizationProvider: 'test', summarizationModel: 'test-model' }) }
-  async summarize(input, agent, signal) {
-    return { summary: [{ type: 'text', text: 'rewind-compat summary' }], provider: 'test', model: 'test-model' }
+ctx.provide('connection', {
+  fetch: {
+    register: route => {
+      routes.set(route.path, route)
+      return async () => { routes.delete(route.path) }
+    },
+  },
+})
+
+const resolvedConfig = Config({ snapshotDir: snapRoot, dshHome: tmpRoot, maxFileBytes: CAP_BYTES })
+apply(ctx, resolvedConfig)
+// Let the injected fs/workingDirectory scope install its listeners before the
+// first synthesized step, as the loader does by awaiting the mount effect.
+await new Promise(resolve => setTimeout(resolve, 10))
+
+const call = (agent, rawInput) => commands.get('rewind').handler({
+  commandId: CommandId('cid'), agent, rawInput, signal: aborted(),
+})
+
+/** One fake agent around a real session (the fields executeRewind reads). */
+function agentFor(session) {
+  let agent = agents.get(session.id)
+  if (agent === undefined) {
+    agent = {
+      id: session.id,
+      session,
+      status: 'idle',
+      inbox: { nextStep: [], remove: () => true },
+      whenIdle: async () => {},
+      cancel: () => {},
+    }
+    agents.set(session.id, agent)
   }
+  return agent
 }
-new StubCompactionEngine(ctx)
-applyRewind(ctx, resolvedConfig)
-applyCommandCompact(ctx)
 
-const call = (agentOf, rawInput) => commands.get('rewind').handler({ commandId: CommandId('cid'), agent: agentOf, rawInput, signal: aborted() })
+let turn = 0
+/** Drive one admitted step exactly like the agent loop: pre-step, then append. */
+async function runUserStep(session, text) {
+  const message = createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } })
+  const agent = agentFor(session)
+  const decision = await ctx.waterfall('agent/pre-step', {
+    agent,
+    messages: [message],
+    turn: ++turn,
+    step: 1,
+    signal: aborted(),
+    modelSelection: { provider: 'test', model: 'test-model' },
+  }, async () => ({ kind: 'enter', messages: [message] }))
+  if (decision.kind !== 'enter') throw new Error('pre-step rejected the verification message')
+  session.append('user/message', message, { surfaceOp: 'append' })
+  return { message, seq: session.snapshotEvents().at(-1).seq }
+}
 
-/** The shared Fetch handler the real `/api` bridge dispatches through. */
-const api = connection.createSharedFetchHandler('/api')
-const ownerPeer = { principal: { kind: 'owner' } }
+/** Dispatch one write through the real `tools/execute` waterfall. */
+async function runTool(session, path, content) {
+  await ctx.waterfall('tools/execute', {
+    callId: `call-${++turn}-${Date.now()}`,
+    name: 'write',
+    arguments: { file_path: path },
+    agent: agentFor(session),
+    signal: aborted(),
+  }, async () => {
+    await writeFile(path, content)
+    return { isError: false, content: [] }
+  })
+}
 
-/** Send one request the way the browser half does (document-relative POST). */
-const apiRequest = (path, init) => api.fetch(new Request(`http://localhost${path}`, init), ownerPeer)
-
-/** POST one flat query payload and decode its JSON envelope. */
-const apiPost = async (path, payload) => {
-  const response = await apiRequest(path, {
+/** POST one flat route payload and decode its JSON envelope. */
+async function apiPost(path, payload) {
+  const route = routes.get(path)
+  if (route === undefined) throw new Error(`route ${path} is not registered`)
+  const response = await route.fetch(new Request(`http://localhost${path}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
-  })
+  }))
   return { status: response.status, result: await response.json() }
 }
 
-/** The structured impact preview; `error` carries the host reason. */
-const previewOf = async (agentOf, seq) => {
-  const { status, result } = await apiPost('/api/dsh-rewind/preview', { sessionId: agentOf.id, seq })
+const previewOf = async (session, seq) => {
+  const { status, result } = await apiPost('/api/dsh-rewind/preview', { sessionId: session.id, seq })
   if (status !== 200) throw new Error(`preview route returned HTTP ${status}`)
-  return result.ok
-    ? { kind: 'success', value: result.value }
-    : { kind: 'error', text: result.error.message }
+  return result
 }
 
-/** The full candidate list envelope the picker reads. */
-const candidatesOf = async agentOf => apiPost('/api/dsh-rewind/candidates', { sessionId: agentOf.id })
-
-/** Files in a successful preview (empty for an error). */
-const filesOf = preview => preview.kind === 'success' ? preview.value.files : []
-
-/** Whether a successful preview contains a path, optionally filtered by action. */
+const filesOf = preview => preview.ok === true ? preview.value.files : []
 const hasFile = (preview, path, action) => filesOf(preview)
   .some(file => file.path === path && (action === undefined || file.action === action))
-
-/** Paths the cap left uncovered. */
-const uncoveredOf = preview => preview.kind === 'success' ? preview.value.uncovered.map(item => item.path) : []
-
-/**
- * Simulate one tracked tool call: before-capture, dispatch writes the file,
- * post-execute commits. The dispatched write resolves through the same
- * working-directory double the plugin reads, so a relative `filePath` lands on
- * the resolved file (never in the process cwd), keeping the harness free of
- * stray artifacts.
- */
-async function runWrite(agentOf, callId, filePath, content) {
-  const exec = { callId, name: 'write', arguments: { file_path: filePath, content }, agent: agentOf, signal: aborted() }
-  await ctx.waterfall('tools/execute', exec, async () => {
-    const cwd = await fakeWorkingDirectory.ensure()
-    // isAbsolute: Windows-absolute paths (`C:\...`) must not be re-joined.
-    const resolved = !isAbsolute(filePath) ? join(cwd, filePath) : filePath
-    await fs.writeText({ targetKey: FsTargetKey(resolved), displayPath: resolved }, content)
-    return { isError: false, content: [] }
-  })
-  await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-}
 
 let failures = 0
 const check = (name, ok, detail) => {
@@ -375,981 +178,140 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1
 }
 
-/**
- * Read a path for an assertion without aborting the suite when it is gone: the
- * vulnerable paths this suite probes DELETE files, and an uncaught ENOENT would
- * hide every later probe instead of reporting one clean FAIL.
- */
-const readOrMissing = async path => readFile(path, 'utf8').catch(() => '<missing>')
+// 1. commands
+check('rewind registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
+check('undo alias shares the handler', commands.get('undo')?.handler === commands.get('rewind')?.handler, JSON.stringify(commands.get('undo')))
+check('engine channel registered', typeof commands.get('rewind-plugin')?.handler === 'function', JSON.stringify(commands.get('rewind-plugin')))
+check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')?.handler === 'function', JSON.stringify(commands.get('snapshot-auto-cleanup')))
 
-// 1. command registered
-check('command registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
-// `/undo` is a bare alias of `/rewind`: registered and sharing the same handler.
-check('undo alias registered', typeof commands.get('undo')?.handler === 'function' && commands.get('undo').name === 'undo' && commands.get('undo').handler === commands.get('rewind').handler, JSON.stringify(commands.get('undo')))
-// The internal engine channel the client drives, independent of `/rewind`.
-check('engine channel registered', typeof commands.get('rewind-plugin')?.handler === 'function' && typeof commands.get('rewind-plugin').input?.hint === 'string', JSON.stringify(commands.get('rewind-plugin')))
-// A bare engine invocation refuses instead of rewinding.
-const bareEngine = await commands.get('rewind-plugin').handler({ commandId: CommandId('cid'), agent, rawInput: '', signal: aborted() })
-check('engine channel refuses a bare invocation', bareEngine.kind === 'error' && /Internal command/.test(bareEngine.text), bareEngine.text)
-
-// 2. bare /rewind (manual, no parameters) withdraws the most recent user
-//    message (seq 2 "second question") and everything after it
-const bareBefore = [...session.surface.nodes]
-const bareResult = await call(agent, '')
-const bareAfter = [...session.surface.nodes]
-check('bare /rewind succeeds', bareResult.kind === 'success', bareResult.text)
-check('bare /rewind withdraws the latest message', bareAfter.length === 3 && bareAfter[0] === 0 && bareAfter[1] === 1 && bareAfter[2] > 3, `before ${JSON.stringify(bareBefore)} -> after ${JSON.stringify(bareAfter)}`)
-// The marker is a single user/message surface replace (v2): no ghost step
-// frame, so 4 seed events + 1 marker = 5.
-check('log stays append-only (5 events: 4 + user/message marker)', session.snapshotEvents().length === 5, `events=${session.snapshotEvents().length}`)
-// Assert the HOST's real marker shape (the integration tests use a mirror):
-// a `user/message` carrying the producer-owned dsh-rewind source and the
-// constant self-declaring placeholder — the only surface type that can carry
-// the shadowed-seq citations a replace requires.
-const bareMarker = session.snapshotEvents().at(-1)
-check('marker is a user/message with the dsh-rewind producer source and the (empty message) placeholder', bareMarker.type === 'user/message'
-  && Array.isArray(bareMarker.data.content)
-  && bareMarker.data.content.length === 1
-  && bareMarker.data.content[0].type === 'text'
-  && bareMarker.data.content[0].text === '(empty message)'
-  && bareMarker.data.source.kind === 'dsh-rewind', JSON.stringify(bareMarker?.data))
-
-// 3. @<seq> chat (the form the button sends) cuts the surface on a
-//    fresh session
-const paramSession = buildSession('verify-param')
-const paramAgent = makeAgent(paramSession.id, paramSession)
-const before = [...paramSession.surface.nodes]
-const chatResult = await call(paramAgent, '@2 chat')
-const after = [...paramSession.surface.nodes]
-check('rewind chat succeeds', chatResult.kind === 'success', chatResult.text)
-check('surface cut to [0,1,marker] (target withdrawn)', after.length === 3 && after[0] === 0 && after[1] === 1 && after[2] > 3, `before ${JSON.stringify(before)} -> after ${JSON.stringify(after)}`)
-// Same single user/message marker: 4 seed events + 1 = 5.
-check('log stays append-only (5 events: 4 + user/message marker)', paramSession.snapshotEvents().length === 5, `events=${paramSession.snapshotEvents().length}`)
-
-// 4. a tracked write commits a before-backup; rewinding both restores the
-//    real file and deletes files created after the target
+// 2-4. pre-step manifests, first-touch capture, preview and both-mode restore
 {
-  const aPath = join(wsDir, 'a.txt')
-  await writeFile(aPath, 'original content', 'utf8')
-  // The next user message anchors the turn that will edit a.txt. Resolve it
-  // dynamically: the shared session already carries the ghost-step marker
-  // frame from the bare rewind above, so seqs are not contiguous from 4.
-  session.append('user/message', user('third question'), { surfaceOp: 'append' })
-  const anchorSeq = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await runWrite(agent, 'c1', aPath, 'rewritten') // before-capture: 'original content'
-  const createdPath = join(wsDir, 'created.txt')
-  await runWrite(agent, 'c2', createdPath, 'new') // file did not exist: before-capture = created
-  await writeFile(aPath, 'v3', 'utf8') // later edit lands after the backups
+  const session = Session.create(SessionId('verify-main'))
+  const first = await runUserStep(session, 'first')
+  const file = join(wsDir, 'a.txt')
+  await writeFile(file, 'original', 'utf8')
+  await runTool(session, file, 'rewritten')
+  const second = await runUserStep(session, 'second')
+  check('second user message was admitted', session.snapshotEvents().filter(event => event.type === 'user/message').length === 2, 'missing second message')
+  await writeFile(file, 'external', 'utf8')
 
-  const logLengthBeforeReads = session.snapshotEvents().length
-  const preview = await previewOf(agent, anchorSeq)
-  check('preview reports the file impact', preview.kind === 'success' && hasFile(preview, aPath) && filesOf(preview).length === 2, JSON.stringify(preview))
-  check('preview carries the restore/delete actions', hasFile(preview, aPath, 'restore'), JSON.stringify(preview))
-  const candidates = await candidatesOf(agent)
-  check('the candidate route lists reachable user messages',
-    candidates.status === 200 && candidates.result.ok === true
-      && candidates.result.value.candidates.some(candidate => candidate.seq === anchorSeq),
-    JSON.stringify(candidates))
+  const checkpoints = await (await import('node:fs/promises')).readdir(join(snapRoot, session.id, 'checkpoints'))
+  check('one checkpoint per user message', checkpoints.filter(name => name.endsWith('.json')).length === 2, checkpoints.join(','))
+  const preview = await previewOf(session, first.seq)
+  check('preview reports the tracked restore', preview.ok === true && hasFile(preview, file, 'restore'), JSON.stringify(preview))
+  check('preview sees the current over-cap state as uncovered only when over cap',
+    preview.ok === true && preview.value.uncovered.length === 0, JSON.stringify(preview))
+  check('preview is a pure query', session.snapshotEvents().at(-1).seq === second.seq, `last=${session.snapshotEvents().at(-1).seq} second=${second.seq}`)
 
-  // Bad requests use the bridge statuses; business failures keep the envelope.
-  const noSession = await apiPost('/api/dsh-rewind/preview', {})
-  check('a missing sessionId stays in the bad-request envelope',
-    noSession.status === 200 && noSession.result.ok === false
-      && noSession.result.error.code === 'rewind/bad-request'
-      && noSession.result.error.message === 'sessionId must be a non-empty string',
-    JSON.stringify(noSession))
-  const noSeq = await apiPost('/api/dsh-rewind/preview', { sessionId: agent.id })
-  check('a missing seq stays in the bad-request envelope',
-    noSeq.status === 200 && noSeq.result.ok === false
-      && noSeq.result.error.message === 'seq must be an integer',
-    JSON.stringify(noSeq))
-  const wrongType = await apiRequest('/api/dsh-rewind/preview', {
-    method: 'POST',
-    headers: { 'content-type': 'text/plain' },
-    body: '{}',
-  })
-  check('a non-JSON content type answers 415',
-    wrongType.status === 415 && await wrongType.text() === 'content type must be application/json',
-    `HTTP ${wrongType.status}`)
-  const badJson = await apiRequest('/api/dsh-rewind/preview', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{',
-  })
-  check('a non-JSON body answers 400',
-    badJson.status === 400 && await badJson.text() === 'body is not JSON',
-    `HTTP ${badJson.status}`)
-  const nonPost = await apiRequest('/api/dsh-rewind/preview', { method: 'GET' })
-  check('an undeclared method falls through to 404', nonPost.status === 404, `HTTP ${nonPost.status}`)
-  const stranger = await api.fetch(new Request('http://localhost/api/dsh-rewind/preview', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: '{}',
-  }), { principal: { kind: 'user' } })
-  check('a non-owner peer is forbidden', stranger.status === 403, `HTTP ${stranger.status}`)
-
-  // Issue #55: both reads are pure queries.
-  const readEvents = session.snapshotEvents().slice(logLengthBeforeReads)
-  check('the query routes append no session events', readEvents.length === 0, `events=${readEvents.length}`)
-  check('the query routes emit no command events',
-    readEvents.every(event => !event.type.startsWith('command/')),
-    JSON.stringify(readEvents.map(event => event.type)))
-
-  // The both-mode restore must re-sync the harness fs-observation policy:
-  // record every fs/observed emission around the restore, then assert the
-  // deleted file was marked absent and the restored file present-at-version
-  // (owner = this session), so the session's next write of either file is
-  // not judged against the stale pre-restore observation.
-  const observed = []
-  const disposeObs = ctx.on('fs/observed', (target, observation, actor) => {
-    observed.push({
-      path: target.displayPath,
-      kind: observation.kind,
-      version: observation.version,
-      ownerIsSession: actor?.agent?.session === session,
-    })
-  }, { global: true })
-  const both = await call(agent, `@${anchorSeq} both`)
-  disposeObs()
-
-  check('rewind both succeeds', both.kind === 'success' && both.text.includes('restored 1 file(s)') && both.text.includes('deleted 1 file(s)'), both.text)
-  check('modified file restored to pre-edit content', await readFile(aPath, 'utf8') === 'original content', await readFile(aPath, 'utf8'))
-  let createdGone = false
-  try { await readFile(createdPath, 'utf8') } catch { createdGone = true }
-  check('created file deleted', createdGone, `exists=${!createdGone}`)
-  check('restore emits absent observation for the deleted file', observed.some(o => o.path === createdPath && o.kind === 'absent' && o.ownerIsSession), JSON.stringify(observed))
-  check('restore emits present observation for the restored file', observed.some(o => o.path === aPath && o.kind === 'present' && o.version !== undefined && o.ownerIsSession), JSON.stringify(observed))
+  const both = await call(agentFor(session), `@${first.seq} both`)
+  check('both rewind succeeds', both.kind === 'success' && /restored 1 file/.test(both.text), both.text)
+  check('target content restored', await readFile(file, 'utf8') === 'original', await readFile(file, 'utf8'))
 }
 
-// 4b. a non-UTF-8 / binary file round-trips byte-exactly through the real
-//     capture → commit → restore pipeline (the issue #23 regression)
+// 4b. a running turn is cancelled and quiesced before the surface is cut
 {
-  const binPath = join(wsDir, 'binary.bin')
-  // GBK text with an embedded NUL and a raw 0xFF: not decodable as UTF-8.
-  const gbk = Buffer.from([0xd6, 0xd0, 0xce, 0xc4, 0x00, 0xff, 0x89, 0x50, 0x4e, 0x47])
-  await writeFile(binPath, gbk)
-  session.append('user/message', user('binary anchor question'), { surfaceOp: 'append' })
-  const binAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await runWrite(agent, 'bin1', binPath, 'replaced by a tracked edit')
-  await writeFile(binPath, Buffer.from([0x00, 0x01, 0x02])) // later out-of-band change
-
-  const binPreview = await previewOf(agent, binAnchor)
-  check('binary preview reports the file impact', binPreview.kind === 'success' && hasFile(binPreview, binPath), JSON.stringify(binPreview))
-  const binBoth = await call(agent, `@${binAnchor} both`)
-  check('binary rewind both succeeds', binBoth.kind === 'success' && binBoth.text.includes('restored 1 file(s)'), binBoth.text)
-  const restoredBytes = await readFile(binPath)
-  check('non-UTF-8 file restored byte-exactly', Buffer.compare(restoredBytes, gbk) === 0, `got ${restoredBytes.toString('hex')}`)
-
-  // The bytes live in a raw sidecar, not in the entry JSON.
-  const sidecars = []
-  const walk = async dir => {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name)
-      if (entry.isDirectory()) await walk(full)
-      else if (entry.name.endsWith('.before')) sidecars.push(full)
-    }
-  }
-  await walk(join(snapRoot, session.id))
-  check('binary backup is a raw sidecar file', sidecars.length >= 1, `sidecars=${sidecars.length}`)
-
-  // The reporter's own repro (issue #23): 4096 random bytes, touched by a
-  // tracked tool call, then a rewind — the digest must be unchanged.
-  const blobPath = join(wsDir, 'blob.bin')
-  const blob = randomBytes(4096)
-  const digest = b => createHash('sha256').update(b).digest('hex')
-  const blobDigest = digest(blob)
-  await writeFile(blobPath, blob)
-  session.append('user/message', user('blob anchor question'), { surfaceOp: 'append' })
-  const blobAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await runWrite(agent, 'blob1', blobPath, 'agent touched this file')
-  await writeFile(blobPath, randomBytes(4096)) // the file drifts after the edit
-  const blobBoth = await call(agent, `@${blobAnchor} both`)
-  const restoredBlob = await readFile(blobPath)
-  check('issue #23 repro: sha256 is unchanged after a rewind',
-    blobBoth.kind === 'success' && restoredBlob.length === 4096 && digest(restoredBlob) === blobDigest,
-    `sha=${digest(restoredBlob).slice(0, 16)} expected=${blobDigest.slice(0, 16)}`)
-}
-
-// 4c. snapshots written by a NEWER build fail the FILE restore closed: the
-//     conversation rewind still succeeds, the workspace is untouched, and the
-//     user sees why (ADR-10).
-{
-  const futurePath = join(wsDir, 'future.bin')
-  await writeFile(futurePath, Buffer.from('original'), 'utf8')
-  session.append('user/message', user('future anchor question'), { surfaceOp: 'append' })
-  const futureAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await runWrite(agent, 'future1', futurePath, 'edited by the tracked call')
-  await writeFile(futurePath, 'changed again', 'utf8')
-
-  const sessionDir = join(snapRoot, session.id)
-  const markerFile = join(sessionDir, 'store')
-  const previousMarker = await readFile(markerFile, 'utf8').catch(() => undefined)
-  await writeFile(markerFile, '3', 'utf8')
-  try {
-    // Preview first: the rewind below withdraws the target from the surface,
-    // so it can no longer be previewed afterwards.
-    const preview = await previewOf(agent, futureAnchor)
-    check('newer store preview reports the refusal instead of "no changes"', preview.kind === 'error' && /newer store format/.test(preview.text), preview.text)
-    const result = await call(agent, `@${futureAnchor} both`)
-    check('newer store fails the file restore closed, rewind still succeeds', result.kind === 'success' && /newer store format/.test(result.text), result.text)
-    check('newer store leaves the workspace untouched', await readFile(futurePath, 'utf8') === 'changed again', await readFile(futurePath, 'utf8'))
-  } finally {
-    if (previousMarker === undefined) await rm(markerFile, { force: true })
-    else await writeFile(markerFile, previousMarker, 'utf8')
-  }
-}
-
-// 4d. the recorded permission bits travel with the restored bytes
-{
-  const modePath = join(wsDir, 'mode.txt')
-  await writeFile(modePath, 'mode-original', 'utf8')
-  await chmod(modePath, 0o640)
-  if (((await stat(modePath)).mode & 0o7777) === 0o640) {
-    session.append('user/message', user('mode anchor question'), { surfaceOp: 'append' })
-    const modeAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-    await runWrite(agent, 'mode1', modePath, 'mode-edited')
-    await chmod(modePath, 0o600)
-    const result = await call(agent, `@${modeAnchor} both`)
-    const restoredMode = (await stat(modePath)).mode & 0o7777
-    check('mode rewind both succeeds', result.kind === 'success', result.text)
-    check('content restored with the recorded mode', (await readFile(modePath, 'utf8')) === 'mode-original' && restoredMode === 0o640, `mode=${restoredMode.toString(8)}`)
-  } else {
-    console.log('skip permission-bit check (chmod unsupported on this filesystem)')
-  }
-}
-
-// 4f. the per-file size cap (issue #39): an over-cap write is captured by
-//     NOTHING, which must cost coverage and never data. Also the one place the
-//     destructive failure mode could hide — a skipped capture must not become a
-//     "was created" record, which a rewind would turn into a DELETE.
-{
-  const bigPath = join(wsDir, 'over-cap.bin')
-  // The file exists FIRST, then an edit touches it: that is the reported
-  // scenario (a large file already on disk being modified), and it keeps the
-  // capture's "before" state unambiguous regardless of tool-callback ordering.
-  await writeFile(bigPath, 'Z'.repeat(CAP_BYTES * 2), 'utf8')
-  session.append('user/message', user('size cap anchor question'), { surfaceOp: 'append' })
-  const capAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await runWrite(agent, 'cap1', bigPath, 'Z'.repeat(CAP_BYTES * 3))
-
-  const anchorDir = join(snapRoot, session.id, String(capAnchor))
-  const entryCount = (await readdir(anchorDir).catch(() => [])).filter(name => name.endsWith('.json')).length
-  check('over-cap edit records no checkpoint entry', entryCount === 0, `entries=${entryCount}`)
-  // The whole point of the cap is to NOT read the file: a refusal that still
-  // staged a copy would have spent the IO this exists to save.
-  const staged = (await readdir(join(snapRoot, session.id, '.pending')).catch(() => [])).length
-  check('over-cap edit stages no byte copy', staged === 0, `staged=${staged}`)
-  check('over-cap edit still lands on disk', (await readFile(bigPath, 'utf8')).length === CAP_BYTES * 3, String((await readFile(bigPath, 'utf8')).length))
-
-  // A file first seen already over the cap was never recorded, so it has no
-  // history to report: `uncoveredPaths` derives from the RECORD, and this path
-  // is not in it. It must simply never be touched by a rewind.
-  const capPreview = await previewOf(agent, capAnchor)
-  check('preview does not list a never-recorded over-cap file', capPreview.kind === 'success' && !hasFile(capPreview, bigPath), JSON.stringify(capPreview))
-
-  const capResult = await call(agent, `@${capAnchor} both`)
-  check('rewind leaves the never-recorded over-cap file untouched', capResult.kind === 'success' && (await readFile(bigPath, 'utf8')).length === CAP_BYTES * 3, capResult.text)
-
-  // Now the OTHER direction: a path that WAS recorded while small, then grew
-  // past the cap. Its record cannot describe the current state, so a rewind
-  // must refuse it AND name it in the preview (derived from the record + one
-  // stat, so this report survives a restart).
-  const grewPath = join(wsDir, 'grew-over-cap.bin')
-  session.append('user/message', user('grew anchor question'), { surfaceOp: 'append' })
-  const grewAnchor = session.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await runWrite(agent, 'grew1', grewPath, 'small content')
-  await writeFile(grewPath, 'W'.repeat(CAP_BYTES * 2), 'utf8')
-
-  const grewPreview = await previewOf(agent, grewAnchor)
-  check('preview names a recorded path that grew past the cap', grewPreview.kind === 'success' && uncoveredOf(grewPreview).includes(grewPath), JSON.stringify(grewPreview))
-
-  const grewResult = await call(agent, `@${grewAnchor} both`)
-  check('rewind refuses the grown file and names the reason', grewResult.kind === 'success' && (await readFile(grewPath, 'utf8')).length === CAP_BYTES * 2 && /not restored/.test(grewResult.text), grewResult.text)
-}
-
-// 4e. agent creation must not clear snapshots written by a NEWER build: the
-//     store-version guard runs BEFORE the session-format reconcile (whose
-//     whole-directory clear would delete snapshots this build cannot read).
-{
-  const futureSession = buildSession('verify-future-store')
-  const futureAgent = makeAgent(futureSession.id, futureSession)
-  const dir = join(snapRoot, futureSession.id)
-  await mkdir(join(dir, '5'), { recursive: true })
-  await writeFile(join(dir, '5', 'entry.json'), JSON.stringify({ callId: 'c', anchorSeq: 5, path: join(wsDir, 'x.txt'), before: 'x', time: 1 }), 'utf8')
-  await writeFile(join(dir, 'store'), '3', 'utf8')
-  // A session-format marker that does NOT match the loaded session: on the
-  // wrong order this alone triggers the whole-directory clear.
-  await writeFile(join(dir, 'format'), '0', 'utf8')
-
-  // The handler is fire-and-forget, so poll for a POSITIVE signal that it ran
-  // (the guard's warning) instead of sleeping: otherwise a slow machine could
-  // leave the negative assertions below passing vacuously.
-  const warnings = []
-  const originalWarn = ctx.logger.warn
-  ctx.logger.warn = (...args) => {
-    warnings.push(String(args[0] ?? ''))
-    return originalWarn.apply(ctx.logger, args)
-  }
-  try {
-    await ctx.serial('agent/created', { agent: futureAgent })
-    const deadline = Date.now() + 2000
-    while (Date.now() < deadline && !warnings.some(text => text.includes('file restore disabled'))) {
-      await new Promise(resolve => setTimeout(resolve, 25))
-    }
-  } finally {
-    ctx.logger.warn = originalWarn
-  }
-  check('agent creation reports the unsupported store', warnings.some(text => text.includes('file restore disabled')), `warnings=${warnings.join(' | ')}`)
-
-  const members = await readdir(dir).catch(() => [])
-  check('agent creation does not clear a newer store', members.includes('5') && members.includes('store'), `members=${members.join(',')}`)
-  check('agent creation does not rewrite the format marker of a newer store', await readFile(join(dir, 'format'), 'utf8').catch(() => '') === '0', 'format marker changed')
-  check('agent creation leaves the newer store marker at its version', await readFile(join(dir, 'store'), 'utf8').catch(() => '') === '3', 'store marker changed')
-}
-
-// 4f. a non-regular target is never captured: no staged copy, no entry, no
-//     hang (the directory/FIFO/device guard in the capture path).
-{
-  const guardSession = buildSession('verify-guard')
-  const guardAgent = makeAgent(guardSession.id, guardSession)
-  guardSession.append('user/message', user('guard anchor question'), { surfaceOp: 'append' })
-  const exec = { callId: 'guard1', name: 'write', arguments: { file_path: wsDir }, agent: guardAgent, signal: aborted() }
-  await ctx.waterfall('tools/execute', exec, async () => ({ isError: true, content: [] }))
-  await ctx.waterfall('tools/post-execute', exec, { isError: true, content: [] }, async () => ({ kind: 'accept' }))
-
-  const guardDir = join(snapRoot, guardSession.id)
-  const members = await readdir(guardDir).catch(() => [])
-  // A staged `.pending/` directory here would mean the capture tried to copy
-  // the directory instead of refusing it up front.
-  check('non-regular target is never captured', members.length === 0, `members=${members.join(',')}`)
-}
-
-// 4g. a file the SERVICE reports must never be recorded as a creation: on a
-//     backend whose display path is not a readable host path (a remote or
-//     sandboxed fs, ADR-11) a failed local copy must abandon the capture, not
-//     record "was created" — that entry would DELETE the path on a rewind.
-{
-  const remoteSession = buildSession('verify-remote')
-  const remoteAgent = makeAgent(remoteSession.id, remoteSession)
-  remoteSession.append('user/message', user('remote anchor question'), { surfaceOp: 'append' })
-  const remoteAnchor = remoteSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const remotePath = join(wsDir, 'remote-only.txt') // does NOT exist on this host
-
-  // The fs double claims a regular file at a path the host cannot read: the
-  // service answer and the local disk disagree, exactly like a remote backend.
-  const originalStat = fs.stat
-  fs.stat = async () => ({ version: FsVersion('v'), type: 'file' })
-  try {
-    const exec = { callId: 'remote1', name: 'write', arguments: { file_path: remotePath, content: 'written' }, agent: remoteAgent, signal: aborted() }
-    await ctx.waterfall('tools/execute', exec, async () => {
-      await writeFile(remotePath, 'written', 'utf8') // the tool call does land
-      return { isError: false, content: [] }
-    })
-    await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  } finally {
-    fs.stat = originalStat
-  }
-
-  const remotePreview = await previewOf(remoteAgent, remoteAnchor)
-  check('a service-present file the host cannot read is not recorded as a creation',
-    remotePreview.kind === 'success' && !hasFile(remotePreview, remotePath, 'delete') && filesOf(remotePreview).length === 0,
-    JSON.stringify(remotePreview))
-  await rm(remotePath, { force: true })
-}
-
-// 4h. `edit` is tracked as well, so the contract is pinned for every tool the
-//     plugin actually follows (`write`, `edit`). `str_replace_editor` is NOT
-//     tracked by design: it stopped being a default DSH tool in 0.1.3.
-{
-  const editSession = buildSession('verify-edit')
-  const editAgent = makeAgent(editSession.id, editSession)
-  editSession.append('user/message', user('edit anchor question'), { surfaceOp: 'append' })
-  const editAnchor = editSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const editPath = join(wsDir, 'edit.txt')
-  await writeFile(editPath, 'edit-before', 'utf8')
-
-  const edit = { callId: 'edit1', name: 'edit', arguments: { file_path: editPath, old_string: 'before', new_string: 'after' }, agent: editAgent, signal: aborted() }
-  await ctx.waterfall('tools/execute', edit, async () => {
-    await writeFile(editPath, 'edit-after', 'utf8')
-    return { isError: false, content: [] }
-  })
-  await ctx.waterfall('tools/post-execute', edit, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  await writeFile(editPath, 'edit-later', 'utf8')
-
-  const editPreview = await previewOf(editAgent, editAnchor)
-  check('edit mutations are captured', editPreview.kind === 'success' && hasFile(editPreview, editPath), JSON.stringify(editPreview))
-  const editBoth = await call(editAgent, `@${editAnchor} both`)
-  check('edit is restored', editBoth.kind === 'success' && (await readFile(editPath, 'utf8')) === 'edit-before', `content=${await readFile(editPath, 'utf8')}`)
-}
-
-// 4i. the file-checkpointing switch: off records nothing and says so; a record
-//     made while it was on still restores after it is turned off; the
-//     message-boundary re-check is gated too.
-{
-  const offSession = buildSession('verify-checkpointing-off')
-  const offAgent = makeAgent(offSession.id, offSession)
-  offSession.append('user/message', user('off anchor question'), { surfaceOp: 'append' })
-  const offAnchor = offSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  check('checkpointing is on by default', resolvedConfig.fileCheckpointingEnabled.get() === true, String(resolvedConfig.fileCheckpointingEnabled.get()))
-  updateVolatile(resolvedConfig.fileCheckpointingEnabled, createVolatile(false))
-  try {
-    await runWrite(offAgent, 'off1', join(wsDir, 'checkpointing-off.txt'), 'off-write')
-    const offDir = join(snapRoot, offSession.id)
-    const offMembers = await readdir(offDir).then(() => 'present', () => 'missing')
-    check('checkpointing off records nothing', offMembers === 'missing', offMembers)
-    const offPreview = await previewOf(offAgent, offAnchor)
-    check('preview reports checkpointing off', offPreview.kind === 'success' && offPreview.value.backupOff === true, JSON.stringify(offPreview))
-    const offBoth = await call(offAgent, `@${offAnchor} both`)
-    check('both reports the incomplete restore', offBoth.kind === 'success' && /snapshot backups are off/i.test(offBoth.text), offBoth.text)
-  } finally {
-    updateVolatile(resolvedConfig.fileCheckpointingEnabled, createVolatile(true))
-  }
-
-  const keepSession = buildSession('verify-checkpointing-keep')
-  const keepAgent = makeAgent(keepSession.id, keepSession)
-  keepSession.append('user/message', user('keep anchor question'), { surfaceOp: 'append' })
-  const keepAnchor = keepSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const keepPath = join(wsDir, 'checkpointing-keep.txt')
-  await writeFile(keepPath, 'keep-before', 'utf8')
-  await runWrite(keepAgent, 'keep1', keepPath, 'keep-on-write')
-  updateVolatile(resolvedConfig.fileCheckpointingEnabled, createVolatile(false))
-  try {
-    await writeFile(keepPath, 'keep-off-write', 'utf8')
-    const keepPreview = await previewOf(keepAgent, keepAnchor)
-    check('old checkpoint is still previewed while off', keepPreview.kind === 'success' && hasFile(keepPreview, keepPath, 'restore') && keepPreview.value.backupOff === true, JSON.stringify(keepPreview))
-    const keepBoth = await call(keepAgent, `@${keepAnchor} both`)
-    check('old checkpoint still restores while off', keepBoth.kind === 'success' && (await readFile(keepPath, 'utf8')) === 'keep-before', `content=${await readFile(keepPath, 'utf8')}`)
-  } finally {
-    updateVolatile(resolvedConfig.fileCheckpointingEnabled, createVolatile(true))
-  }
-
-  const boundarySession = buildSession('verify-checkpointing-boundary')
-  const boundaryAgent = makeAgent(boundarySession.id, boundarySession)
-  boundarySession.append('user/message', user('boundary anchor question'), { surfaceOp: 'append' })
-  const boundaryPath = join(wsDir, 'checkpointing-boundary.txt')
-  await writeFile(boundaryPath, 'boundary-before', 'utf8')
-  await runWrite(boundaryAgent, 'boundary1', boundaryPath, 'boundary-on-write')
-
-  // Off: an external change before the next message must not be re-checked.
-  updateVolatile(resolvedConfig.fileCheckpointingEnabled, createVolatile(false))
-  await writeFile(boundaryPath, 'boundary-off-write', 'utf8')
-  boundarySession.append('user/message', user('boundary off question'), { surfaceOp: 'append' })
-  const boundaryOffAnchor = boundarySession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  // A standalone Session has no agent loop to dispatch `session/event`; fire the
-  // same event the loop would, so this probes the plugin's listener.
-  await ctx.serial('session/event', boundarySession, { type: 'user/message', seq: boundaryOffAnchor })
-  await new Promise(resolve => setTimeout(resolve, 20))
-  const boundaryDir = join(snapRoot, boundarySession.id)
-  const offMembers = await readdir(boundaryDir).catch(() => [])
-  check('checkpointing off skips the message-boundary re-check', !offMembers.includes(String(boundaryOffAnchor)), `members=${offMembers.join(',')}`)
-
-  // On again: the next message re-checks the changed file and records it.
-  updateVolatile(resolvedConfig.fileCheckpointingEnabled, createVolatile(true))
-  boundarySession.append('user/message', user('boundary on question'), { surfaceOp: 'append' })
-  const boundaryOnAnchor = boundarySession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  await ctx.serial('session/event', boundarySession, { type: 'user/message', seq: boundaryOnAnchor })
-  const resumed = await (async () => {
-    const deadline = Date.now() + 2000
-    while (Date.now() < deadline) {
-      const members = await readdir(boundaryDir).catch(() => [])
-      if (members.includes(String(boundaryOnAnchor))) return true
-      await new Promise(resolve => setTimeout(resolve, 20))
-    }
-    return false
-  })()
-  check('re-enabling resumes the message-boundary re-check', resumed, `dir=${boundaryDir}`)
-}
-
-// 4j. a tracked file whose ancestor directory was replaced by a symlink is
-//     refused: only the path's FINAL component is checked, so without the
-//     checkpoint-time parent pin a restore would write — and a creation delete
-//     would UNLINK — through the link, outside the recorded location.
-{
-  const pinSession = buildSession('verify-pin')
-  const pinAgent = makeAgent(pinSession.id, pinSession)
-  pinSession.append('user/message', user('pin anchor question'), { surfaceOp: 'append' })
-  const pinAnchor = pinSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const dir = join(wsDir, 'pinned')
-  const live = join(dir, 'f.txt')
-  await mkdir(dir, { recursive: true })
-  await writeFile(live, 'pin-before', 'utf8')
-  await runWrite(pinAgent, 'pin1', live, 'pin-edited')
-  // A second record under the same directory whose content DID NOT exist: the
-  // restore wants to unlink that path.
-  const created = join(dir, 'created.txt')
-  await runWrite(pinAgent, 'pin2', created, 'pin-created')
-
-  // Repoint the whole directory: move the real one aside, symlink a decoy in.
-  const moved = join(wsDir, 'pinned-real')
-  const outside = join(tmpRoot, 'pin-outside')
-  await rename(dir, moved)
-  await mkdir(outside, { recursive: true })
-  await writeFile(join(outside, 'f.txt'), 'pin-decoy', 'utf8')
-  await writeFile(join(outside, 'created.txt'), 'pin-decoy-created', 'utf8')
-  await symlink(outside, dir, 'dir')
-
-  const preview = await previewOf(pinAgent, pinAnchor)
-  const both = await call(pinAgent, `@${pinAnchor} both`)
-  const outsideDecoy = await readOrMissing(join(outside, 'f.txt'))
-  const movedOriginal = await readOrMissing(join(moved, 'f.txt'))
-  check('a repointed ancestor refuses the restore (no write outside the checkpoint)',
-    outsideDecoy === 'pin-decoy' && movedOriginal === 'pin-edited',
-    `outside=${outsideDecoy} moved=${movedOriginal}`)
-  const outsideCreated = await readOrMissing(join(outside, 'created.txt'))
-  check('a repointed ancestor refuses the creation delete (no unlink outside the checkpoint)',
-    outsideCreated === 'pin-decoy-created',
-    `outside=${outsideCreated}`)
-  check('a repointed ancestor is reported, not silently restored',
-    preview.kind === 'success' && filesOf(preview).length === 0 && both.kind === 'success' && /skip|fail/.test(both.text),
-    `${JSON.stringify(preview)} | ${both.text}`)
-}
-
-// 4k. the pin must never cause a false skip for a STABLE symlinked ancestor (a
-//     symlinked workspace or temp root): the pin and the check are both
-//     realpaths, so they resolve identically.
-{
-  const linkSession = buildSession('verify-pin-stable')
-  const linkAgent = makeAgent(linkSession.id, linkSession)
-  linkSession.append('user/message', user('stable link anchor question'), { surfaceOp: 'append' })
-  const linkAnchor = linkSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const realDir = join(wsDir, 'linked-real')
-  await mkdir(realDir, { recursive: true })
-  const linkDir = join(wsDir, 'linked')
-  await symlink(realDir, linkDir, 'dir')
-  const viaLink = join(linkDir, 'f.txt')
-  await writeFile(viaLink, 'link-before', 'utf8')
-  await runWrite(linkAgent, 'link1', viaLink, 'link-edited')
-
-  const both = await call(linkAgent, `@${linkAnchor} both`)
-  const restored = await readOrMissing(join(realDir, 'f.txt'))
-  check('a stable symlinked ancestor still restores',
-    both.kind === 'success' && restored === 'link-before',
-    `${both.text} content=${restored}`)
-}
-
-// 4l. a service stat ERROR is not "the file does not exist": an abort, a
-//     permission/IO failure or a remote backend must abandon the capture, never
-//     record a creation — a creation record makes a later `both` rewind DELETE a
-//     file that exists (and that this plugin never backed up).
-{
-  const errSession = buildSession('verify-stat-error')
-  const errAgent = makeAgent(errSession.id, errSession)
-  errSession.append('user/message', user('stat error anchor question'), { surfaceOp: 'append' })
-  const errAnchor = errSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const errPath = join(wsDir, 'stat-error.txt')
-  await writeFile(errPath, 'orig', 'utf8')
-
-  const originalStat = fs.stat
-  fs.stat = async () => { throw Object.assign(new Error('simulated stat failure'), { code: 'FS_IO_ERROR' }) }
-  try {
-    const exec = { callId: 'staterr1', name: 'write', arguments: { file_path: errPath, content: 'edited' }, agent: errAgent, signal: aborted() }
-    await ctx.waterfall('tools/execute', exec, async () => {
-      await writeFile(errPath, 'edited', 'utf8') // the tool call does land
-      return { isError: false, content: [] }
-    })
-    await ctx.waterfall('tools/post-execute', exec, { isError: false, content: [] }, async () => ({ kind: 'accept' }))
-  } finally {
-    fs.stat = originalStat
-  }
-
-  const members = await readdir(join(snapRoot, errSession.id)).catch(() => [])
-  check('a service stat ERROR is never recorded as a creation',
-    members.filter(name => /^\d+$/.test(name)).length === 0,
-    `members=${members.join(',')}`)
-  const errBoth = await call(errAgent, `@${errAnchor} both`)
-  const afterBoth = await readOrMissing(errPath)
-  check('a service stat ERROR cannot make a rewind delete the file',
-    errBoth.kind === 'success' && afterBoth === 'edited',
-    `${errBoth.text} content=${afterBoth}`)
-}
-
-// 5. a denied call never commits (no phantom entry)
-{
-  // Own session so the anchor stays stable (the shared session's seqs drift
-  // with each rewind's ghost-step frame).
-  const deniedSession = buildSession('verify-denied')
-  const deniedAgent = makeAgent(deniedSession.id, deniedSession)
-  deniedSession.append('user/message', user('denied anchor question'), { surfaceOp: 'append' })
-  const anchorSeq = deniedSession.snapshotEvents().findLast(event => event.type === 'user/message').seq
-  const deniedPath = join(wsDir, 'denied.txt')
-  await writeFile(deniedPath, 'x', 'utf8')
-  const exec = { callId: 'c3', name: 'write', arguments: { file_path: deniedPath, content: 'denied write' }, agent: deniedAgent, signal: aborted() }
-  await ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'deny', reason: 'no' }))
-  await ctx.waterfall('tools/post-execute', exec, { isError: true, error: { message: 'denied', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
-  const preview = await previewOf(deniedAgent, anchorSeq)
-  check('denied call is not in the impact list', preview.kind === 'success' && !hasFile(preview, deniedPath), JSON.stringify(preview))
-
-  // A capture that DID stage bytes but whose tool call then failed must release
-  // the staged copy: no entry, no `.pending/` leak (discardCapture).
-  const failedPath = join(wsDir, 'failed-capture.txt')
-  await writeFile(failedPath, 'staged-orig', 'utf8')
-  const failedExec = { callId: 'c4', name: 'write', arguments: { file_path: failedPath, content: 'never lands' }, agent: deniedAgent, signal: aborted() }
-  await ctx.waterfall('tools/execute', failedExec, async () => ({ isError: true, content: [] }))
-  await ctx.waterfall('tools/post-execute', failedExec, { isError: true, error: { message: 'boom', info: { name: 'x', code: 'y' } }, content: [] }, async () => ({ kind: 'accept' }))
-  const pendingNames = await readdir(join(snapRoot, deniedSession.id, '.pending')).catch(() => [])
-  const anchorDirs = (await readdir(join(snapRoot, deniedSession.id)).catch(() => [])).filter(name => /^\d+$/.test(name))
-  check('an abandoned capture releases its staged bytes (no entry, no pending leak)',
-    pendingNames.length === 0 && anchorDirs.length === 0,
-    `pending=${pendingNames.join(',')} anchors=${anchorDirs.join(',')}`)
-}
-
-// 6. relative paths resolve against the session cwd
-{
-  const cwdSession = buildSession('verify-cwd', wsDir)
-  const cwdAgent = makeAgent(cwdSession.id, cwdSession)
-  const relPath = join(wsDir, 'rel.txt')
-  await writeFile(relPath, 'relative original', 'utf8')
-  cwdSession.append('user/message', user('relative question'), { surfaceOp: 'append' })
-  await runWrite(cwdAgent, 'c4', 'rel.txt', 'relative new') // relative path
-
-  const preview = await previewOf(cwdAgent, 4)
-  check('relative path resolved via session cwd', preview.kind === 'success' && hasFile(preview, relPath), JSON.stringify(preview))
-  const both = await call(cwdAgent, '@4 both')
-  check('both restores cwd-resolved file', both.kind === 'success' && await readFile(relPath, 'utf8') === 'relative original', both.text)
-
-  // The base follows the working-directory service, not the immutable header:
-  // after a `cd`, a relative write must be backed up under the NEW directory.
-  const movedDir = join(wsDir, 'moved')
-  await mkdir(movedDir, { recursive: true })
-  const movedPath = join(movedDir, 'moved.txt')
-  await writeFile(movedPath, 'moved original', 'utf8')
-  sessionDirectory = movedDir
-  const afterCd = cwdSession.append('user/message', user('after a cd'), { surfaceOp: 'append' })
-  await runWrite(cwdAgent, 'c5', 'moved.txt', 'moved new') // relative, after the cd
-
-  const movedPreview = await previewOf(cwdAgent, afterCd.seq)
-  check('relative path resolved via the working-directory service',
-    movedPreview.kind === 'success' && hasFile(movedPreview, movedPath), JSON.stringify(movedPreview))
-  const movedBoth = await call(cwdAgent, `@${afterCd.seq} both`)
-  check('both restores the file under the changed directory',
-    movedBoth.kind === 'success' && await readFile(movedPath, 'utf8') === 'moved original', movedBoth.text)
-  sessionDirectory = wsDir
-}
-
-// 7. preview on a message with no recorded changes reports none
-{
-  const cleanSession = buildSession('verify-norec')
-  const cleanAgent = makeAgent(cleanSession.id, cleanSession)
-  const previewResult = await previewOf(cleanAgent, 2)
-  check('preview with no entries reports no changes', previewResult.kind === 'success' && filesOf(previewResult).length === 0, JSON.stringify(previewResult))
-}
-
-// 8. a running agent is force-stopped before the rewind (not refused)
-{
-  const runningSession = buildSession('verify-running')
-  let cancelled = false
-  // `whenIdle` resolves once cancel flips status back to idle (the real
-  // harness loop's activity promise settles the same way).
+  const session = Session.create(SessionId('verify-running'))
+  const first = await runUserStep(session, 'first')
   const running = {
-    ...makeAgent(runningSession.id, runningSession, 'running'),
-    cancel: () => { cancelled = true; running.status = 'idle' },
-    whenIdle: () => new Promise(resolve => {
-      const poll = () => { if (running.status === 'idle') resolve(); else setTimeout(poll, 10) }
-      poll()
-    }),
+    id: session.id,
+    session,
+    status: 'running',
+    inbox: { nextStep: [], remove: () => true },
+    cancel() { this.status = 'idle' },
+    whenIdle: async () => {},
   }
-  const runningResult = await call(running, '@2 chat')
-  check('running agent is cancelled first', cancelled === true, `cancelled=${cancelled}`)
-  check('rewind succeeds after stop', runningResult.kind === 'success', runningResult.text)
+  agents.set(session.id, running)
+  const result = await call(running, `@${first.seq} chat`)
+  check('running agent is cancelled before rewind', result.kind === 'success' && session.snapshotEvents().at(-1).data.source.kind === 'dsh-rewind', result.text)
 }
 
-// 8b. an IDLE agent with pending steering messages: the rewind drops them
-//     (they belong to the future being cut) while queued (next-turn) messages
-//     are left untouched — the harness QueueDock owns those.
+// 5. a file created after the target is deleted
 {
-  const pendSession = buildSession('verify-pending')
-  const pendInbox = makeInbox([{ id: 'steer-1' }, { id: 'steer-2' }])
-  const pendAgent = makeAgent(pendSession.id, pendSession, 'idle', pendInbox)
-  const pendResult = await call(pendAgent, '@2 chat')
-  check('rewind with pending steering succeeds', pendResult.kind === 'success', pendResult.text)
-  check('pending steering dropped by rewind', pendInbox.nextStep.length === 0, `nextStep=${JSON.stringify(pendInbox.nextStep)}`)
+  const session = Session.create(SessionId('verify-create'))
+  const first = await runUserStep(session, 'first')
+  const file = join(wsDir, 'created.txt')
+  await runTool(session, file, 'new')
+  const both = await call(agentFor(session), `@${first.seq} both`)
+  check('created file deleted', both.kind === 'success' && /deleted 1 file/.test(both.text), both.text)
+  let gone = false
+  try { await readFile(file) } catch { gone = true }
+  check('created file is absent after rewind', gone, 'file still exists')
 }
 
-// 9. a cancel that never quiesces aborts the rewind (timeout path)
+// 6. a target without a checkpoint: conversation only, reported explicitly
 {
-  const stuckSession = buildSession('verify-stuck')
-  // `whenIdle` never settles and cancel does nothing: the rewind must give up
-  // at the idle-wait deadline instead of appending mid-turn.
-  const stuck = {
-    ...makeAgent(stuckSession.id, stuckSession, 'running'),
-    cancel: () => {},
-    whenIdle: () => new Promise(() => {}),
-  }
-  const stuckResult = await call(stuck, '@2 chat')
-  check('stuck agent aborts rewind', stuckResult.kind === 'error', stuckResult.text)
+  const session = Session.create(SessionId('verify-no-checkpoint'))
+  const message = createUserMessage({ content: [{ type: 'text', text: 'old' }], source: { kind: 'user' } })
+  session.append('user/message', message, { surfaceOp: 'append' })
+  const seq = session.snapshotEvents().at(-1).seq
+  const both = await call(agentFor(session), `@${seq} both`)
+  check('no-checkpoint rewind succeeds', both.kind === 'success' && /no file checkpoint/.test(both.text), both.text)
+  check('no-checkpoint result uses one clause separator', /; no file checkpoint exists for the target message/.test(both.text) && !/;;/.test(both.text), both.text)
+  check('no-checkpoint rewind appends the marker', session.snapshotEvents().at(-1).data.source.kind === 'dsh-rewind', JSON.stringify(session.snapshotEvents().at(-1).data))
 }
 
-// 10. subagent edits are NOT tracked (Claude Code alignment): the backup
-//     would land under the subagent session id where a parent-session rewind
-//     could never restore it, so the capture is skipped entirely.
+// 7. a newer store fails the file operation closed
 {
-  const subSession = buildSession('verify-sub', wsDir, { origin: 'subagent', delegationDepth: 1 })
-  const subAgent = makeAgent(subSession.id, subSession)
-  const subFile = join(wsDir, 'sub.txt')
-  await writeFile(subFile, 'sub original', 'utf8')
-  subSession.append('user/message', user('sub question'), { surfaceOp: 'append' })
-  await runWrite(subAgent, 'c5', subFile, 'sub new')
-  // The main session's own rewinds consumed seq 2/4/5; seq 0 (the first user
-  // message) is still on its surface and covers every backup anchored at or
-  // after it.
-  const preview = await previewOf(agent, 0)
-  check('subagent edit is not tracked', preview.kind === 'success' && !hasFile(preview, subFile), JSON.stringify(preview))
-  // And the snapshot root holds no subagent session directory.
-  const subSessionDir = join(snapRoot, subSession.id)
-  let subDirExists = false
-  try { await readdir(subSessionDir); subDirExists = true } catch { subDirExists = false }
-  check('no snapshot dir for the subagent session', !subDirExists, subSessionDir)
+  const session = Session.create(SessionId('verify-newer-store'))
+  const dir = join(snapRoot, session.id)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'meta.json'), JSON.stringify({ store: 9, sessionFormat: 4 }), 'utf8')
+  const first = await runUserStep(session, 'first')
+  const file = join(wsDir, 'newer.txt')
+  await writeFile(file, 'keep', 'utf8')
+  const preview = await previewOf(session, first.seq)
+  check('newer store preview fails closed', preview.ok === false && /newer store format|file restore unavailable/.test(preview.error.message), JSON.stringify(preview))
+  const both = await call(agentFor(session), `@${first.seq} both`)
+  check('newer store keeps the conversation rewind', both.kind === 'success' && /file restore unavailable/.test(both.text), both.text)
+  check('newer store leaves the file alone', await readFile(file, 'utf8') === 'keep', await readFile(file, 'utf8'))
 }
 
-// 12. I5/I1 probe — the REAL /compact command lands on top of a rewind marker
-//     and the log stays replayable (token-meter + resume preflight). Six
-//     turns keep the surface large enough that the real transaction fires
-//     (the compaction backend refuses to shrink a surface whose framed
-//     summary would not be smaller than the shadowed content).
+// 8. over-cap tracked files are skipped and reported
 {
-  const cs = buildFramedSession('verify-compact', 8)
-  const ca = makeAgent(cs.id, cs)
-  const rewindResult = await call(ca, '@20 chat')
-  check('rewind before real /compact succeeds', rewindResult.kind === 'success', rewindResult.text)
-
-  const compactDef = commands.get('compact')
-  check('compact command registered by command-compact', typeof compactDef?.handler === 'function', JSON.stringify(compactDef))
-  const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
-  check('real /compact succeeds after rewind', compactResult.kind === 'success', JSON.stringify(compactResult))
-
-  const events = cs.snapshotEvents()
-  const compStarts = events.filter(e => e.type === 'compaction/start').length
-  const compEnds = events.filter(e => e.type === 'compaction/end').length
-  check('compaction/start…end pair lands once', compStarts === 1 && compEnds === 1, `start=${compStarts} end=${compEnds}`)
-
-  let meterOk = true
-  let resumeOk = true
-  let framesOk = hasNoDanglingFrames(events)
-  try { newMeter().measure(cs) } catch { meterOk = false }
-  try { Session.create(cs.id, cs.snapshotEvents()) } catch { resumeOk = false }
-  check('token-meter replays rewind+compact log', meterOk, '')
-  check('resume preflight replays rewind+compact log', resumeOk, '')
-  check('no dangling step/turn frames after rewind+compact', framesOk, '')
+  const session = Session.create(SessionId('verify-cap'))
+  const first = await runUserStep(session, 'first')
+  const file = join(wsDir, 'cap.txt')
+  await writeFile(file, 'ok', 'utf8')
+  await runTool(session, file, 'ok')
+  await runUserStep(session, 'second')
+  await writeFile(file, 'x'.repeat(CAP_BYTES + 1), 'utf8')
+  const preview = await previewOf(session, first.seq)
+  check('preview lists the over-cap path', preview.ok === true && preview.value.uncovered.some(item => item.path === file), JSON.stringify(preview))
+  const both = await call(agentFor(session), `@${first.seq} both`)
+  check('over-cap restore is reported', both.kind === 'success' && /skipped 1 path/.test(both.text) && /backup limit/.test(both.text), both.text)
+  check('over-cap file is untouched', (await readFile(file, 'utf8')).length === CAP_BYTES + 1, `${(await readFile(file, 'utf8')).length} bytes`)
 }
 
-// 12b. A small post-rewind surface makes /compact a legal no-op ("No
-//      compactable history yet") — the transaction must not fire and the log
-//      must stay replayable.
+// 9. a path that becomes a symlink is skipped (POSIX: Windows may refuse symlink creation)
+if (process.platform !== 'win32') {
+  const session = Session.create(SessionId('verify-link'))
+  const first = await runUserStep(session, 'first')
+  const file = join(wsDir, 'link.txt')
+  await writeFile(file, 'original', 'utf8')
+  await runTool(session, file, 'edited')
+  const victim = join(wsDir, 'victim.txt')
+  await writeFile(victim, 'victim', 'utf8')
+  await rm(file)
+  await symlink(victim, file)
+  const both = await call(agentFor(session), `@${first.seq} both`)
+  check('symlink path is reported as skipped with a reason', both.kind === 'success' && /skipped 1 path/.test(both.text) && /symlink|hard link/.test(both.text), both.text)
+  check('symlink target is untouched', await readFile(victim, 'utf8') === 'victim', await readFile(victim, 'utf8'))
+}
+
+// 10. current-session clear removes the whole directory
 {
-  const cs = buildFramedSession('verify-compact-nop', 2)
-  const ca = makeAgent(cs.id, cs)
-  await call(ca, '@2 chat')
-  const compactDef = commands.get('compact')
-  const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
-  check('small-surface /compact after rewind is a legal no-op', compactResult.kind === 'success' && /No compactable history/.test(compactResult.text), JSON.stringify(compactResult))
-  const starts = cs.snapshotEvents().filter(e => e.type === 'compaction/start').length
-  check('no compaction transaction on the no-op path', starts === 0, `starts=${starts}`)
-  let ok = true
-  try { newMeter().measure(cs); Session.create(cs.id, cs.snapshotEvents()) } catch { ok = false }
-  check('no-op path stays replayable', ok, '')
+  const session = Session.create(SessionId('verify-clear'))
+  await runUserStep(session, 'first')
+  const agent = agentFor(session)
+  const dry = await commands.get('snapshot-auto-cleanup').handler({ commandId: CommandId('cid'), agent, rawInput: 'run --current', signal: aborted() })
+  check('clear dry-run reports a checkpoint', dry.kind === 'success' && /would clear/.test(dry.text), dry.text)
+  const applied = await commands.get('snapshot-auto-cleanup').handler({ commandId: CommandId('cid'), agent, rawInput: 'run --current --apply', signal: aborted() })
+  check('clear apply succeeds', applied.kind === 'success' && /Cleared/.test(applied.text), applied.text)
+  let gone = false
+  try { await (await import('node:fs/promises')).stat(join(snapRoot, session.id)) } catch { gone = true }
+  check('clear removed the session directory', gone, 'directory still exists')
 }
 
-// 13. I1 stress probe — continue with a real turn, rewind again, compact
-//     again: the log stays replayable at every step.
-{
-  const cs = buildFramedSession('verify-compact2', 8)
-  const ca = makeAgent(cs.id, cs)
-  await call(ca, '@20 chat')
-  // A real harness turn continues after the rewind.
-  cs.append('turn/start', { turn: 9 })
-  cs.append('step/start', { turn: 9, step: 1 })
-  cs.append('user/message', user('ninth question'), { surfaceOp: 'append' })
-  cs.append('assistant/message', { turn: 9, step: 1, message: assistant('ninth answer'), stream: [] }, { surfaceOp: 'append' })
-  cs.append('step/end', { turn: 9, step: 1 })
-  cs.append('turn/end', { turn: 9, reason: { kind: 'completed' } })
-  await call(ca, '@20 chat') // rewind again
-  const compactDef = commands.get('compact')
-  const compactResult = await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
-  check('second /compact after rewind+turn succeeds', compactResult.kind === 'success', JSON.stringify(compactResult))
-  const pairs = cs.snapshotEvents().filter(e => e.type === 'compaction/start').length === cs.snapshotEvents().filter(e => e.type === 'compaction/end').length
-  check('compaction bookkeeping stays balanced (stress)', pairs, '')
-  let ok = true
-  try { newMeter().measure(cs); Session.create(cs.id, cs.snapshotEvents()) } catch { ok = false }
-  check('rewind+turn+compact log replays (meter + resume)', ok, '')
-  check('no dangling step/turn frames (stress)', hasNoDanglingFrames(cs.snapshotEvents()), '')
-}
-
-// 14. I5 probe — rewinding to a message shadowed by a compaction checkpoint
-//     is refused by the plugin with its own error (not a crash).
-{
-  const cs = buildFramedSession('verify-checkpoint', 8)
-  const ca = makeAgent(cs.id, cs)
-  await call(ca, '@20 chat')
-  const compactDef = commands.get('compact')
-  await compactDef.handler({ commandId: CommandId('cid'), agent: ca, rawInput: '', signal: aborted() })
-  // seq 2 is turn 1's question — now shadowed by the compaction checkpoint.
-  const refused = await call(ca, '@2 chat')
-  check('rewind across a compaction checkpoint is refused', refused.kind === 'error' && /no longer in the model context/.test(refused.text), refused.text)
-}
-
-// 15. /snapshot-auto-cleanup: view/configure the entry's live policy, run
-//     (dry then apply), and reject invalid max-age without writing.
-{
-  const cleanupDef = commands.get('snapshot-auto-cleanup')
-  const callCleanup = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent, rawInput, signal: aborted() })
-  const exists = async (path) => { try { await stat(path); return true } catch { return false } }
-  const seedDir = async (sessionId, mtime) => {
-    const anchor = join(snapRoot, sessionId, '1')
-    await mkdir(anchor, { recursive: true })
-    await writeFile(join(anchor, 'call.json'), JSON.stringify({ callId: 'call', anchorSeq: 1, path: 'x', before: 'v', time: 1 }), 'utf8')
-    await utimes(join(anchor, 'call.json'), mtime, mtime)
-    await utimes(anchor, mtime, mtime)
-    await utimes(join(snapRoot, sessionId), mtime, mtime)
-  }
-
-  check('snapshot-auto-cleanup command registered', typeof cleanupDef?.handler === 'function', JSON.stringify(cleanupDef))
-  // The client only forwards free-form args (on/off/max-age/run) as rawInput
-  // when the command declares `input`; without it, an argued line degrades to
-  // a plain message. Guard that the descriptor keeps it.
-  check('snapshot-auto-cleanup declares input', cleanupDef?.input !== undefined, JSON.stringify(cleanupDef))
-
-  // Default: disabled, and the entry still carries no user-set field.
-  const status0 = await callCleanup('')
-  check('cleanup default status is disabled', status0.kind === 'success' && /disabled/.test(status0.text), status0.text)
-  check('cleanup default writes nothing', storedPolicy.autoCleanupEnabled === undefined, JSON.stringify(storedPolicy))
-
-  // Enable persists enabled:true on the entry.
-  const onResult = await callCleanup('on')
-  check('cleanup on succeeds', onResult.kind === 'success', onResult.text)
-  check('cleanup config persisted (enabled)', effectivePolicy.enabled === true, JSON.stringify(storedPolicy))
-  const statusOn = await callCleanup('')
-  check('cleanup status reflects enabled', statusOn.kind === 'success' && /enabled/.test(statusOn.text), statusOn.text)
-
-  // max-age persists; an invalid value is rejected without writing.
-  const maxAgeResult = await callCleanup('max-age 5')
-  check('cleanup max-age set', maxAgeResult.kind === 'success', maxAgeResult.text)
-  check('cleanup config persisted (maxAgeDays)', effectivePolicy.maxAgeDays === 5, JSON.stringify(storedPolicy))
-  check('cleanup writes address the profile row id, not the fiber id',
-    fakeSettings.writes.length > 0 && fakeSettings.writes.every(id => id === 'dsh-rewind-plugin'), JSON.stringify([...new Set(fakeSettings.writes)]))
-  check('the bundle declares its own config page (auto: false)',
-    fakeSettings.presentations.length === 1 && fakeSettings.presentations[0].presentation?.auto === false
-    && fakeSettings.presentations[0].owner === ctx.fiber, JSON.stringify(fakeSettings.presentations.map(p => p.presentation)))
-  const badAge = await callCleanup('max-age 0')
-  check('cleanup rejects max-age 0', badAge.kind === 'error', badAge.text)
-
-  // Seed one stale and one fresh session dir, then run (dry, then apply).
-  await seedDir('staleCleanup', new Date(Date.now() - 40 * 86_400_000))
-  await seedDir('freshCleanup', new Date())
-
-  const dry = await callCleanup('run')
-  check('cleanup run dry-run succeeds', dry.kind === 'success', dry.text)
-  check('cleanup dry-run leaves the stale dir', await exists(join(snapRoot, 'staleCleanup')))
-
-  const applied = await callCleanup('run --apply')
-  check('cleanup run --apply succeeds', applied.kind === 'success', applied.text)
-  check('cleanup apply removes the stale dir', !(await exists(join(snapRoot, 'staleCleanup'))))
-  check('cleanup apply keeps the fresh dir', await exists(join(snapRoot, 'freshCleanup')))
-  check('cleanup apply persisted the last-sweep time', await exists(join(tmpRoot, 'snapshot-cleanup-last-sweep.json')))
-
-  // Disable; status reflects it.
-  const offResult = await callCleanup('off')
-  check('cleanup off succeeds', offResult.kind === 'success', offResult.text)
-  const statusOff = await callCleanup('')
-  check('cleanup status reflects disabled', statusOff.kind === 'success' && /disabled/.test(statusOff.text), statusOff.text)
-
-  // The host renders its own copy in the language picked in Settings → General:
-  // 0.1.7 keeps that preference in the `locale` entry's Config, read through the
-  // settings service's descriptor read (never a section, and never host prose).
-  fakeSettings.localeRows = [{ ns: 'locale', value: { preference: 'zh' } }]
-  const zhStatus = await callCleanup('')
-  check('cleanup status follows the picked language', zhStatus.kind === 'success' && /自动清理/.test(zhStatus.text), zhStatus.text)
-  check('the language read asks for redacted descriptors',
-    fakeSettings.describeCalls.length > 0 && fakeSettings.describeCalls.every(call => call?.redactSecrets === true),
-    JSON.stringify(fakeSettings.describeCalls))
-  fakeSettings.localeRows = []
-  const defaultStatus = await callCleanup('')
-  check('cleanup status returns to the neutral default without a preference',
-    defaultStatus.kind === 'success' && /Auto-cleanup/.test(defaultStatus.text), defaultStatus.text)
-
-  // A manual `run --current` clears the ACTIVE session's snapshots (dry then
-  // apply). Config-independent (uses the resolved policy via the settings doc).
-  const csSession = buildSession('verify-clearsession', wsDir)
-  const csAgent = makeAgent(csSession.id, csSession)
-  const callClear = rawInput => cleanupDef.handler({ commandId: CommandId('cid'), agent: csAgent, rawInput, signal: aborted() })
-  csSession.append('user/message', user('clear question'), { surfaceOp: 'append' })
-  const clearFile = join(wsDir, 'clear.txt')
-  await writeFile(clearFile, 'original', 'utf8')
-  await runWrite(csAgent, 'clear-1', clearFile, 'rewritten') // commits a snapshot under this session's dir
-  const clearDir = join(snapRoot, csSession.id)
-  const clearDry = await callClear('run --current')
-  check('run --current dry-run reports the session without deleting', clearDry.kind === 'success' && await exists(clearDir), clearDry.text)
-  const clearApplied = await callClear('run --current --apply')
-  check('run --current --apply clears the active session snapshots', clearApplied.kind === 'success' && !(await exists(clearDir)), clearApplied.text)
-
-  // A running session's `--apply` must ACTIVELY pause the agent (cancel + wait
-  // for quiescence) before clearing, mirroring `rewind` — never clear while the
-  // tool pipeline could still be writing to the same store. A running agent
-  // that cancels to idle is stopped and the clear proceeds.
-  const busyId = 'verify-clearbusy'
-  const busySession = buildSession(busyId, wsDir)
-  let busyCancelled = false
-  const busyAgent = {
-    ...makeAgent(busySession.id, busySession, 'running'),
-    cancel: () => { busyCancelled = true; busyAgent.status = 'idle' },
-    whenIdle: () => new Promise(resolve => {
-      const poll = () => { if (busyAgent.status === 'idle') resolve(); else setTimeout(poll, 10) }
-      poll()
-    }),
-  }
-  await seedDir(busyId, new Date()) // snapshot data for this session's dir
-  const clearBusy = await cleanupDef.handler({ commandId: CommandId('cid'), agent: busyAgent, rawInput: 'run --current --apply', signal: aborted() })
-  check('run --current --apply pauses a running session and clears it', busyCancelled === true && clearBusy.kind === 'success' && !(await exists(join(snapRoot, busyId))), clearBusy.text)
-}
-
-// 16. deleting the plugin data directory wipes ONLY file backups: chat
-//     rewinds keep working and both-mode preview reports nothing left to
-//     restore (the store rebuilds from scratch on the next capture).
-{
-  await rm(snapRoot, { recursive: true, force: true })
-  const chatSession = buildSession('verify-wipe-chat')
-  const chatAgent = makeAgent(chatSession.id, chatSession)
-  const chatResult = await call(chatAgent, '@2 chat')
-  check('chat rewind works after the data dir is deleted', chatResult.kind === 'success', chatResult.text)
-  const previewSession = buildSession('verify-wipe-preview')
-  const previewAgent = makeAgent(previewSession.id, previewSession)
-  const preview = await previewOf(previewAgent, 2)
-  check('both preview reports no restorable changes after the wipe', preview.kind === 'success' && filesOf(preview).length === 0, JSON.stringify(preview))
-}
-
-// 17. Rewinding /plan text undoes only the message, never the plan-mode state.
-//     `/plan text` is two independent actions (enter plan mode + steer the
-//     message); the rewind cuts the surface and leaves the log-only
-//     `plan/mode` untouched, so plan mode stays active and the user leaves it
-//     with `/plan off` — which must still commit after the rewind. A rewind in
-//     a session that never entered plan mode must touch no plan state.
-{
-  const planSession = buildSession('verify-plan')
-  planSession.append('plan/mode', { active: true }) // log-only, non-surface
-  const planAgent = makeAgent(planSession.id, planSession)
-  const planBefore = [...planSession.surface.nodes]
-  const planResult = await call(planAgent, '@2 chat')
-  const planAfter = [...planSession.surface.nodes]
-  check('plan rewind succeeds', planResult.kind === 'success', planResult.text)
-  check('plan rewind cuts the surface (target withdrawn)', planAfter.length === 3 && planAfter[0] === 0 && planAfter[1] === 1 && planAfter[2] > 3, `before ${JSON.stringify(planBefore)} -> after ${JSON.stringify(planAfter)}`)
-  // The rewind never touches plan/mode: plan mode stays active after the rewind
-  // (the plugin does not auto-cancel). A stray plan/mode{active:false} would
-  // mean the rewind wrongly cancelled it.
-  check('plan rewind leaves plan mode active (no auto-cancel)', foldPlanMode(planSession.snapshotEvents()) === true, `events=${JSON.stringify(planSession.snapshotEvents().filter(e => e.type === 'plan/mode'))}`)
-  check('plan rewind leaves no dangling step/turn frame', hasNoDanglingFrames(planSession.snapshotEvents()), planSession.snapshotEvents().map(e => e.type).join(','))
-
-  // A manual /plan off after the rewind must still commit (the marker created
-  // no open turn, so set(false) is the idle-commit path). Simulate its log
-  // effect: appending plan/mode{active:false} flips the fold to inactive.
-  planSession.append('plan/mode', { active: false })
-  check('/plan off after rewind turns plan mode off', foldPlanMode(planSession.snapshotEvents()) === false, 'post-off fold still active')
-
-  const plainSession = buildSession('verify-plain')
-  const plainAgent = makeAgent(plainSession.id, plainSession)
-  const plainResult = await call(plainAgent, '@2 chat')
-  check('non-plan rewind succeeds', plainResult.kind === 'success', plainResult.text)
-  check('non-plan rewind appends no plan/mode event (no log pollution)', plainSession.snapshotEvents().filter(event => event.type === 'plan/mode').length === 0, plainSession.snapshotEvents().map(e => e.type).join(','))
-}
-
+console.log(failures === 0 ? 'verify-host: ok' : `verify-host: ${failures} failure(s)`)
 await rm(tmpRoot, { recursive: true, force: true })
-console.log(failures === 0 ? '\nverify-host: all checks passed' : `\nverify-host: ${failures} check(s) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

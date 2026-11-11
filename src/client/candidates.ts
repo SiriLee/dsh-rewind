@@ -22,8 +22,8 @@ export const PREVIEW_CHARS = 80
 /**
  * Default cap on how many user messages the rewind picker lists (newest kept).
  *
- * Matches the snapshot store's MAX_ANCHOR_GROUPS (100), so the picker shows
- * every anchor group that can still restore file backups; 100 stays
+ * Matches the checkpoint store's retention window (100), so the picker shows
+ * every message that can still have a file checkpoint; 100 stays
  * scrollable/searchable via the popupSelect shell, and callers can still
  * pass an explicit `limit`.
  */

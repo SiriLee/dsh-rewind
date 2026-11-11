@@ -81,9 +81,9 @@ export const CANDIDATE_PREVIEW_CHARS = 80
 
 /**
  * Default cap on how many user messages a candidate listing returns (newest
- * kept). Matches the snapshot store's MAX_ANCHOR_GROUPS (100), so every
- * anchor group that still has restorable file backups is listed; callers can
- * still pass an explicit `limit`.
+ * kept). Matches the checkpoint store's retention window (100), so every
+ * message that can still have a file checkpoint is listed; callers can still
+ * pass an explicit `limit`.
  */
 export const DEFAULT_CANDIDATE_LIMIT = 100
 

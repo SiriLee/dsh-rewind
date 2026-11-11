@@ -10,18 +10,18 @@
  * @module tests/lifecycle-roundtrip
  */
 import { existsSync } from 'node:fs'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Context } from '@deepseek-ai/cordis'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
-import { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, Session, SessionId, type UserMessage } from '@deepseek-ai/dsh-session'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { en as enLocale, zh as zhLocale } from '../src/locales.ts'
-import { apply, profileEntryKey, ENGINE_COMMAND, inject } from '../src/index.ts'
-import { CURRENT_STORE_VERSION, SnapshotStore } from '../src/snapshot.ts'
+import { apply, Config, profileEntryKey, ENGINE_COMMAND, inject } from '../src/index.ts'
 import { resolveCleanupStatePath } from '../src/snapshot-cleanup.ts'
-import { buildTurnedSession, testConfig, textMessage } from './helpers.ts'
+import { testConfig, textMessage } from './helpers.ts'
 
 /** A function a mount yielded; its return value is awaited on dispose. */
 type Disposer = () => unknown
@@ -180,108 +180,197 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true })
 })
 
-/**
- * The files staged under the store's `.pending/` areas — discovered by walking
- * the store root, so the probe does not depend on how a session id is encoded
- * into its directory name.
- */
-async function stagedFiles(): Promise<string[]> {
-  const staged: string[] = []
-  for (const session of await readdir(snapRoot).catch(() => [])) {
-    staged.push(...await readdir(join(snapRoot, session, '.pending')).catch(() => []))
-  }
-  return staged
+/** Read one session's checkpoint manifests. */
+async function readCheckpoints(session: Session): Promise<Record<string, unknown>[]> {
+  const dir = join(snapRoot, session.id, 'checkpoints')
+  const names = (await readdir(dir).catch(() => [] as string[])).filter(name => name.endsWith('.json')).sort()
+  return await Promise.all(names.map(async name => JSON.parse(await readFile(join(dir, name), 'utf8')) as Record<string, unknown>))
 }
 
-/**
- * Poll until nothing is staged. The `tools/result` safety net discards on a
- * voided promise (`void discardCapture(...)`) — it must never block the tool
- * result — so its unlink lands a tick later.
- * @returns the staged names seen by the last poll.
- */
-async function waitForStagedDrain(): Promise<string[]> {
-  for (let attempt = 0; attempt < 50; attempt++) {
-    const staged = await stagedFiles()
-    if (staged.length === 0) return staged
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  return stagedFiles()
+/** Drive the plugin's pre-step listener as the agent loop would. */
+async function preStep(mounted: Mounted, session: Session, messages: readonly UserMessage[], decision: 'enter' | 'reject' = 'enter'): Promise<unknown> {
+  const handler = mounted.handlers.get('agent/pre-step') as unknown as (
+    payload: unknown,
+    next: () => Promise<unknown>,
+  ) => Promise<unknown>
+  return await handler(
+    { agent: { id: 'agent-1', session }, messages },
+    async () => decision === 'enter' ? { kind: 'enter', messages } : { kind: 'reject' },
+  )
+}
+
+/** One write/edit dispatch: the plugin captures before, then the fake body writes. */
+async function dispatchWrite(mounted: Mounted, session: Session, path: string, content: string | Buffer): Promise<void> {
+  await mounted.toolHandlers.get('tools/execute')!(
+    { name: 'write', callId: `call-${Date.now()}-${Math.random()}`, arguments: { file_path: path }, agent: { id: 'agent-1', session }, signal: undefined } as never,
+    (async () => { await writeFile(path, content); return { isError: false, content: [] } }) as never,
+  )
 }
 
 describe('host mount lifecycle', () => {
-  it('drops staged before-captures when the plugin is unloaded mid-tool', async () => {
+  it('registers the pre-step boundary and the first-touch hook, not the old post-execute pipeline', async () => {
     const mounted = mount({ fs: true })
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
-
-    // A real file for the capture to copy bytes from.
-    const target = join(root, 'edited.txt')
-    await writeFile(target, 'before', 'utf8')
-    const session = Session.create(SessionId('lifecycle-session'))
-    const execute = mounted.toolHandlers.get('tools/execute')
-    expect(execute).toBeDefined()
-    await execute!(
-      { name: 'write', callId: 'call-1', arguments: { file_path: target }, agent: { id: 'agent-1', session }, signal: undefined } as never,
-      (async () => ({ ok: true })) as never,
-    )
-
-    // Staged, not committed: the bytes wait for `tools/post-execute`.
-    expect(await stagedFiles()).toHaveLength(1)
-
-    // Unload between the two stages (the exact window a live disable lands in).
+    expect(typeof mounted.handlers.get('agent/pre-step')).toBe('function')
+    expect(typeof mounted.toolHandlers.get('tools/execute')).toBe('function')
+    expect(mounted.toolHandlers.get('tools/post-execute')).toBeUndefined()
+    expect(mounted.toolHandlers.get('tools/result')).toBeUndefined()
     await mounted.dispose()
-    expect(await stagedFiles()).toEqual([])
   })
 
-  it('a tool result drains its staged capture before the unload', async () => {
-    const mounted = mount({ fs: true })
+  it('creates checkpoints without the fs service', async () => {
+    const mounted = mount()
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
-    const target = join(root, 'edited.txt')
-    await writeFile(target, 'before', 'utf8')
-    const session = Session.create(SessionId('lifecycle-session'))
-    await mounted.toolHandlers.get('tools/execute')!(
-      { name: 'write', callId: 'call-1', arguments: { file_path: target }, agent: { id: 'agent-1', session }, signal: undefined } as never,
-      (async () => ({ ok: true })) as never,
-    )
-    expect(await stagedFiles()).toHaveLength(1)
-    mounted.toolHandlers.get('tools/result')!(
-      { name: 'write', callId: 'call-1', arguments: { file_path: target }, agent: { id: 'agent-1', session } } as never,
-    )
-    // The safety net already dropped it, so the unload has nothing left to do.
-    expect(await waitForStagedDrain()).toEqual([])
+    const session = Session.create(SessionId('no-fs-session'))
+    const message = textMessage('first')
+    expect(await preStep(mounted, session, [message])).toMatchObject({ kind: 'enter' })
+    session.append('user/message', message, { surfaceOp: 'append' })
+    expect(await readCheckpoints(session)).toHaveLength(1)
     await mounted.dispose()
-    expect(await stagedFiles()).toEqual([])
   })
 
-  it('drops the staged capture when the commit is refused by a newer store', async () => {
-    // The store was written by a NEWER build: `recordBackup` refuses (ADR-10),
-    // so the commit throws AFTER `tools/execute` already staged the bytes. Those
-    // bytes have no owner left — `.pending/` is only collected from a successful
-    // commit of the same session, which a refused store never reaches.
-    const session = buildTurnedSession()
-    await new SnapshotStore(snapRoot).markStoreVersion(session.id, CURRENT_STORE_VERSION + 1)
-
-    const mounted = mount({ fs: true })
+  it('reports a missing checkpoint with one clause separator', async () => {
+    const mounted = mount()
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
-    const target = join(root, 'refused.txt')
-    await writeFile(target, 'before', 'utf8')
-    const exec = {
-      name: 'write',
-      callId: 'call-1',
-      arguments: { file_path: target },
-      agent: { id: 'agent-1', session },
-      signal: undefined,
+    const session = Session.create(SessionId('no-checkpoint-result'))
+    const message = textMessage('old')
+    session.append('user/message', message, { surfaceOp: 'append' })
+    const seq = session.snapshotEvents().at(-1)!.seq
+    const agent = {
+      id: session.id,
+      session,
+      status: 'idle',
+      inbox: { nextStep: [], remove: () => true },
+      whenIdle: async () => {},
+      cancel: () => {},
     }
-    await mounted.toolHandlers.get('tools/execute')!(exec as never, (async () => ({ ok: true })) as never)
-    expect(await stagedFiles()).toHaveLength(1)
-
-    await mounted.toolHandlers.get('tools/post-execute')!(
-      exec as never,
-      { isError: false } as never,
-      (async () => ({ kind: 'next' })) as never,
-    )
-
-    expect(await waitForStagedDrain()).toEqual([])
+    const result = await mounted.commands.get('rewind')!.handler({
+      agent, rawInput: `@${seq} both`, signal: new AbortController().signal,
+    }) as { kind: string; text: string }
+    expect(result.kind).toBe('success')
+    expect(result.text).toContain('; no file checkpoint exists for the target message')
+    expect(result.text).not.toContain(';;')
     await mounted.dispose()
+  })
+
+  it('creates one checkpoint per user message and adds the first-touch row to current', async () => {
+    const mounted = mount({ fs: true })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const session = Session.create(SessionId('pipeline-session'))
+    const target = join(root, 'a.txt')
+    await writeFile(target, 'one', 'utf8')
+    const message = textMessage('first')
+    expect(await preStep(mounted, session, [message])).toMatchObject({ kind: 'enter' })
+    session.append('user/message', message, { surfaceOp: 'append' })
+
+    let checkpoints = await readCheckpoints(session)
+    expect(checkpoints).toHaveLength(1)
+    expect(checkpoints[0]!['files']).toEqual({})
+
+    await dispatchWrite(mounted, session, target, 'two')
+    checkpoints = await readCheckpoints(session)
+    expect((checkpoints[0]!['files'] as Record<string, unknown>)[target]).toMatchObject({ v: 1, size: 3 })
+    await mounted.dispose()
+  })
+
+  it('deduplicates repeated message ids in one batch', async () => {
+    const mounted = mount({ fs: true })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const session = Session.create(SessionId('dedupe-session'))
+    const message = textMessage('first')
+    expect(await preStep(mounted, session, [message, message])).toMatchObject({ kind: 'enter' })
+    session.append('user/message', message, { surfaceOp: 'append' })
+    expect(await readCheckpoints(session)).toHaveLength(1)
+    await mounted.dispose()
+  })
+
+  it('creates two checkpoints for a two-message batch with identical files', async () => {
+    const mounted = mount({ fs: true })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const session = Session.create(SessionId('batch-session'))
+    const first = textMessage('first')
+    const second = textMessage('second')
+    expect(await preStep(mounted, session, [first, second])).toMatchObject({ kind: 'enter' })
+    session.append('user/message', first, { surfaceOp: 'append' })
+    session.append('user/message', second, { surfaceOp: 'append' })
+
+    const checkpoints = await readCheckpoints(session)
+    expect(checkpoints).toHaveLength(2)
+    expect(checkpoints[0]!['files']).toEqual(checkpoints[1]!['files'])
+    await mounted.dispose()
+  })
+
+  it('ignores runtime-context and subagent messages', async () => {
+    const mounted = mount({ fs: true })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+
+    const contextSession = Session.create(SessionId('context-session'))
+    const context = createUserMessage({ content: [{ type: 'text', text: 'context' }], source: { kind: 'runtime-context' } as never })
+    expect(await preStep(mounted, contextSession, [context])).toMatchObject({ kind: 'enter' })
+    contextSession.append('user/message', context, { surfaceOp: 'append' })
+    expect(await readCheckpoints(contextSession)).toEqual([])
+
+    const sub = Session.create(SessionId('subagent-session'), undefined, {
+      version: SESSION_FORMAT_VERSION,
+      id: SessionId('subagent-session'),
+      createdAt: Date.now(),
+      isSeeded: false,
+      origin: 'subagent',
+    })
+    const message = textMessage('delegated')
+    expect(await preStep(mounted, sub, [message])).toMatchObject({ kind: 'enter' })
+    sub.append('user/message', message, { surfaceOp: 'append' })
+    expect(await readCheckpoints(sub)).toEqual([])
+    await mounted.dispose()
+  })
+
+  it('creates no checkpoint when another listener rejects the step', async () => {
+    const mounted = mount({ fs: true })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const session = Session.create(SessionId('reject-session'))
+    const message = textMessage('first')
+    expect(await preStep(mounted, session, [message], 'reject')).toMatchObject({ kind: 'reject' })
+    expect(await readCheckpoints(session)).toEqual([])
+    await mounted.dispose()
+  })
+
+  it('does not carry a current checkpoint across a switch-off gap', async () => {
+    const mounted = mount({ fs: true })
+    const enabled = createVolatile(true)
+    apply(mounted.ctx, { ...testConfig({ snapshotDir: snapRoot }), fileCheckpointingEnabled: enabled })
+    const session = Session.create(SessionId('switch-session'))
+    const first = textMessage('first')
+    await preStep(mounted, session, [first])
+    session.append('user/message', first, { surfaceOp: 'append' })
+    const one = join(root, 'one.txt')
+    await writeFile(one, 'one', 'utf8')
+    await dispatchWrite(mounted, session, one, 'one')
+
+    updateVolatile(enabled, createVolatile(false))
+    const second = textMessage('second')
+    await preStep(mounted, session, [second])
+    session.append('user/message', second, { surfaceOp: 'append' })
+    const two = join(root, 'two.txt')
+    await writeFile(two, 'two', 'utf8')
+    await dispatchWrite(mounted, session, two, 'two')
+
+    updateVolatile(enabled, createVolatile(true))
+    const third = textMessage('third')
+    await preStep(mounted, session, [third])
+    session.append('user/message', third, { surfaceOp: 'append' })
+    await dispatchWrite(mounted, session, two, 'three')
+
+    const checkpoints = await readCheckpoints(session)
+    expect(checkpoints).toHaveLength(2)
+    const thirdCheckpoint = checkpoints.find(cp => cp['messageId'] === third.id)!
+    expect(Object.keys(thirdCheckpoint['files'] as Record<string, unknown>)).toContain(one)
+    expect(Object.keys(thirdCheckpoint['files'] as Record<string, unknown>)).toContain(two)
+    await mounted.dispose()
+  })
+
+  it('ignores legacy snapshot options without failing the mount', () => {
+    const resolved = Config({ snapshotDir: snapRoot, dedup: true, maxAnchorGroups: 5 })
+    expect(resolved.snapshotDir).toBe(snapRoot)
   })
 })
 
@@ -335,22 +424,22 @@ describe('live disable → enable round trip', () => {
     // that the policy was read. A fresh mount must check again.
     const stateFile = resolveCleanupStatePath(root)
     await rm(stateFile, { force: true })
-    const first = mount()
+    const first = mount({ fs: true })
     first.setEntryId('include:dsh-rewind-plugin')
     apply(first.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, autoCleanupEnabled: true }))
     const [firstSession] = userMessage()
-    first.handlers.get('session/event')!(firstSession as never, { type: 'user/message', seq: 2 } as never)
+    await preStep(first, firstSession, [])
     expect(await waitUntil(() => existsSync(stateFile))).toBe(true)
     await first.dispose()
 
     // The previous mount consumed the one-shot gate; a fresh mount must check
     // again (the flag is per mount, the 24h throttle itself is on disk).
     await rm(stateFile, { force: true })
-    const second = mount()
+    const second = mount({ fs: true })
     second.setEntryId('include:dsh-rewind-plugin')
     apply(second.ctx, testConfig({ snapshotDir: snapRoot, dshHome: root, autoCleanupEnabled: true }))
     const [secondSession] = userMessage()
-    second.handlers.get('session/event')!(secondSession as never, { type: 'user/message', seq: 2 } as never)
+    await preStep(second, secondSession, [])
     expect(await waitUntil(() => existsSync(stateFile))).toBe(true)
     await second.dispose()
   })

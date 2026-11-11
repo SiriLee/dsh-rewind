@@ -39,6 +39,11 @@ describe('host locale dictionaries', () => {
     expect(translate(lang, 'command.description')).toBe(HOST_DICTS[lang]['command.description'])
   })
 
+  it.each(languages)('%s noCheckpoint carries no leading separator', (lang) => {
+    // The command result adds `sep.clause`; the value must not add another.
+    expect(HOST_DICTS[lang]['noCheckpoint']).not.toMatch(/^[;；\s]/)
+  })
+
   it('interpolates named params', () => {
     expect(translate(DEFAULT_HOST_LOCALE, 'success', { targetSeq: 5, restore: '' }))
       .toContain('seq 5')

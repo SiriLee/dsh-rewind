@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
-import { DEFAULT_MAX_FILE_BYTES, MAX_ANCHOR_GROUPS, SnapshotStore } from '../src/snapshot.ts'
+import { DEFAULT_MAX_FILE_BYTES, SnapshotStore } from '../src/snapshot.ts'
 import { DEFAULT_FILE_CHECKPOINTING_ENABLED, Config } from '../src/index.ts'
 import {
   AUTO_SWEEP_INTERVAL_MS,
@@ -356,19 +356,21 @@ describe('Config schema + volatileCleanupStore', () => {
     expect(() => Config({ autoCleanupEnabled: 'yes' } as never)).toThrow()
   })
 
-  it('the Config schema defaults and validates the store bounds', () => {
-    const resolved = Config({} as never) as { maxFileBytes: number; maxAnchorGroups: number }
+  it('the Config schema defaults and validates the per-file cap', () => {
+    const resolved = Config({} as never) as { maxFileBytes: number }
     expect(resolved.maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES)
-    expect(resolved.maxAnchorGroups).toBe(MAX_ANCHOR_GROUPS)
-    // `0` is the documented "no cap" value; the group bound must stay >= 1 so a
-    // configuration typo can never evict every snapshot.
-    expect((Config({ maxFileBytes: 0, maxAnchorGroups: 1 } as never) as { maxFileBytes: number }).maxFileBytes).toBe(0)
+    // `0` is the documented "no cap" value.
+    expect((Config({ maxFileBytes: 0 } as never) as { maxFileBytes: number }).maxFileBytes).toBe(0)
     for (const value of [-1, 1.5, Number.NaN]) {
       expect(() => Config({ maxFileBytes: value } as never)).toThrow()
     }
-    for (const value of [0, -1, 2.5, Number.NaN]) {
-      expect(() => Config({ maxAnchorGroups: value } as never)).toThrow()
-    }
+  })
+
+  it('ignores the removed dedup and maxAnchorGroups keys instead of failing the mount', () => {
+    // Old settings documents may still carry these fields; they have no
+    // meaning in the checkpoint model and must not break plugin load.
+    const resolved = Config({ dedup: false, maxAnchorGroups: 0 } as never) as Record<string, unknown>
+    expect(resolved.maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES)
   })
 
   it('the Config schema defaults and validates the sweep cadence', () => {
