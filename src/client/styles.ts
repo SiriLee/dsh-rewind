@@ -57,7 +57,11 @@ export const STYLE = `
   position: fixed;
   z-index: 1100;
   box-sizing: border-box;
-  width: min(300px, calc(100vw - 24px));
+  /* Keep the plugin's 300px panel width while using the official anchor
+     sizing model; max-content lets long impact paths size up to that cap. */
+  width: max-content;
+  min-width: min(300px, calc(100vw - 24px));
+  max-width: min(300px, calc(100vw - 24px));
   padding: 16px;
   border: 0;
   border-radius: var(--dsw-radius-lg);
@@ -72,6 +76,60 @@ export const STYLE = `
   font-size: 12px;
   line-height: 18px;
   color: var(--dsw-alias-label-primary);
+  max-height: calc(100dvh - 12px - max(12px, var(--dsh-frame-overlay-top, 12px)));
+  overflow-x: hidden;
+  overflow-y: auto;
+  position-area: none;
+  top: max(12px, var(--dsh-frame-overlay-top, 12px));
+  bottom: max(12px, calc(anchor(top) + 8px));
+  left: max(12px, anchor(left));
+  right: 12px;
+  position-try-fallbacks: --dsh-rewind-window, --dsh-rewind-opposite, --dsh-rewind-wide-opposite, --dsh-rewind-tall, --dsh-rewind-viewport;
+  align-self: end;
+  justify-self: start;
+  height: fit-content;
+  min-height: 0;
+  margin: 0;
+}
+@position-try --dsh-rewind-window {
+  position-area: none;
+  top: max(12px, var(--dsh-frame-overlay-top, 12px));
+  bottom: max(12px, calc(anchor(top) + 8px));
+  left: 12px;
+  right: 12px;
+  margin: 0;
+  align-self: safe end;
+  justify-self: safe end;
+}
+@position-try --dsh-rewind-opposite {
+  top: max(12px, calc(anchor(bottom) + 8px));
+  bottom: 12px;
+  align-self: start;
+}
+@position-try --dsh-rewind-wide-opposite {
+  top: max(12px, calc(anchor(bottom) + 8px));
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  align-self: start;
+  justify-self: safe end;
+}
+@position-try --dsh-rewind-tall {
+  position-area: none;
+  top: max(12px, var(--dsh-frame-overlay-top, 12px));
+  bottom: 12px;
+  left: max(12px, anchor(left));
+  right: 12px;
+  margin: 0;
+  align-self: safe start;
+  justify-self: start;
+}
+@position-try --dsh-rewind-viewport {
+  position-area: none;
+  inset: max(12px, var(--dsh-frame-overlay-top, 12px)) 12px 12px;
+  margin: 0;
+  align-self: safe start;
+  justify-self: safe end;
 }
 .dsh-rewind-popover-title {
   font-size: 12px;

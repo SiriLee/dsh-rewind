@@ -116,6 +116,28 @@ describe('openPopover (the impact step reports checkpointing-off)', () => {
   })
 })
 
+describe('openPopover (CSS anchor placement)', () => {
+  it('names the trigger and the panel', () => {
+    const anchor = document.createElement('button')
+    document.body.append(anchor)
+    const setAnchorName = vi.spyOn(anchor.style, 'setProperty')
+    openPopover({
+      session: fakeSession(),
+      seq: 5,
+      time: 0,
+      preview: 'hello',
+      anchor,
+      t,
+      onRewind: () => {},
+    })
+    const generated = setAnchorName.mock.calls
+      .find(([property]) => property === 'anchor-name')?.[1]
+    expect(generated).toMatch(/^--dsh-rewind-popover-/)
+    const panel = document.querySelector<HTMLElement>(`.${CLASS.popover}`)
+    expect(panel?.style.getPropertyValue('position-anchor')).toBe(generated)
+  })
+})
+
 describe('openPopover (the pending retract confirmation)', () => {
   /** Open the pending variant against a button; returns its callback spy. */
   function openRetract(): { readonly anchor: HTMLButtonElement; readonly onRetract: ReturnType<typeof vi.fn> } {

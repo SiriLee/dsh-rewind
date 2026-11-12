@@ -59,6 +59,9 @@ let liveSessionId: string | null = null
 /** The plugin's composer focus channel; the harness's own `focusComposer` shape. */
 let composerFocuser: ((sessionId: string) => void) | null = null
 
+/** Monotonic identity for one popover's CSS anchor name. */
+let anchorSequence = 0
+
 /**
  * Register the composer focus channel (called once by the client plugin).
  * @param focus - returns the keyboard to one session's composer, caret included.
@@ -261,7 +264,7 @@ interface DurablePopoverOptions {
  * Reuses the outcome already fetched when the popover opened — running the
  * probe again here would repeat the disk comparison.
  */
-function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: () => void, reposition: () => void, cached?: PreviewOutcome): void {
+function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: () => void, recheck: () => void, cached?: PreviewOutcome): void {
   const { session, seq, t } = opts
   const impact = el('div', CLASS.popoverImpact, t('popover.impact.loading'))
   const actions = el('div', CLASS.popoverActions)
@@ -280,7 +283,7 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
   actions.append(confirm)
   root.replaceChildren(impact, actions)
   focusFirst(root)
-  reposition()
+  recheck()
 
   void (async () => {
     const outcome = cached ?? await previewImpact(session.sessionId, seq)
@@ -319,65 +322,45 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
     })
   })().catch(() => {
     impact.textContent = t('popover.impact.failed', { message: 'unexpected error' })
-  }).finally(() => { reposition() })
+  }).finally(() => { recheck() })
 }
 
 /**
- * One mounted popover shell: append, position, outside-click close, and the
- * capture-phase ↑/↓/Esc keys (Esc is delegated to the caller's handler so the
- * mode flow keeps its step-aware back/cancel behavior).
+ * One mounted popover shell: append, CSS-anchor placement, outside-click close,
+ * and the capture-phase ↑/↓/Esc keys (Esc is delegated to the caller's handler
+ * so the mode flow keeps its step-aware back/cancel behavior).
  */
 interface PopoverShell {
-  /** Re-run positioning after the content re-renders. */
+  /** Close if the host removed the anchor; CSS owns placement. */
   readonly position: () => void
   /** Remove the popover and its listeners (closePopover also does this). */
   readonly dispose: () => void
 }
 
-/** Mount the popover chrome around `root`. */
+/**
+ * Mount the popover chrome around `root`.
+ *
+ * Placement belongs to CSS Anchor Positioning: the trigger carries this
+ * open's `anchor-name` and the panel names it in `position-anchor`, so the
+ * browser keeps the panel tied to the trigger through scrolling, zooming,
+ * resizing and content reflow. The shell only owns dismissal and the
+ * anchor-name lifecycle.
+ */
 function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: KeyboardEvent) => void): PopoverShell {
-  const margin = 12
-  const gap = 4
+  const anchorName = `--dsh-rewind-popover-${++anchorSequence}`
+  const previousAnchorName = anchor.style.getPropertyValue('anchor-name')
+  const previousPriority = anchor.style.getPropertyPriority('anchor-name')
+  const previousList = previousAnchorName.trim()
+  const ownAnchorName = previousList === '' || previousList === 'none'
+    ? anchorName
+    : `${previousList} ${anchorName}`
+  anchor.style.setProperty('anchor-name', ownAnchorName)
+  root.style.setProperty('position-anchor', anchorName)
 
-  /** Which side was chosen on open; later movement must not make it jump across. */
-  let flippedAbove: boolean | null = null
-
-  /** Position below the anchor (right-aligned), or above when that side fits. */
+  /** CSS owns placement; close if the host removed the anchor. */
   const position = (): void => {
     if (!root.isConnected) return
-    if (!anchor.isConnected) {
-      if (popoverEl === root) closePopover()
-      return
-    }
-    const rect = anchor.getBoundingClientRect()
-    const height = root.offsetHeight
-    if (flippedAbove === null) {
-      flippedAbove = rect.bottom + gap + height > window.innerHeight - margin
-    }
-    const top = flippedAbove
-      ? Math.max(margin, rect.top - gap - height)
-      : Math.min(Math.max(margin, rect.bottom + gap), Math.max(margin, window.innerHeight - margin - height))
-    root.style.top = `${Math.round(top)}px`
-    root.style.left = `${Math.round(Math.max(margin, Math.min(rect.right, window.innerWidth - margin - root.offsetWidth)))}px`
-  }
-
-  let frame = 0
-  /** Coalesce scroll/resize/observer bursts into one position write per frame. */
-  const schedule = (): void => {
-    if (typeof requestAnimationFrame !== 'function') {
-      position()
-      return
-    }
-    if (frame !== 0) return
-    frame = requestAnimationFrame(() => {
-      frame = 0
-      position()
-    })
-  }
-  /** The impact list scrolls on its own; only page movement moves the anchor. */
-  const onScroll = (event: Event): void => {
-    if (event.target instanceof Node && root.contains(event.target)) return
-    schedule()
+    if (!anchor.isConnected && popoverEl === root) closePopover()
   }
 
   const onPointerDown = (event: PointerEvent): void => {
@@ -396,19 +379,14 @@ function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: K
 
   document.body.append(root)
   position()
-  const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => { schedule() })
-  observer?.observe(root)
-  window.addEventListener('scroll', onScroll, true)
-  window.addEventListener('resize', schedule)
 
   const dispose = (): void => {
     clearTimeout(deferred)
     document.removeEventListener('pointerdown', onPointerDown)
     document.removeEventListener('keydown', onKeyDown, true)
-    window.removeEventListener('scroll', onScroll, true)
-    window.removeEventListener('resize', schedule)
-    observer?.disconnect()
-    if (frame !== 0) cancelAnimationFrame(frame)
+    if (anchor.style.getPropertyValue('anchor-name') === ownAnchorName) {
+      anchor.style.setProperty('anchor-name', previousAnchorName, previousPriority)
+    }
   }
   return { position, dispose }
 }
@@ -498,8 +476,8 @@ export function openPopover(opts: PopoverOptions): void {
 
   /** Current step: Esc acts as cancel on the modes step, as back on impact. */
   let step: 'modes' | 'impact' = 'modes'
-  /** Assigned once the shell mounts; the first render runs before that. */
-  let reposition = (): void => {}
+  /** Close if the anchor left the document; assigned once the shell mounts. */
+  let recheck = (): void => {}
 
   const renderModes = (): void => {
     step = 'modes'
@@ -533,13 +511,13 @@ export function openPopover(opts: PopoverOptions): void {
     }
     root.replaceChildren(...children)
     focusFirst(root)
-    reposition()
+    recheck()
   }
 
   /** Move to the impact step (its back/Esc returns to the modes step). */
   const renderImpact = (): void => {
     step = 'impact'
-    renderImpactStep(root, durableOpts, renderModes, reposition, impactOutcome)
+    renderImpactStep(root, durableOpts, renderModes, recheck, impactOutcome)
   }
 
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -556,7 +534,7 @@ export function openPopover(opts: PopoverOptions): void {
 
   renderModes()
   const shell = mountShell(root, anchor, onKeyDown)
-  reposition = shell.position
+  recheck = shell.position
   popoverEl = root
   disposeOutside = shell.dispose
 
