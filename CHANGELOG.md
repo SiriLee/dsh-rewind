@@ -10,6 +10,26 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
+### 体验优化
+
+- **回退面板改用与宿主统计面板相同的 CSS 锚点定位。** 面板随触发点在滚动、缩放和内容重排时移动，不再由脚本夹在视口边缘；需要浏览器支持 CSS Anchor Positioning（DSH 0.2.2 官方 UI 使用同一机制）。
+
+### 其他变更
+
+- **开发目标对齐 DSH `0.2.2-rc.2`。** `@deepseek-ai/dsh-*` 开发依赖与兼容性审计目标升至 rc.2，并补上 rc.2 新增的 `@deepseek-ai/dsh-error` 开发依赖；`engines.dsh` 范围保持 `>=0.2.2-rc.1 <0.3.0-0` 不变。
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Improvements
+
+- **The rewind panel now uses the same CSS anchor positioning as the host stat dialog.** It follows its trigger through scrolling, zooming, and content reflow instead of being clamped to the viewport edge; this requires browser support for CSS Anchor Positioning, the mechanism the official DSH 0.2.2 UI uses.
+
+### Chores
+
+- **Align the development target with DSH `0.2.2-rc.2`.** The `@deepseek-ai/dsh-*` development dependencies and the compatibility audit target move to rc.2, and the new `@deepseek-ai/dsh-error` development dependency is added; the `engines.dsh` range stays `>=0.2.2-rc.1 <0.3.0-0`.
+
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.0...vNEXT
 
 ## [0.22.0] - 2026-11-11
