@@ -333,8 +333,8 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
  * so the mode flow keeps its step-aware back/cancel behavior).
  */
 interface PopoverShell {
-  /** Close if the host removed the anchor; CSS owns placement. */
-  readonly position: () => void
+  /** Re-check the anchor after a content render; CSS owns placement. */
+  readonly recheck: () => void
   /** Remove the popover and its listeners (closePopover also does this). */
   readonly dispose: () => void
 }
@@ -360,8 +360,8 @@ function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: K
   anchor.style.setProperty('anchor-name', ownAnchorName)
   root.style.setProperty('position-anchor', anchorName)
 
-  /** CSS owns placement; close if the host removed the anchor. */
-  const position = (): void => {
+  /** Re-check the anchor after a content render; CSS owns placement. */
+  const recheck = (): void => {
     if (!root.isConnected) return
     if (!anchor.isConnected && popoverEl === root) closePopover()
   }
@@ -381,7 +381,7 @@ function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: K
   }, 0)
 
   document.body.append(root)
-  position()
+  recheck()
 
   const dispose = (): void => {
     clearTimeout(deferred)
@@ -391,7 +391,7 @@ function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: K
       anchor.style.setProperty('anchor-name', previousAnchorName, previousPriority)
     }
   }
-  return { position, dispose }
+  return { recheck, dispose }
 }
 
 /**
@@ -537,7 +537,7 @@ export function openPopover(opts: PopoverOptions): void {
 
   renderModes()
   const shell = mountShell(root, anchor, onKeyDown, opts.placement ?? 'above')
-  recheck = shell.position
+  recheck = shell.recheck
   popoverEl = root
   disposeOutside = shell.dispose
 

@@ -149,8 +149,8 @@ The gain is that the plugin behaves like the official UI rather than beside it:
   gated by the inbox.)
 
 Where there is no official path to join — an in-process paged read — the plugin
-does without: the host's own history loading instead of pagination that accounts
-for the hidden rows.
+does without: a manual "Load earlier" instead of pagination that accounts for
+the hidden rows.
 
 ## Subagents, and what "minimal" means
 

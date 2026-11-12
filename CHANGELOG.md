@@ -16,7 +16,7 @@ and the release steps are documented in
 
 ### 其他变更
 
-- **开发目标对齐 DSH `0.2.2-rc.2`。** `@deepseek-ai/dsh-*` 开发依赖与兼容性审计目标升至 rc.2，并补上 rc.2 新增的 `@deepseek-ai/dsh-error` 开发依赖；`engines.dsh` 范围保持 `>=0.2.2-rc.1 <0.3.0-0` 不变。
+- **兼容性目标对齐 DSH `0.2.2-rc.2`。** 兼容性审计目标升至 rc.2；`engines.dsh` 范围保持 `>=0.2.2-rc.1 <0.3.0-0` 不变。
 
 ---
 
@@ -28,7 +28,7 @@ and the release steps are documented in
 
 ### Chores
 
-- **Align the development target with DSH `0.2.2-rc.2`.** The `@deepseek-ai/dsh-*` development dependencies and the compatibility audit target move to rc.2, and the new `@deepseek-ai/dsh-error` development dependency is added; the `engines.dsh` range stays `>=0.2.2-rc.1 <0.3.0-0`.
+- **Align the compatibility target with DSH `0.2.2-rc.2`.** The compatibility audit target moves to rc.2; the `engines.dsh` range stays `>=0.2.2-rc.1 <0.3.0-0`.
 
 **Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.0...vNEXT
 

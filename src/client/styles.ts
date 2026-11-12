@@ -82,7 +82,7 @@ export const STYLE = `
   overflow-y: auto;
   position-area: none;
   top: max(12px, var(--dsh-frame-overlay-top, 12px));
-  bottom: max(12px, calc(anchor(top) + 8px));
+  bottom: max(12px, calc(anchor(top) + 4px));
   left: max(12px, anchor(left));
   right: 12px;
   position-try-fallbacks: --dsh-rewind-window, --dsh-rewind-opposite, --dsh-rewind-wide-opposite, --dsh-rewind-tall, --dsh-rewind-viewport;
@@ -95,14 +95,14 @@ export const STYLE = `
 /* Below-first mirror of the official fallback order: same-side wide, opposite
    anchored, opposite wide (the official window rule), tall, viewport. */
 .dsh-rewind-popover.dsh-rewind-popover-below {
-  top: max(12px, calc(anchor(bottom) + 8px));
+  top: max(12px, calc(anchor(bottom) + 4px));
   bottom: 12px;
   align-self: start;
   position-try-fallbacks: --dsh-rewind-below-window, --dsh-rewind-below-opposite, --dsh-rewind-window, --dsh-rewind-tall, --dsh-rewind-viewport;
 }
 @position-try --dsh-rewind-below-window {
   position-area: none;
-  top: max(12px, calc(anchor(bottom) + 8px));
+  top: max(12px, calc(anchor(bottom) + 4px));
   bottom: 12px;
   left: 12px;
   right: 12px;
@@ -112,13 +112,13 @@ export const STYLE = `
 }
 @position-try --dsh-rewind-below-opposite {
   top: max(12px, var(--dsh-frame-overlay-top, 12px));
-  bottom: max(12px, calc(anchor(top) + 8px));
+  bottom: max(12px, calc(anchor(top) + 4px));
   align-self: end;
 }
 @position-try --dsh-rewind-window {
   position-area: none;
   top: max(12px, var(--dsh-frame-overlay-top, 12px));
-  bottom: max(12px, calc(anchor(top) + 8px));
+  bottom: max(12px, calc(anchor(top) + 4px));
   left: 12px;
   right: 12px;
   margin: 0;
@@ -126,12 +126,12 @@ export const STYLE = `
   justify-self: safe end;
 }
 @position-try --dsh-rewind-opposite {
-  top: max(12px, calc(anchor(bottom) + 8px));
+  top: max(12px, calc(anchor(bottom) + 4px));
   bottom: 12px;
   align-self: start;
 }
 @position-try --dsh-rewind-wide-opposite {
-  top: max(12px, calc(anchor(bottom) + 8px));
+  top: max(12px, calc(anchor(bottom) + 4px));
   bottom: 12px;
   left: 12px;
   right: 12px;
