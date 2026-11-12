@@ -92,11 +92,28 @@ export const STYLE = `
   min-height: 0;
   margin: 0;
 }
+/* Below-first mirror of the official fallback order: same-side wide, opposite
+   anchored, opposite wide (the official window rule), tall, viewport. */
 .dsh-rewind-popover.dsh-rewind-popover-below {
   top: max(12px, calc(anchor(bottom) + 8px));
   bottom: 12px;
   align-self: start;
-  position-try-fallbacks: --dsh-rewind-wide-opposite, --dsh-rewind-window, --dsh-rewind-tall, --dsh-rewind-viewport;
+  position-try-fallbacks: --dsh-rewind-below-window, --dsh-rewind-below-opposite, --dsh-rewind-window, --dsh-rewind-tall, --dsh-rewind-viewport;
+}
+@position-try --dsh-rewind-below-window {
+  position-area: none;
+  top: max(12px, calc(anchor(bottom) + 8px));
+  bottom: 12px;
+  left: 12px;
+  right: 12px;
+  margin: 0;
+  align-self: start;
+  justify-self: safe end;
+}
+@position-try --dsh-rewind-below-opposite {
+  top: max(12px, var(--dsh-frame-overlay-top, 12px));
+  bottom: max(12px, calc(anchor(top) + 8px));
+  align-self: end;
 }
 @position-try --dsh-rewind-window {
   position-area: none;
