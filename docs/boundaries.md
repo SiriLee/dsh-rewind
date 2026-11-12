@@ -12,8 +12,8 @@
 ## Position
 
 Conversation rewind is the product. File restore is an accessory: a rewind
-usually means "undo what that turn did to the files too", and a before-write
-checkpoint is enough for that. The plugin is not a workspace history system, a session
+usually means "undo what that turn did to the files too", and a checkpoint
+is enough for that. The plugin is not a workspace history system, a session
 manager, or a toolkit other plugins build on, and it does not grow into one.
 It is one plugin in an agent's workflow, not the workflow itself.
 
@@ -36,12 +36,11 @@ Two rules keep it small:
 ## The file boundary
 
 The workflow this plugin targets is an agent editing text through `write` and
-`edit`. For that workflow the record is deterministic by construction: the
-before-state is captured before the write lands. The plugin also re-checks the
-tracked list at each user-message boundary, so an external change to an
-already-tracked file enters the record at the next boundary — a low-cost
-fallback, not a guarantee. A restore writes back only backups, reconciled
-against the live disk. The mechanics and the exact cases are in the
+`edit`. The record is deterministic by construction: at each user-message
+boundary, before the turn runs, the plugin re-reads every tracked file and
+records its state in the checkpoint. A file not yet tracked enters the record at
+first touch, with its pre-touch state. A restore writes back only backups,
+reconciled against the live disk. The mechanics and the exact cases are in the
 [file-rewind tracking boundary](compat/tracking-boundary.md).
 
 The boundary follows from the model: a file that no write-class tool ever handled

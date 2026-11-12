@@ -17,5 +17,5 @@ body:
     attributes:
       label: Checklist
       options:
-        - label: 'Read the README ([EN](https://github.com/SiriLee/dsh-rewind/blob/main/README.en.md) · [中文](https://github.com/SiriLee/dsh-rewind/blob/main/README.md))'
+        - label: 'Read the README ([EN](https://github.com/SiriLee/dsh-rewind/blob/main/README.md) · [中文](https://github.com/SiriLee/dsh-rewind/blob/main/README.zh.md))'
         - label: 'Checked [existing issues](https://github.com/SiriLee/dsh-rewind/issues) for duplicates'
