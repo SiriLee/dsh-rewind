@@ -131,8 +131,8 @@ compensation; reported upstream.
 `paginate` counts append-origin messages, not `visibility`; hidden rows keep
 `hasMore` true. **Impact:** when the target predates the loaded window, the
 transcript cannot show the target until earlier history is paged in — display
-only, no data loss. **Stance:** no host patch; the host auto-loads, with a manual
-control.
+only, no data loss. **Stance:** no host patch; one manual load starts the
+paging.
 
 ## Verification coverage
 
