@@ -127,11 +127,12 @@ injects only `credentials`. **Impact:** none now — the two read-only queries u
 exact `/api` routes and never read `owner.webServer`. **Stance:** no
 compensation; reported upstream.
 
-**U11 · Upstream constraint — display only, manual paging.**
+**U11 · Upstream constraint — display only, paged loading.**
 `paginate` counts append-origin messages, not `visibility`; hidden rows keep
 `hasMore` true. **Impact:** when the target predates the loaded window, the
-transcript shows only "Load earlier" until the user pages back — display only,
-no data loss. **Stance:** no host patch; manual paging.
+transcript cannot show the target until earlier history is paged in — display
+only, no data loss. **Stance:** no host patch; the host auto-loads, with a manual
+control.
 
 ## Verification coverage
 
