@@ -498,6 +498,7 @@ export function apply(ctx: ClientContext): void {
         time: row.time,
         preview: row.text,
         anchor,
+        placement: 'below',
         t,
         onRewind: mode => { void runRewindAndFill(face, row.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
       })

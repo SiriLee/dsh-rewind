@@ -172,6 +172,7 @@ function RetractButton({ target, sessionId, deps }: {
       session,
       preview: target.text ?? '',
       anchor,
+      placement: 'below',
       t: deps.t,
       retract: { itemId: target.itemId, text: target.text },
       onRetract: () => { void retractPending(session, target.itemId, target.text, deps.setComposerText, deps.restoreImages) },

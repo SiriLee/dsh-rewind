@@ -32,6 +32,8 @@ export interface PopoverOptions {
   readonly preview: string
   /** The element the popover is positioned against (outside-click ignore target). */
   readonly anchor: HTMLElement
+  /** Preferred side of the anchor; defaults to above. */
+  readonly placement?: 'above' | 'below'
   readonly t: Translate
   /**
    * Execute one rewind in the given mode. The popover closes itself first;
@@ -346,7 +348,8 @@ interface PopoverShell {
  * resizing and content reflow. The shell only owns dismissal and the
  * anchor-name lifecycle.
  */
-function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: KeyboardEvent) => void): PopoverShell {
+function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: KeyboardEvent) => void, placement: 'above' | 'below' = 'above'): PopoverShell {
+  if (placement === 'below') root.classList.add(CLASS.popoverBelow)
   const anchorName = `--dsh-rewind-popover-${++anchorSequence}`
   const previousAnchorName = anchor.style.getPropertyValue('anchor-name')
   const previousPriority = anchor.style.getPropertyPriority('anchor-name')
@@ -439,7 +442,7 @@ function openRetractPopover(opts: PopoverOptions): void {
     actions,
   )
 
-  const shell = mountShell(root, anchor, onKeyDown)
+  const shell = mountShell(root, anchor, onKeyDown, opts.placement ?? 'above')
   popoverEl = root
   disposeOutside = shell.dispose
   focusFirst(root)
@@ -533,7 +536,7 @@ export function openPopover(opts: PopoverOptions): void {
   }
 
   renderModes()
-  const shell = mountShell(root, anchor, onKeyDown)
+  const shell = mountShell(root, anchor, onKeyDown, opts.placement ?? 'above')
   recheck = shell.position
   popoverEl = root
   disposeOutside = shell.dispose

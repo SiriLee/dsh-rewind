@@ -136,6 +136,22 @@ describe('openPopover (CSS anchor placement)', () => {
     const panel = document.querySelector<HTMLElement>(`.${CLASS.popover}`)
     expect(panel?.style.getPropertyValue('position-anchor')).toBe(generated)
   })
+
+  it('marks a below-side placement', () => {
+    const anchor = document.createElement('button')
+    document.body.append(anchor)
+    openPopover({
+      session: fakeSession(),
+      seq: 5,
+      time: 0,
+      preview: 'hello',
+      anchor,
+      placement: 'below',
+      t,
+      onRewind: () => {},
+    })
+    expect(document.querySelector(`.${CLASS.popover}`)?.classList.contains(CLASS.popoverBelow)).toBe(true)
+  })
 })
 
 describe('openPopover (the pending retract confirmation)', () => {

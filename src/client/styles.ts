@@ -11,6 +11,7 @@
 export const CLASS = {
   action: 'dsh-rewind-action',
   popover: 'dsh-rewind-popover',
+  popoverBelow: 'dsh-rewind-popover-below',
   popoverTitle: 'dsh-rewind-popover-title',
   popoverTarget: 'dsh-rewind-popover-target',
   popoverOption: 'dsh-rewind-popover-option',
@@ -90,6 +91,12 @@ export const STYLE = `
   height: fit-content;
   min-height: 0;
   margin: 0;
+}
+.dsh-rewind-popover.dsh-rewind-popover-below {
+  top: max(12px, calc(anchor(bottom) + 8px));
+  bottom: 12px;
+  align-self: start;
+  position-try-fallbacks: --dsh-rewind-wide-opposite, --dsh-rewind-window, --dsh-rewind-tall, --dsh-rewind-viewport;
 }
 @position-try --dsh-rewind-window {
   position-area: none;
