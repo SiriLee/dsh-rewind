@@ -10,7 +10,33 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.1...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.2...vNEXT
+
+## [0.22.2] - 2026-11-14
+
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
+### 问题修复
+
+- **Firefox 上回退面板不再被画到视口外。** Firefox 把面板的锚点按消息滚动区的内容坐标解析，滚动之后面板会落到屏幕外；本版在 Firefox 上检测到面板已出视口时，改用触发点位置兜底，其余情况不介入。兜底后的面板不再跟随滚动与缩放，等 Firefox 或宿主修好后移除。 @SiriLee
+
+### 其他变更
+
+- **兼容性目标对齐 DSH `0.2.2-rc.3`。** 兼容性审计目标升至 rc.3，rc.3 未改动本插件依赖的接口；`engines.dsh` 范围保持 `>=0.2.2-rc.1 <0.3.0-0` 不变。 @SiriLee
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **The rewind panel is no longer painted outside the viewport on Firefox.** Firefox resolves the panel's anchor in the message scroller's content space, so after scrolling the panel lands off-screen; on Firefox this release falls back to the trigger's rect when the official CSS has already put the panel out of the viewport, and otherwise does nothing. A pinned panel no longer follows scroll or zoom, and the fallback is removed once Firefox or the host is fixed. @SiriLee
+
+### Chores
+
+- **Align the compatibility target with DSH `0.2.2-rc.3`.** The compatibility audit target moves to rc.3, which does not touch the interfaces this plugin depends on; the `engines.dsh` range stays `>=0.2.2-rc.1 <0.3.0-0`. @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.1...v0.22.2
 
 ## [0.22.1] - 2026-11-12
 
