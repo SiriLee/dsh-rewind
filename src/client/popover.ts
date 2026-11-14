@@ -19,6 +19,7 @@ import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client
 import { chatNodesOf, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { PreviewCall, PreviewOutcome } from './host-api.ts'
 import type { RewindKey } from './locales.ts'
+import { guardPlacement } from './placement-guard.ts'
 import { CLASS } from './styles.ts'
 
 type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
@@ -359,11 +360,13 @@ function mountShell(root: HTMLElement, anchor: HTMLElement, onKeyDown: (event: K
     : `${previousList} ${anchorName}`
   anchor.style.setProperty('anchor-name', ownAnchorName)
   root.style.setProperty('position-anchor', anchorName)
+  const recheckPlacement = guardPlacement(root, anchor, placement)
 
   /** Re-check the anchor after a content render; CSS owns placement. */
   const recheck = (): void => {
     if (!root.isConnected) return
     if (!anchor.isConnected && popoverEl === root) closePopover()
+    recheckPlacement()
   }
 
   const onPointerDown = (event: PointerEvent): void => {
