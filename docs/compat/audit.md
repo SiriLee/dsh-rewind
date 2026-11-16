@@ -71,8 +71,7 @@ Assistant rows have `conversation.chat.assistant-actions`; user / steering rows
 have no counterpart, and an unread steering bubble has no component at all.
 **Impact:** none on behavior — the durable action is injected through the row
 entry's own `component` and `actions` row, closer to the official path and
-lighter than a DOM pass. **Stance:** keep the takeover; reported upstream
-(Discussions #8345).
+lighter than a DOM pass. **Stance:** keep the takeover.
 
 **U3 · Upstream constraint — private seam, maintenance watch.**
 `isVisibleChatNode` drives order, grouping, turn navigation and presentation but
