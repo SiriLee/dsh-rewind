@@ -134,6 +134,18 @@ export async function runRewindAndFill(
   // issuing the command: a repeated rewind of the same message must wait
   // for THIS command's node, not settle on the previous one.
   const known = knownCommandSeqs(session, chatOf, node => isExecutedRewindCommand(node, seq))
+  // Capture the target's content before issuing the command: the read after the
+  // command is not guaranteed to succeed, and a missed read silently skips the
+  // refill. Best-effort — a read failure must not block the rewind.
+  let text: string | undefined
+  let images: readonly MessageImageRef[] | undefined
+  try {
+    const chatBefore = chatOf(session)
+    text = messageTextAt(chatBefore, seq)
+    images = messageAttachmentsAt(chatBefore, seq)
+  } catch (error) {
+    rewindLog.warn('refill', `reading target content for @${seq} threw`, error)
+  }
   let result: Awaited<ReturnType<SessionFace['command']>>
   try {
     result = await session.command(`/${ENGINE_COMMAND} @${seq} ${mode}`)
@@ -182,16 +194,8 @@ export async function runRewindAndFill(
   if (!isMainViewSession(session.sessionId)) {
     return
   }
-  let text: string | undefined
-  let images: readonly MessageImageRef[] | undefined
-  try {
-    const chat = chatOf(session)
-    text = messageTextAt(chat, seq)
-    images = messageAttachmentsAt(chat, seq)
-  } catch (error) {
-    rewindLog.warn('refill', `reading target content for @${seq} threw`, error)
-    return
-  }
+  // `text`/`images` were captured before the command: the read after it is not
+  // guaranteed to succeed, so they are not re-read here (SiriLee/dsh-rewind#94).
   // Restore the withdrawn message's images FIRST: adding draft attachments
   // never clobbers an in-progress draft, so this is NOT gated by the
   // empty-composer guard below. Best-effort — a restore failure leaves the
