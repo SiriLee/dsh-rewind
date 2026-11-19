@@ -86,6 +86,29 @@ function fakeSession(target: ChatConversationViewNode = userNode(TARGET)) {
 }
 
 /**
+ * A fake session whose rewind command makes the post-command chat read fail: the
+ * target row is no longer readable from the chat snapshot afterwards. A stand-in
+ * for any post-command read-channel failure — the withdrawn text must therefore
+ * be captured BEFORE the command runs (issue #94).
+ */
+function fakeSessionShadowing(target: ChatConversationViewNode = userNode(TARGET)) {
+  let chat = makeChat([target])
+  const command = vi.fn(async () => {
+    chat = makeChat([executedRewind(COMMAND_SEQ, TARGET)])
+    return { ok: true, value: { matched: true } }
+  })
+  const session = {
+    sessionId: 's1',
+    command,
+    subscribe: vi.fn(() => () => {}),
+    getSnapshot: vi.fn(() => ({})),
+  } as unknown as SessionFace
+  const chatOf: ChatOf = () => chat
+  const watch: ChatWatch = () => () => {}
+  return { session, chatOf, command, watch }
+}
+
+/**
  * A fake session that does NOT append the executed rewind node inside
  * `command`: the first check misses, and the refill only proceeds once the
  * chat-update `watch` fires (0.1.2 signal path). Exposes a manual trigger.
@@ -145,6 +168,23 @@ describe('runRewindAndFill (durable rewind refill)', () => {
     expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
     expect(info).not.toHaveBeenCalled()
     expect(debug).not.toHaveBeenCalled()
+  })
+
+  it('captures the withdrawn text before the command can invalidate the chat read (issue #94)', async () => {
+    const { session, chatOf, watch } = fakeSessionShadowing()
+    const setComposerText = vi.fn(() => true)
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
+    expect(setComposerText).toHaveBeenCalledTimes(1)
+    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+  })
+
+  it('captures the withdrawn image references before the command can invalidate the chat read (issue #94)', async () => {
+    const { session, chatOf, watch } = fakeSessionShadowing(imageTextNode(TARGET))
+    const setComposerText = vi.fn(() => true)
+    const restoreImages = vi.fn(async () => {})
+    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
+    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef()])
+    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
   })
 
   it('skips the refill when the composer already holds a draft (guard)', async () => {
