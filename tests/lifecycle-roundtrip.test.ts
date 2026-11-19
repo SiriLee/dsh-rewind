@@ -61,8 +61,11 @@ interface Mounted {
 }
 
 /** One fake fs service, only the members `captureBefore` reads. */
-const fakeFs = () => ({
-  resolve: async (path: string) => ({ displayPath: path }),
+const fakeFs = (resolveFault?: Error) => ({
+  resolve: async (path: string) => {
+    if (resolveFault !== undefined) throw resolveFault
+    return { displayPath: path }
+  },
   // Every path this double names is a host path (the local backend).
   processPathFromHostPath: (hostPath: string) => hostPath,
   stat: async () => ({ type: 'file', size: 3, mode: 0o644 }),
@@ -91,7 +94,7 @@ function collect(fn: unknown, into: Disposer[]): void {
  * @param options - the optional services the mount may reach (a real fs).
  * @returns the mount's recorded surface plus its disposer.
  */
-function mount(options: { fs?: boolean } = {}): Mounted {
+function mount(options: { fs?: boolean; resolveFault?: Error } = {}): Mounted {
   const disposers: Disposer[] = []
   const commands = new Map<string, { name: string; description?: string; handler: (invocation: unknown) => Promise<unknown> }>()
   const handlers = new Map<string, (...args: never[]) => unknown>()
@@ -129,7 +132,7 @@ function mount(options: { fs?: boolean } = {}): Mounted {
     inject: (services: readonly string[], callback: (scoped: unknown) => void) => {
       if (services.includes('fs') && options.fs === true) {
         callback({
-          fs: fakeFs(),
+          fs: fakeFs(options.resolveFault),
           // Absolute file_paths here: the base value only has to exist.
           workingDirectory: { ensure: async () => root },
           // The injected scope is a real Context: it carries `effect` for the
@@ -270,6 +273,23 @@ describe('host mount lifecycle', () => {
     await dispatchWrite(mounted, session, target, 'two')
     checkpoints = await readCheckpoints(session)
     expect((checkpoints[0]!['files'] as Record<string, unknown>)[target]).toMatchObject({ v: 1, size: 3 })
+    await mounted.dispose()
+  })
+
+  it('warns (and records nothing) when a first-touch resolve fails', async () => {
+    const mounted = mount({ fs: true, resolveFault: new Error('resolve failed') })
+    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
+    const session = Session.create(SessionId('resolve-fault-session'))
+    const message = textMessage('first')
+    expect(await preStep(mounted, session, [message])).toMatchObject({ kind: 'enter' })
+    session.append('user/message', message, { surfaceOp: 'append' })
+
+    await dispatchWrite(mounted, session, join(root, 'a.txt'), 'two')
+
+    expect(mounted.logger.warn).toHaveBeenCalledWith(expect.stringContaining('first-touch resolve failed'))
+    const checkpoints = await readCheckpoints(session)
+    expect(checkpoints).toHaveLength(1)
+    expect(checkpoints[0]!['files']).toEqual({})
     await mounted.dispose()
   })
 

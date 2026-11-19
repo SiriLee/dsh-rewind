@@ -233,18 +233,9 @@ async function ensureStoreSession(
   for (const warning of warnings) log(`[dsh-rewind] ${warning}`)
 }
 
-/** Resolve a path against the session's current directory, or undefined on resolution failure. */
-async function resolveTarget(
-  fs: FileSystem,
-  path: string,
-  cwd: string,
-  signal?: AbortSignal,
-): Promise<Awaited<ReturnType<FileSystem['resolve']>> | undefined> {
-  try {
-    return await fs.resolve(path, { cwd, signal })
-  } catch {
-    return undefined
-  }
+/** True for the harness fs abort (a normal cancel, never a diagnostic). */
+function isFsAbort(error: unknown): boolean {
+  return (error as { readonly code?: unknown } | null)?.code === 'FS_ABORTED'
 }
 
 /**
@@ -267,8 +258,17 @@ async function captureFirstTouch(
   const path = mutationPathOf(exec)
   if (path === undefined) return
   const cwd = await workingDirectory.ensure(agent, exec.signal)
-  const target = await resolveTarget(fs, path, cwd, exec.signal)
-  if (target === undefined) return
+  let target: Awaited<ReturnType<FileSystem['resolve']>>
+  try {
+    target = await fs.resolve(path, { cwd, signal: exec.signal })
+  } catch (error) {
+    // A genuine resolution failure silently loses this path's checkpoint; a
+    // cancelled run is expected and stays silent.
+    if (!isFsAbort(error)) {
+      ctx.logger.warn(`[dsh-rewind] first-touch resolve failed for ${path}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return
+  }
   // A non-local backend has no host path a node:fs restore could safely touch.
   if (fs.processPathFromHostPath(target.displayPath) === undefined) return
   await ensureStoreSession(store, agent.session, message => ctx.logger.warn(message))

@@ -85,6 +85,18 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
       .toContain('host query is unavailable')
     expect(optionHints()).not.toContain('popover.checking')
   })
+
+  it('reports an unexpected probe fault and still settles the modes step', async () => {
+    const error = vi.spyOn(console, 'error').mockReturnValue(undefined)
+    open(() => { throw new Error('probe boom') })
+    await settle()
+    const ours = error.mock.calls.filter(call => call[0] === '[dsh-rewind:preview]')
+    expect(ours).toHaveLength(1)
+    expect((ours[0]?.[2] as Error).message).toBe('probe boom')
+    expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
+      .toContain('unexpected error')
+    expect(optionHints()).not.toContain('popover.checking')
+  })
 })
 
 describe('openPopover (the impact step reports checkpointing-off)', () => {

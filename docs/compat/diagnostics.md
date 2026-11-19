@@ -33,8 +33,8 @@ console filter:
 | --- | --- |
 | `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
 | `refill` | The composer refill after a rewind (command/wait/refill throws, a rejected or unmatched command, an outcome that never settles) |
-| `preview` | The preview / candidate host queries behind the mode popover and the `/rewind` picker (request failure, invalid result, or timeout) |
-| `action` | Per-message action mount and click issues (e.g. no session binding) |
+| `preview` | The preview / candidate host queries behind the mode popover and the `/rewind` picker (request failure, invalid result, timeout, or an unexpected fault while rendering the panel) |
+| `action` | Per-message action mount and click issues (e.g. no session binding, or a failed action render) |
 | `retract` | The pending-steering retract path (the remove lost the race, or the remove threw) |
 | `visibility` | The Chat-snapshot visibility wrapper (install probe, subscription, or rebuild failures) |
 | `settings` | The snapshot-cleanup settings card |

@@ -10,7 +10,7 @@
  * detached method fails here instead of only in the browser. The official row
  * shape comes from `tests/support/chat-row.ts`.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, createElement, memo, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -222,6 +222,24 @@ describe('row takeover', () => {
     const container = render(ledger.store[0]!.component)
     expect(container.textContent).toContain('message body')
     expect(container.querySelector('[data-extra]')).toBeNull()
+    dispose()
+  })
+
+  it('reports a failed action render, keeping the official actions row', () => {
+    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
+    const ours = (): unknown[][] => warn.mock.calls.filter(call => call[0] === '[dsh-rewind:action]')
+    const ledger = new FakeLedger([{ component: officialRow, options: { key: 'user' } }])
+    const dispose = installRowAction({
+      slots: ledger,
+      render: () => { throw new Error('render boom') },
+    })
+    const container = render(ledger.store[0]!.component)
+    // The official row is intact; only the action is missing, and the fault is
+    // not silent.
+    expect(actionOrder(container)).toEqual(['copy'])
+    expect(ours()).toHaveLength(1)
+    expect((ours()[0]?.[2] as Error).message).toBe('render boom')
+    warn.mockRestore()
     dispose()
   })
 

@@ -22,6 +22,7 @@
  */
 
 import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { rewindLog } from './log.ts'
 
 /** The keyed slot whose entries render one Chat row per node kind. */
 const CHAT_NODE_SLOT = 'conversation.chat.node'
@@ -109,9 +110,10 @@ function targetOf(props: Record<string, unknown>): Omit<RowAction, 'text'> | und
  * while the row renderer stays hook-free (the user/steering renderer is today).
  * @param official - the official renderer, called with the composed row props.
  * @param render - the action element factory.
+ * @param onFault - receives a failed action render (the row is still kept).
  * @returns the renderer that replaces the official one in the ledger.
  */
-function rowWithAction(official: Renderer, render: RowActionRenderer): Renderer {
+function rowWithAction(official: Renderer, render: RowActionRenderer, onFault: (error: unknown) => void): Renderer {
   return function RowWithAction(props: Record<string, unknown>): ReactNode {
     // Keep a host-supplied chain; a shadow's forwarded props may omit it.
     const row = official(typeof props['renderSlotChain'] === 'function'
@@ -132,8 +134,9 @@ function rowWithAction(official: Renderer, render: RowActionRenderer): Renderer 
         return cloneElement(actionsRow as ReactElement<{ extraActions?: ReactNode }>, {
           extraActions: <Fragment>{existing}{element}</Fragment>,
         })
-      } catch {
+      } catch (error) {
         // A failing action must leave the official actions row intact.
+        onFault(error)
         return actionsRow
       }
     }
@@ -163,11 +166,19 @@ export function installRowAction({ slots, render }: RowActionMount): () => void 
   /** Taken-over entries and the exact identity each replaced. */
   const taken = new Map<LedgerEntry, { readonly original: unknown; readonly replacement: Renderer }>()
 
+  /** Report the first action-render fault of this mount once, never per row. */
+  let faultReported = false
+  const reportFault = (error: unknown): void => {
+    if (faultReported) return
+    faultReported = true
+    rewindLog.warn('action', 'rewind action render failed; the official actions row was kept', error)
+  }
+
   const takeOver = (entry: LedgerEntry): boolean => {
     if (taken.has(entry)) return false
     const official = rendererOf(entry.component)
     if (official === undefined) return false
-    const replacement = rowWithAction(official, render)
+    const replacement = rowWithAction(official, render, reportFault)
     taken.set(entry, { original: entry.component, replacement })
     entry.component = replacement
     return true

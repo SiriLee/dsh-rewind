@@ -19,6 +19,7 @@ import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client
 import { chatNodesOf, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { PreviewCall, PreviewOutcome } from './host-api.ts'
 import type { RewindKey } from './locales.ts'
+import { rewindLog } from './log.ts'
 import { guardPlacement } from './placement-guard.ts'
 import { CLASS } from './styles.ts'
 
@@ -323,7 +324,10 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
       closePopover()
       opts.onRewind('both')
     })
-  })().catch(() => {
+  })().catch((error: unknown) => {
+    // The step still has to settle, but an unexpected fault is the only trace a
+    // report can carry — never swallow it.
+    rewindLog.error('preview', `impact step failed for @${seq}`, error)
     impact.textContent = t('popover.impact.failed', { message: 'unexpected error' })
   }).finally(() => { recheck() })
 }
@@ -561,7 +565,9 @@ export function openPopover(opts: PopoverOptions): void {
       bothState = { state: 'error', message: outcome?.kind === 'error' ? outcome.text : 'preview request timed out' }
     }
     renderModes()
-  })().catch(() => {
+  })().catch((error: unknown) => {
+    // An unexpected fault must settle the step AND leave a console trace.
+    rewindLog.error('preview', 'mode probe failed', error)
     bothState = { state: 'error', message: 'unexpected error' }
     renderModes()
   })
