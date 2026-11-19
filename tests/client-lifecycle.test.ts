@@ -68,8 +68,13 @@ interface FakeNodeEntry {
   readonly options: { readonly key?: string }
 }
 
+/** Which command surface the mount finds: absent, throwing, or the shipped one. */
+interface MountOptions {
+  readonly commandUi?: unknown
+}
+
 /** Mount the client half on a minimal fake context. */
-function mountClient(nodes: FakeNodeEntry[] = []): Mounted {
+function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): Mounted {
   const disposers: Disposer[] = []
   const slotEntries: { name: string; id?: string; key?: string }[] = []
   const decorated: string[] = []
@@ -97,6 +102,13 @@ function mountClient(nodes: FakeNodeEntry[] = []): Mounted {
     entries: (key: string) => (key === 'conversation.chat.node' ? nodes : []),
     subscribe: () => () => {},
   }
+  // The shipped command surface: it records every decoration it accepts.
+  const shippedCommandUi = {
+    decorate: (spec: { name: string }) => { decorated.push(spec.name); return () => {} },
+  }
+  // `commandUi` is a required inject, so the fake always provides it; a probe
+  // can swap in a surface that refuses one name.
+  const commandUi = options.commandUi ?? shippedCommandUi
   const ctx = {
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
     locale,
@@ -105,9 +117,7 @@ function mountClient(nodes: FakeNodeEntry[] = []): Mounted {
       binding: () => undefined,
       list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }) },
     },
-    get: (name: string) => (name === 'commandUi'
-      ? { decorate: (spec: { name: string }) => { decorated.push(spec.name); return () => {} } }
-      : undefined),
+    get: (name: string) => (name === 'commandUi' ? commandUi : undefined),
     // The per-entry configuration form the cleanup card stages over. A minimal
     // read/write face is enough for the registration probe; the card's own
     // behaviour is covered by tests/client-settings-card.test.ts.
@@ -178,6 +188,39 @@ describe('client plugin lifecycle', () => {
     expect(mounted.slotEntries[0]?.key).toBe('dsh-rewind-plugin')
     expect(mounted.slotEntries[1]?.id).toBe('dsh-rewind-pending')
     expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
+    mounted.dispose()
+  })
+
+  it('keeps mounting when one command decoration is refused', () => {
+    // `decorate` throws when the name is already owned — another plugin may have
+    // taken `/rewind` — so the refused name must cost that picker only, never
+    // the other name, and never the row action mounted after the loop.
+    const attempted: string[] = []
+    const accepted: string[] = []
+    const conflict = {
+      decorate: (spec: { name: string }) => {
+        attempted.push(spec.name)
+        if (spec.name === 'rewind') throw new Error('command already decorated')
+        accepted.push(spec.name)
+        return () => {}
+      },
+    }
+    const officialUser = (): null => null
+    const nodes: FakeNodeEntry[] = [{ component: officialUser, options: { key: 'user' } }]
+    const mounted = mountClient(nodes, { commandUi: conflict })
+    expect(() => { apply(mounted.ctx) }).not.toThrow()
+    expect(attempted).toEqual(['rewind', 'undo'])
+    expect(accepted).toEqual(['undo'])
+    // The row takeover is what a thrown decoration used to take with it, and the
+    // registrations after the loop still run (the takeover tick included).
+    expect(nodes[0]!.component).not.toBe(officialUser)
+    expect(mounted.slotEntries.map(entry => entry.name)).toEqual(
+      expect.arrayContaining([
+        'plugins.bundle.config',
+        'conversation.chat.node',
+        'conversation.session.header.actions',
+      ]),
+    )
     mounted.dispose()
   })
 

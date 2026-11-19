@@ -475,7 +475,15 @@ export function apply(ctx: ClientContext): void {
       },
     }
     for (const name of ['rewind', 'undo'] as const) {
-      yield commandUi.decorate({ name, ...rewindPopupSpec })
+      try {
+        yield commandUi.decorate({ name, ...rewindPopupSpec })
+      } catch (error) {
+        // `decorate` throws when the name is already owned — another plugin may
+        // have taken `/rewind` — and a refused decoration must cost that one
+        // picker only: the mount keeps going, so the row action, the pending
+        // bridge and the visibility layer still come up.
+        rewindLog.warn('command', `the ${name} decoration was refused or malformed`, error)
+      }
     }
 
     // ---- per-message rewind action (a child of the official actions row) ----
