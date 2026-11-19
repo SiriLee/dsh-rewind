@@ -23,6 +23,7 @@ export const CLASS = {
   popoverPrimary: 'dsh-rewind-popover-primary',
   popoverGhost: 'dsh-rewind-popover-ghost',
   guardHint: 'dsh-rewind-guard-hint',
+  rowActionSeat: 'dsh-rewind-row-action-seat',
 } as const
 
 /** One injected stylesheet (scoped under `.dsh-rewind-*`). */
@@ -52,6 +53,14 @@ export const STYLE = `
     background: var(--dsw-alias-interactive-bg-hover);
     color: var(--dsw-alias-label-secondary);
   }
+}
+
+/* The fallback seat (a row whose component was replaced by another plugin): an
+   inline peer of Copy inside the row's own action cluster, so the action keeps
+   the cluster's spacing and hover reveal instead of drawing a box of its own. */
+.dsh-rewind-row-action-seat {
+  display: inline-flex;
+  align-items: center;
 }
 
 .dsh-rewind-popover {

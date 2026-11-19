@@ -15,13 +15,21 @@
  * mounts, unmounts and inherits the row's visibility with the Copy button
  * instead of chasing the DOM.
  *
+ * A row whose element carries no actions builder has no extension point in the
+ * element tree: another plugin replaced the row component and forwarded props
+ * without it (#93). That case seats the action into the cluster the row already
+ * rendered — between the clock and Copy — as a single portaled child, re-seated
+ * if a re-render drops it. It is a fallback, not a second layout.
+ *
  * Any shape mismatch returns the official element as-is: the worst outcome is a
  * missing action, never a broken row.
  *
  * @module dsh-rewind/client/mount
  */
 
-import { cloneElement, Fragment, isValidElement, type ReactElement, type ReactNode } from 'react'
+import { cloneElement, Fragment, isValidElement, useLayoutEffect, useRef, useState, type ReactElement, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { CLASS } from './styles.ts'
 
 /** The keyed slot whose entries render one Chat row per node kind. */
 const CHAT_NODE_SLOT = 'conversation.chat.node'
@@ -102,6 +110,78 @@ function targetOf(props: Record<string, unknown>): Omit<RowAction, 'text'> | und
   return { sessionId, seq: data.seq, time: data.time }
 }
 
+/** The flow item that owns one rendered row: the harness addresses each row by it. */
+const CHAT_NODE_KEY_ATTR = '[data-chat-node-key]'
+
+/**
+ * The row's message text, read from the node itself. The regular path takes it
+ * from the actions-row constructor; a shadowed row never calls that constructor,
+ * and an empty preview only costs the popover its excerpt.
+ * @param node - the row's chat node.
+ */
+function textOfNode(node: unknown): string {
+  const content = (node as { readonly data?: { readonly content?: readonly { readonly type?: string; readonly text?: string }[] } } | undefined)?.data?.content
+  if (content === undefined) return ''
+  return content.map(block => (block.type === 'text' && typeof block.text === 'string' ? block.text : '')).join('')
+}
+
+/**
+ * Find the action cluster inside one rendered row: the parent of its last
+ * button. The cluster renders last, after any button nested in the message body
+ * (a code block's Copy, a link action), so the last button is its own.
+ * @param row - one rendered chat row, or the flow item wrapping it.
+ */
+function actionClusterOf(row: HTMLElement): HTMLElement | undefined {
+  const buttons = [...row.querySelectorAll('button')]
+    .filter(button => button.dataset['pendingRetract'] === undefined)
+  const cluster = buttons.at(-1)?.parentElement
+  return cluster instanceof HTMLElement && cluster.querySelector('button') !== null ? cluster : undefined
+}
+
+/**
+ * Seat one action inside the row's own action cluster.
+ *
+ * The row is followed by an empty seat; once mounted it finds the flow item,
+ * inserts a span before the cluster's first button (Copy) and portals the action
+ * into it. The action therefore lands right after the clock, sharing the
+ * cluster's spacing, hover reveal and alignment instead of drawing its own box.
+ * A mutation observer re-seats the span when a re-render replaces the cluster's
+ * children, and unmounting removes both the span and the observer.
+ */
+function RowActionSeat({ children }: { readonly children: ReactNode }): ReactNode {
+  const seatRef = useRef<HTMLSpanElement>(null)
+  const [host, setHost] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    const seat = seatRef.current
+    if (seat === null) return undefined
+    const rowEl = seat.closest<HTMLElement>(CHAT_NODE_KEY_ATTR) ?? seat.parentElement
+    if (rowEl === null) return undefined
+    const hostEl = document.createElement('span')
+    hostEl.className = CLASS.rowActionSeat
+    const place = (): void => {
+      const cluster = actionClusterOf(rowEl)
+      if (cluster === undefined || hostEl.isConnected) return
+      const first = cluster.querySelector('button')
+      if (first === null) cluster.append(hostEl)
+      else cluster.insertBefore(hostEl, first)
+    }
+    place()
+    if (!hostEl.isConnected) return undefined
+    setHost(hostEl)
+    const observer = new MutationObserver(() => { place() })
+    observer.observe(rowEl, { childList: true, subtree: true })
+    return () => {
+      observer.disconnect()
+      hostEl.remove()
+    }
+  }, [])
+  return (
+    <span ref={seatRef} style={{ display: 'contents' }}>
+      {host === null ? null : createPortal(children, host)}
+    </span>
+  )
+}
+
 /**
  * Wrap one official renderer so the actions row it constructs gains the action.
  * The renderer is invoked directly instead of being rendered as an element:
@@ -120,7 +200,23 @@ function rowWithAction(official: Renderer, render: RowActionRenderer): Renderer 
     const target = targetOf(props)
     if (target === undefined || !isValidElement(row)) return row
     const actions = (row.props as { actions?: unknown }).actions
-    if (typeof actions !== 'function') return row
+    if (typeof actions !== 'function') {
+      // A shadowed row: no constructor to extend, so seat the action in the
+      // cluster the row already rendered instead of dropping it (#93).
+      let fallback: ReactNode
+      try {
+        fallback = render({ ...target, text: textOfNode(props['node']) })
+      } catch {
+        return row
+      }
+      if (fallback === null || fallback === undefined) return row
+      return (
+        <Fragment>
+          {row}
+          <RowActionSeat>{fallback}</RowActionSeat>
+        </Fragment>
+      )
+    }
     const buildActions = actions as ActionsConstructor
     const withAction = (text: string): ReactNode => {
       const actionsRow = buildActions(text)

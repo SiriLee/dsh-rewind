@@ -79,9 +79,14 @@ function rowProps(overrides: Props = {}): Props {
 
 const mounted: { root: Root; container: HTMLElement }[] = []
 
-/** Render a component into a fresh container; returns it. */
-function render(component: unknown, props: Props = rowProps()): HTMLElement {
+/**
+ * Render a component into a fresh container; returns it.
+ * @param flowKey - when given, the container is marked as the chat flow item
+ * that owns the row, exactly as the Chat view renders each node.
+ */
+function render(component: unknown, props: Props = rowProps(), flowKey?: string): HTMLElement {
   const container = document.createElement('div')
+  if (flowKey !== undefined) container.setAttribute('data-chat-node-key', flowKey)
   document.body.append(container)
   const root = createRoot(container)
   act(() => { root.render(createElement(component as () => ReactNode, props)) })
@@ -204,12 +209,14 @@ describe('row takeover', () => {
     dispose()
   })
 
-  it('leaves a row without an actions constructor untouched', () => {
+  it('leaves a row alone when there is no action cluster to seat the fallback into', () => {
     const ledger = new FakeLedger([{ component: rowWithoutActions, options: { key: 'user' } }])
     const dispose = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
     const container = render(ledger.store[0]!.component)
     expect(container.textContent).toContain('plain row')
     expect(container.querySelector('[data-extra]')).toBeNull()
+    // The seat is only filled when a rendered action cluster exists.
+    expect(container.querySelector(`.${CLASS.rowActionSeat}`)).toBeNull()
     dispose()
   })
 
@@ -306,6 +313,65 @@ describe('action eligibility', () => {
     const container = render(ledger.store[0]!.component)
     expect(container.querySelector('[data-copy]')).not.toBeNull()
     expect(rewoundButton(container)).toBeNull()
+    dispose()
+  })
+})
+
+describe('shadowed row fallback', () => {
+  /**
+   * The shape a row takes when another plugin replaced the component and
+   * forwarded props without the actions constructor: the bubble and the action
+   * cluster are still rendered, but nothing in the element tree can be extended.
+   */
+  const shadowedRow = (): ReactNode => createElement('div', { 'data-row': '' },
+    createElement('span', { 'data-bubble': '' }, 'message body'),
+    createElement('div', { 'data-actions': '' },
+      createElement('span', { 'data-clock': '' }, '22:25'),
+      createElement('button', { type: 'button', 'data-copy': '' }, 'copy')))
+
+  /** The cluster's children, labelled by role. */
+  function clusterOrder(container: HTMLElement): string[] {
+    const cluster = container.querySelector('[data-actions]')!
+    return [...cluster.children].map((node) => {
+      if (node.hasAttribute('data-clock')) return 'clock'
+      if (node.classList.contains(CLASS.rowActionSeat)) return 'seat'
+      if (node.hasAttribute('data-copy') || node.querySelector('[data-copy]') !== null) return 'copy'
+      return 'other'
+    })
+  }
+
+  it('seats the action between the clock and Copy in the cluster the row rendered', () => {
+    const ledger = new FakeLedger([{ component: shadowedRow, options: { key: 'user' } }])
+    const dispose = installRowAction({
+      slots: ledger,
+      render: rewindActionRenderer(t, () => true, () => {}),
+    })
+    const container = render(ledger.store[0]!.component, rowProps(), 'user-7')
+    expect(clusterOrder(container)).toEqual(['clock', 'seat', 'copy'])
+    const button = rewoundButton(container)
+    expect(button).not.toBeNull()
+    // The seat only holds the action: it must not add a box of its own.
+    expect(button?.parentElement?.className).toBe(CLASS.rowActionSeat)
+    expect(container.querySelector('[data-row]')).not.toBeNull()
+    expect(container.textContent).toContain('message body')
+    dispose()
+  })
+
+  it('takes the popover preview from the node, since no actions constructor supplies the text', () => {
+    const ledger = new FakeLedger([{ component: shadowedRow, options: { key: 'user' } }])
+    const opened: RowAction[] = []
+    const dispose = installRowAction({
+      slots: ledger,
+      render: rewindActionRenderer(t, () => true, row => opened.push(row)),
+    })
+    const content = [{ type: 'text', text: 'withdraw ' }, { type: 'image' }, { type: 'text', text: 'me' }]
+    const container = render(
+      ledger.store[0]!.component,
+      rowProps({ node: { kind: 'user', data: { seq: 7, time: 1_700_000_000_000, content } } }),
+      'user-7',
+    )
+    act(() => { rewoundButton(container)!.click() })
+    expect(opened[0]?.text).toBe('withdraw me')
     dispose()
   })
 })
