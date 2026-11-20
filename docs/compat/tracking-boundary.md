@@ -142,7 +142,7 @@ state; the `G1`/`G2` stretch is not in the record. While the file is over the
 cap at rewind time, any target skips it and reports the cap.
 
 A file **first seen** over the cap is not added to tracking at all, so it has no
-row and does not appear in the preview's over-cap list.
+row and does not appear in the preview's skipped list.
 
 ### Checkpointing switched off
 

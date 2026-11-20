@@ -32,9 +32,11 @@ console filter:
 | Scope | What an anomaly here means |
 | --- | --- |
 | `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
-| `refill` | The composer refill after a rewind (command/wait/refill throws, a rejected or unmatched command, an outcome that never settles) |
+| `refill` | The preview → commit flow and composer refill after a rewind (request failure, rejected commit, timed-out preview, or a refill fault) |
 | `command` | The `/rewind` and `/undo` command decoration (a name another plugin already owns, or a decoration the host refuses) |
-| `preview` | The preview / candidate host queries behind the mode popover and the `/rewind` picker (request failure, invalid result, timeout, or an unexpected fault while rendering the panel) |
+| `preview` | The preview transport behind the mode popover and the internal `/rewind` candidate read (request failure, invalid result, timeout, or an unexpected fault while rendering the panel) |
+| `commit` | The commit transport after confirmation (request failure, invalid result, or timeout) |
+| `claim` | Third-party takeover observation (claim injection/subscription failures) |
 | `action` | Per-message action mount and click issues (e.g. no session binding, or a failed action render) |
 | `retract` | The pending-steering retract path (the remove lost the race, or the remove threw) |
 | `visibility` | The Chat-snapshot visibility wrapper (install probe, subscription, or rebuild failures) |

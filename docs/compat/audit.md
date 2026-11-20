@@ -122,8 +122,8 @@ only an install that shadows an older copy is affected; true of any plugin.
 
 **U10 · Upstream defect — no longer used, no plugin impact.**
 `connection.rpc.handle` registers through the Connection owner's context, which
-injects only `credentials`. **Impact:** none now — the two read-only queries use
-exact `/api` routes and never read `owner.webServer`. **Stance:** no
+injects only `credentials`. **Impact:** none now — the v1 contract routes use exact
+`/api` routes and never read `owner.webServer`. **Stance:** no
 compensation; reported upstream.
 
 **U11 · Upstream constraint — display only, paged loading.**
