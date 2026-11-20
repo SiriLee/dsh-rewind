@@ -151,6 +151,16 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 > [!NOTE]
 > Browser diagnostics are available; see [Browser diagnostics](docs/compat/diagnostics.md).
 
+## Engine contract
+
+Plugin authors can drive a rewind from their own interface: a small, versioned
+interface starts a rewind and can restore files too, while this plugin still
+performs it — the conversation goes back to the chosen message and the withdrawn
+messages are hidden. A plugin that claims the action interface makes this
+plugin's row button, mode popover and pending retract button step aside. Normal
+use needs none of this; details are in the
+[engine contract](docs/contracts/engine-v1.md).
+
 ## Security
 
 This plugin only appends rewind-marker events to the session log; it never deletes or rewrites logged history. Workspace files are written only when you choose "conversation and files"; backups are stored under `<dsh home>/rewind-snapshots/`; restores draw only from those backups. It never touches your git repository, makes no network requests, and accesses no credentials. For sessions you've left inactive for a long time, a snapshot auto-cleanup (off by default) can remove their snapshot directory in whole, leaving the active session and the chat log untouched. Full security model: [docs/security-model.md](docs/security-model.md); to report a vulnerability, see [SECURITY.md](SECURITY.md).

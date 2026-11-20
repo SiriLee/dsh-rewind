@@ -18,7 +18,8 @@ credentials access.
 The module map:
 
 ```
-src/index.ts            host plugin: /rewind, /undo, /snapshot-auto-cleanup + checkpoint pipeline
+src/index.ts            host plugin: /rewind, /undo, /snapshot-auto-cleanup, v1 routes + checkpoint pipeline
+src/engine.ts           host-internal preview/commit operations shared by commands and routes
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
 src/snapshot.ts         checkpoint store: dense manifests, first-touch capture,
                         restore/preview, retention/GC, whole-session cleanup
@@ -34,12 +35,15 @@ src/client/mount.tsx    durable-row action: takes over the user/steering rendere
 src/client/pending-mount.tsx  unclaimed-steering retract layer
 src/client/pending.ts   pending-steering bubble ↔ inbox next-step (user-sourced) matching, pure
 src/client/retract.ts   pending retract: queue removal + composer refill
-src/client/rewind-flow.ts  executed rewind + composer refill
+src/client/rewind-flow.ts  preview → commit + composer refill
 src/client/popover.ts   mode-selection popover, plus the pending-retract confirm
 src/client/visibility.ts  snapshot-level hidden span (wraps the chat builder)
-src/client/hidden.ts    Chat-snapshot readers and executed-rewind cut derivation, pure
-src/client/candidates.ts  rewind candidate listing (rewindCandidatesOf), pure
-src/client/host-api.ts  exact /api reads (preview, candidates)
+src/client/marker-node.ts  chat Definition publishing the durable marker cut node
+src/client/hidden.ts    Chat-snapshot readers and marker cut derivation, pure
+src/client/candidates.ts  candidate row mapping + loaded-window availability, pure
+src/client/host-api.ts  v1 contract client (health, preview, commit) + internal picker candidates
+src/client/claim.ts     third-party takeover store (data-dsh-rewind-claim)
+src/client/errors.ts    contract code → dictionary key mapping
 src/client/settings-card.tsx  settings form on the bundle page (plugins.bundle.config)
 src/client/locales.ts   per-language copy registry (LocaleNamespaceMap)
 src/client/styles.ts    injected styles (dsh design tokens)
@@ -72,21 +76,27 @@ Two dependency rules keep the design testable:
 ## Rewind pipeline
 
 ```
-↶ button / /rewind-plugin @<seq> both
-  → handleRewind: parseRewindTarget + planRewind (target must be a
-    user/message currently on the surface)
-  → agent.cancel({ keepInbox: true }) if running; waitForAgentIdle
-  → dropPendingSteering (next-step inbox only; queued messages untouched)
-  → append the rewind marker = a user/message with surfaceOp
+↶ button / third-party POST commit
+  → adapter (v1 route, or the bare /rewind host fallback):
+    validate input, resolve the target
+  → engine.commit: reserve the session → compare headSeq (head-changed = no
+    write, no cancel) → conversation: cancel + await (≤15s) → plan the
+    surface after quiescence → drop pending steering → append the rewind
+    marker = a user/message with surfaceOp
     { op: 'replace', startSeq, endSeq } over the target and every surface
     node after it (+ sourceEventSeqs = shadowed seqs)  [a single event]
-  → if mode 'both': target seq → user/message.data.id →
-    store.restoreAfter(messageId) + syncRestoreObservations
-  → result text reports restored/deleted counts and every skipped/failed path
-    (human copy, never parsed)
-  → client: hides withdrawn rows through the Chat snapshot visibility input,
-    refills composer with the target message's text
+  → files: target seq → user/message.data.id → store.restoreAfter(messageId)
+    + syncRestoreObservations
+  → result: stable code + raw outcome; the adapter localizes it
+  → client: preview → confirm → commit, refills from preview.withdraw
+  → visibility: the marker Definition publishes a hidden chat node carrying
+    the durable cut; the builder wrapper hides [target, marker] on every load,
+    independent of the trigger
 ```
+
+The takeover attribute (`data-dsh-rewind-claim`) only changes the trigger
+surface: row action, pending retract and mode popover yield; the engine,
+commands, visibility and settings card keep working.
 
 Key invariants:
 
