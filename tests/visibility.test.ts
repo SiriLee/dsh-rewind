@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { ENGINE_COMMAND, LEGACY_ENGINE_COMMAND, REWIND_MARKER_KIND, rewindCutsOf, type ChatConversationViewNode, type RewindCut } from '../src/client/hidden.ts'
+import { RETIRED_REWIND_COMMAND, REWIND_COMMAND, REWIND_MARKER_KIND, rewindCutsOf, type ChatConversationViewNode, type RewindCut } from '../src/client/hidden.ts'
 import { rewindMarkerDefinition } from '../src/client/marker-node.ts'
 import { installChatViewVisibility, RewindVisibilityBuilder } from '../src/client/visibility.ts'
 
@@ -68,7 +68,7 @@ function turnProcess(key: string, anchorSeq: number, turn: number, startSeq: num
 
 function command(key: string, anchorSeq: number, seq: number, target: number, marker: number): Node {
   return node(key, 'command', anchorSeq, {
-    kind: 'command', seq, time: 0, commandId: key, name: ENGINE_COMMAND,
+    kind: 'command', seq, time: 0, commandId: key, name: REWIND_COMMAND,
     args: `@${target} chat`, outcome: { kind: 'success', sourceEventSeq: marker },
   } as unknown as CommandNode)
 }
@@ -191,11 +191,11 @@ describe('RewindVisibilityBuilder', () => {
   it('hides the span, the command, and an emptied Turn-process summary', () => {
     const builder = new RewindVisibilityBuilder(new FakeBuilder())
     const markerless = node('cmd0', 'command', 41, {
-      kind: 'command', seq: 41, time: 0, commandId: 'cmd0', name: ENGINE_COMMAND,
+      kind: 'command', seq: 41, time: 0, commandId: 'cmd0', name: REWIND_COMMAND,
       args: '@5 chat', outcome: { kind: 'success', text: 'done' },
     })
     const legacy = node('cmd-legacy', 'command', 42, {
-      kind: 'command', seq: 42, time: 0, commandId: 'cmd-legacy', name: LEGACY_ENGINE_COMMAND,
+      kind: 'command', seq: 42, time: 0, commandId: 'cmd-legacy', name: RETIRED_REWIND_COMMAND,
       args: '@5 chat', outcome: { kind: 'success', text: 'done' },
     })
     const snapshot = builder.replace({ nodes: [...baseNodes(), marker('m1', 20, 5), command('cmd1', 40, 40, 5, 20), markerless, legacy], timeline }) as {

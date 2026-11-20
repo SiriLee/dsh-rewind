@@ -4,17 +4,14 @@
  * @module dsh-rewind/client/hidden
  */
 
-/**
- * Historical command names. Old session logs may still contain command rows;
- * the visibility layer hides them. This plugin no longer registers them.
- */
-export const ENGINE_COMMAND = 'rewind-plugin'
+/** The live front-door command; a bare host invocation still appends its row. */
+export const REWIND_COMMAND = 'rewind'
 
-/** Legacy engine command name. */
-export const LEGACY_ENGINE_COMMAND = 'rewind'
+/** The retired engine channel; its rows appear only in older session logs. */
+export const RETIRED_REWIND_COMMAND = 'rewind-plugin'
 
-/** Engine command names the client recognizes. */
-export const ENGINE_COMMANDS: ReadonlySet<string> = new Set([ENGINE_COMMAND, LEGACY_ENGINE_COMMAND])
+/** Command names whose rows a rewind leaves in the log; the visibility layer hides them. */
+export const REWIND_COMMANDS: ReadonlySet<string> = new Set([REWIND_COMMAND, RETIRED_REWIND_COMMAND])
 
 /** A Chat-snapshot view node as the client readers see it. */
 export interface ChatConversationViewNode {

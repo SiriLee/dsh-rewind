@@ -16,7 +16,7 @@
  */
 
 import {
-  ENGINE_COMMANDS,
+  REWIND_COMMANDS,
   hasRewindMarker,
   rewindCutsOf,
   type ChatConversationViewNode,
@@ -343,7 +343,7 @@ export class RewindVisibilityBuilder implements BuilderLike {
         args?: string | null
         outcome?: { kind?: string; sourceEventSeq?: number } | null
       }
-      if (command.name !== undefined && command.name !== null && ENGINE_COMMANDS.has(command.name)) {
+      if (command.name !== undefined && command.name !== null && REWIND_COMMANDS.has(command.name)) {
         const args = command.args ?? ''
         const probe = args.includes('preview') || args.includes('__candidates')
         // A successful engine command is a rewind row; newer command outcomes do
