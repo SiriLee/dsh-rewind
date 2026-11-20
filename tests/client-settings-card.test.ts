@@ -94,7 +94,10 @@ function unmount(): void {
 afterEach(() => { unmount() })
 
 /** Mount the card through its form bundle, exactly as the slot registration does. */
-function mount(options: Parameters<typeof fakeForm>[0] = {}, view: 'summary' | 'page' = 'page') {
+function mount(
+  options: Parameters<typeof fakeForm>[0] = {},
+  view: 'summary' | 'page' = 'page',
+) {
   const { scope, writes } = fakeForm(options)
   const { form, store } = settingsForm(scope)
   const el = document.createElement('div')

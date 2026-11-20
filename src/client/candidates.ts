@@ -1,12 +1,11 @@
 /**
- * Pure candidate computation for the `/rewind` command decoration: which user
- * messages the harness's popupSelect shell offers, withdrawn-row exclusion,
- * preview truncation, and the mapping to popupSelect rows. The listing is a
- * pure function of the session chat snapshot (`rewindCandidatesOf`) so it
- * stays unit-testable in a node environment. Surface user/steering messages
- * only, withdrawn (hidden) rows excluded, newest first — the top row is the
- * default highlight, i.e. the most recent message and the most common rewind
- * target.
+ * Pure candidate computation and row mapping for the `/rewind` decoration.
+ * The picker itself prefers the Host's internal full-surface read; this module
+ * provides the loaded-window listing used for the decoration's availability
+ * check, plus withdrawn-row exclusion, preview truncation, and popupSelect row
+ * mapping. Surface user/steering messages only, newest first — the top row is
+ * the default highlight, i.e. the most recent message and the most common
+ * rewind target.
  *
  * @module dsh-rewind/client/candidates
  */
@@ -107,9 +106,8 @@ export function rewindCandidatesOfChat(snap: CandidateChat): RewindCandidate[] {
 }
 
 /**
- * Map typed candidates to popupSelect rows. The list comes from the host over
- * the host query route, so it covers the FULL host surface rather than the
- * windowed chat snapshot.
+ * Map typed candidates to popupSelect rows. The list comes from the loaded
+ * chat snapshot: the picker has the same windowed reach as the row action.
  */
 export function rewindOptionsFromCandidates(candidates: readonly RewindCandidate[], t: Translate): SelectOption[] {
   return candidates.map(candidate => ({

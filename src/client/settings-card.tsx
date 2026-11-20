@@ -263,6 +263,8 @@ export function SettingsCard(props: SettingsCardProps) {
 
 /** The face the slot registration injects into the card. */
 export interface SettingsCardFace extends SettingsFormActions {
-  readonly hooks: { readonly settingsCard: SettingsCardStore }
+  readonly hooks: {
+    readonly settingsCard: SettingsCardStore
+  }
 }
 

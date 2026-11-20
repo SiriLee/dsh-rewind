@@ -1,24 +1,24 @@
 /**
- * dsh-rewind flow half: the executed rewind command and its composer refill.
+ * dsh-rewind flow half: the executed rewind and its composer refill.
  *
- * This is the BEHAVIOR layer, deliberately free of any mounting decision. Both
- * the `/rewind` text flow (command decoration → mode popover) and, in A2, the
- * per-message action call {@link runRewindAndFill}; nothing here portals,
- * observes rows, or knows where the trigger sits.
+ * This is the BEHAVIOR layer, deliberately free of any mounting decision. It
+ * drives the v1 contract (preview → commit) and returns the withdrawn content
+ * to the composer; the confirmation binder is the preview's `headSeq`, so the
+ * commit either matches the state the user saw or fails without writing.
  *
- * The refill is event-driven: it runs only when THIS page performed the
- * rewind (the user confirmed moments ago). It must NEVER scan loaded history
- * for rewind commands — a session window opens with only the tail page, so
- * "a command already in the snapshot" cannot be told apart from "executed in
- * this page", and the old baseline heuristic refilled withdrawn text into the
- * composer after switching sessions or restarting dsh.
+ * The refill is event-driven: it runs only after THIS page's commit succeeded.
+ * It must never scan loaded history for rewind commands — a session window
+ * opens with only the tail page, so "a command already in the snapshot" cannot
+ * be told apart from "executed in this page", and a history heuristic refilled
+ * withdrawn text into the composer after switching sessions or restarting dsh.
  *
  * @module dsh-rewind/client/rewind-flow
  */
 
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-import { ENGINE_COMMAND, isExecutedRewindCommand, messageAttachmentsAt, messageTextAt, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
-import { knownCommandSeqs, waitForCommand } from './popover.ts'
+import type { RewindKey } from './locales.ts'
+import { commitOverApi, previewOverApi } from './host-api.ts'
+import { imageRefsOf, type ImageBlockLike, type MessageImageRef } from './hidden.ts'
 import { rewindLog } from './log.ts'
 import { CLASS } from './styles.ts'
 
@@ -115,111 +115,83 @@ export function writeComposer(text: string, facade: ComposerDraftWriter | undefi
   return fillComposer(text)
 }
 
+/** One withdrawable image block, read from the preview's opaque attachments. */
+function imageRefsOfWithdraw(attachments: readonly unknown[]): readonly MessageImageRef[] {
+  return imageRefsOf(attachments as readonly ImageBlockLike[])
+}
+
 /**
- * Execute one rewind and, when it settles successfully, put the withdrawn
- * target message's text back into the composer so the user can edit and
- * re-send.
+ * Execute one rewind through the v1 contract and, when the conversation effect
+ * succeeded, put the withdrawn target message's text and images back into the
+ * composer so the user can edit and re-send.
+ *
+ * @param session - the live session face the rewind targets.
+ * @param seq - the target user message seq.
+ * @param mode - `conversation` (context only) or `both` (context + files).
+ * @param isMainViewSession - fill only the session the main view retains.
+ * @param setComposerText - writes one session's composer draft.
+ * @param restoreImages - restores the target's images into the composer draft.
+ * @param failureText - localizes one stable contract failure code.
  */
 export async function runRewindAndFill(
   session: SessionFace,
   seq: number,
-  mode: 'chat' | 'both',
+  mode: 'conversation' | 'both',
   isMainViewSession: (sessionId: string) => boolean,
-  chatOf: ChatOf,
-  watchChat: ChatWatch,
   setComposerText: (sessionId: string, text: string) => boolean,
   restoreImages?: (sessionId: string, images: readonly MessageImageRef[]) => Promise<void>,
+  failureText?: (code: string) => string,
 ): Promise<void> {
-  // Exclude already-present executed-rewind nodes for this target BEFORE
-  // issuing the command: a repeated rewind of the same message must wait
-  // for THIS command's node, not settle on the previous one.
-  const known = knownCommandSeqs(session, chatOf, node => isExecutedRewindCommand(node, seq))
-  // Capture the target's content before issuing the command: the read after the
-  // command is not guaranteed to succeed, and a missed read silently skips the
-  // refill. Best-effort — a read failure must not block the rewind.
-  let text: string | undefined
-  let images: readonly MessageImageRef[] | undefined
-  try {
-    const chatBefore = chatOf(session)
-    text = messageTextAt(chatBefore, seq)
-    images = messageAttachmentsAt(chatBefore, seq)
-  } catch (error) {
-    rewindLog.warn('refill', `reading target content for @${seq} threw`, error)
-  }
-  let result: Awaited<ReturnType<SessionFace['command']>>
-  try {
-    result = await session.command(`/${ENGINE_COMMAND} @${seq} ${mode}`)
-  } catch (error) {
-    // A command/teardown throw must never become a silent unhandled rejection
-    // on the `void runRewindAndFill(...)` call site.
-    rewindLog.warn('refill', `rewind command threw, skipping refill @${seq}`, error)
+  const textOfFailure = (code: string): string => failureText?.(code) ?? code
+  const preview = await previewOverApi(session.sessionId, seq)
+  if (preview === null) {
+    rewindLog.warn('refill', `preview request timed out for @${seq}; no rewind`)
+    showHint(textOfFailure('internal'))
     return
   }
-  if (!result.ok) {
-    // The Host rejected the call before any handler ran — e.g. a
-    // subagent-owned identity (`session/agent-busy`, "use subagent delivery"),
-    // or a command this Host does not have. Nothing was rewound: say so in the
-    // console instead of failing silently (SiriLee/dsh-rewind#26).
-    rewindLog.warn('refill', `rewind command rejected for @${seq}`, result.error)
+  if (preview.kind === 'error') {
+    rewindLog.warn('refill', `preview rejected @${seq}: ${preview.code}`, preview.message)
+    showHint(textOfFailure(preview.code))
     return
   }
-  if (result.value?.matched !== true) {
-    rewindLog.warn('refill', `rewind command was not matched for @${seq}`)
+  const withdraw = preview.value.withdraw
+  const result = await commitOverApi(session.sessionId, seq, preview.value.headSeq, mode)
+  if (result === null) {
+    rewindLog.warn('refill', `commit request timed out for @${seq}`)
+    showHint(textOfFailure('internal'))
     return
   }
-  // The executed rewind lands as a CommandNode with a marker-carrying
-  // success outcome; wait for exactly that (longer than the preview route
-  // timeout: a running turn is cancelled first, which can take seconds).
-  let outcome: Awaited<ReturnType<typeof waitForCommand>>
-  try {
-    outcome = await waitForCommand(session, chatOf, node => isExecutedRewindCommand(node, seq) && !known.has(node.seq), 20_000, cb => watchChat(session.sessionId, cb))
-  } catch (error) {
-    rewindLog.warn('refill', `waiting for rewind @${seq} outcome threw`, error)
+  if (result.kind === 'error') {
+    rewindLog.warn('refill', `commit rejected @${seq}: ${result.code}`, result.message)
+    showHint(textOfFailure(result.code))
     return
   }
-  if (outcome === null) {
-    rewindLog.warn('refill', `rewind @${seq} never settled within timeout, no refill`)
-    return
+  if (result.value.files?.applied === false) {
+    rewindLog.warn('refill', `file effect unavailable for @${seq}: ${result.value.files.reason}`)
   }
-  if (outcome.kind !== 'success') {
-    // The host rejected the rewind (e.g. the target was shadowed by
-    // compaction and is no longer in the model context). The refusal is the
-    // correct behavior, but it must not fail silently — surface the host's
-    // reason instead.
-    showHint(outcome.text ?? 'rewind failed')
-    return
-  }
-  // The user may have switched sessions while the rewind ran — fill only
-  // the composer of the session the rewind actually happened in.
-  if (!isMainViewSession(session.sessionId)) {
-    return
-  }
-  // `text`/`images` were captured before the command: the read after it is not
-  // guaranteed to succeed, so they are not re-read here (SiriLee/dsh-rewind#94).
+  // The user may have switched sessions while the commit ran — fill only the
+  // composer of the session the rewind actually happened in.
+  if (!isMainViewSession(session.sessionId)) return
   // Restore the withdrawn message's images FIRST: adding draft attachments
   // never clobbers an in-progress draft, so this is NOT gated by the
-  // empty-composer guard below. Best-effort — a restore failure leaves the
-  // text refill intact (the image stays in the hidden history message).
-  if (restoreImages !== undefined && images !== undefined && images.length > 0) {
+  // empty-composer guard below. Best-effort — a restore failure leaves the text
+  // refill intact.
+  const images = imageRefsOfWithdraw(withdraw.attachments)
+  if (restoreImages !== undefined && images.length > 0) {
     try {
       await restoreImages(session.sessionId, images)
     } catch (error) {
       rewindLog.warn('refill', `image restore for @${seq} threw`, error)
     }
   }
-  if (text === undefined || text === '') {
-    return
-  }
+  if (withdraw.text === '') return
   // Empty-composer guard (Claude Code parity): never clobber a draft the user
   // is already editing.
-  if (composerText().trim() !== '') {
-    return
-  }
+  if (composerText().trim() !== '') return
   try {
-    setComposerText(session.sessionId, text)
+    setComposerText(session.sessionId, withdraw.text)
   } catch (error) {
     rewindLog.warn('refill', `composer refill @${seq} threw`, error)
-    return
   }
 }
 
