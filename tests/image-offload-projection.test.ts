@@ -71,7 +71,7 @@ describe('image/offload message projection', () => {
     const events = session.snapshotEvents()
     const surfaceAfter = [...session.surface.nodes]
     expect(listRewindCandidates(events, surfaceAfter).map(candidate => candidate.seq)).toEqual(before)
-    const plan = planRewind(events, surfaceAfter, { kind: 'seq', seq: source.seq })
+    const plan = planRewind(events, surfaceAfter, source.seq)
     expect(plan.targetSeq).toBe(source.seq)
     expect(plan.shadowedSeqs).toEqual([source.seq])
   })

@@ -9,8 +9,7 @@
  * Run: `npm run build && node scripts/verify-host.mjs`
  *
  * What it proves:
- *  1. the plugin registers `/rewind`, `/undo`, the engine channel and the
- *     cleanup command;
+ *  1. the plugin registers `/rewind`, `/undo` and the cleanup command;
  *  2. one dense checkpoint per user message is written at `agent/pre-step`;
  *  3. a `write` first touch records the pre-touch state before the body;
  *  4. preview and both-mode restore agree on the target manifest;
@@ -97,10 +96,6 @@ apply(ctx, resolvedConfig)
 // first synthesized step, as the loader does by awaiting the mount effect.
 await new Promise(resolve => setTimeout(resolve, 10))
 
-const call = (agent, rawInput) => commands.get('rewind').handler({
-  commandId: CommandId('cid'), agent, rawInput, signal: aborted(),
-})
-
 /** One fake agent around a real session (the fields executeRewind reads). */
 function agentFor(session) {
   let agent = agents.get(session.id)
@@ -150,25 +145,35 @@ async function runTool(session, path, content) {
   })
 }
 
-/** POST one flat route payload and decode its JSON envelope. */
-async function apiPost(path, payload) {
+/** Dispatch one exact route request and decode its JSON envelope. */
+async function api(path, init) {
   const route = routes.get(path)
   if (route === undefined) throw new Error(`route ${path} is not registered`)
-  const response = await route.fetch(new Request(`http://localhost${path}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-  }))
+  const response = await route.fetch(new Request(`http://localhost${path}`, init))
   return { status: response.status, result: await response.json() }
 }
 
+const apiPost = (path, payload) => api(path, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(payload),
+})
+
 const previewOf = async (session, seq) => {
-  const { status, result } = await apiPost('/api/dsh-rewind/preview', { sessionId: session.id, seq })
+  const { status, result } = await apiPost('/api/dsh-rewind/v1/preview', { sessionId: session.id, seq })
   if (status !== 200) throw new Error(`preview route returned HTTP ${status}`)
   return result
 }
 
-const filesOf = preview => preview.ok === true ? preview.value.files : []
+const commitOf = async (session, seq, headSeq, mode) => {
+  const { status, result } = await apiPost('/api/dsh-rewind/v1/commit', { sessionId: session.id, seq, headSeq, mode })
+  if (status !== 200) throw new Error(`commit route returned HTTP ${status}`)
+  return result
+}
+
+const filesOf = preview => preview.ok === true && preview.value.files.available === true
+  ? preview.value.files.changes
+  : []
 const hasFile = (preview, path, action) => filesOf(preview)
   .some(file => file.path === path && (action === undefined || file.action === action))
 
@@ -178,11 +183,31 @@ const check = (name, ok, detail) => {
   if (!ok) failures += 1
 }
 
+// 0. contract health
+{
+  const { status, result } = await api('/api/dsh-rewind/v1/health', { method: 'GET' })
+  check('v1 health reports contract 1', status === 200 && result.ok === true && result.value.contract === 1, JSON.stringify(result))
+}
+
 // 1. commands
 check('rewind registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
 check('undo alias shares the handler', commands.get('undo')?.handler === commands.get('rewind')?.handler, JSON.stringify(commands.get('undo')))
-check('engine channel registered', typeof commands.get('rewind-plugin')?.handler === 'function', JSON.stringify(commands.get('rewind-plugin')))
 check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')?.handler === 'function', JSON.stringify(commands.get('snapshot-auto-cleanup')))
+
+// 1b. bare /rewind host fallback: the latest message, conversation only
+{
+  const session = Session.create(SessionId('verify-bare'))
+  const first = await runUserStep(session, 'first')
+  const second = await runUserStep(session, 'second')
+  const result = await commands.get('rewind').handler({
+    commandId: CommandId('bare'), agent: agentFor(session), rawInput: '   ', signal: aborted(),
+  })
+  const marker = session.snapshotEvents().at(-1)
+  check('bare /rewind withdraws the latest message', result.kind === 'success'
+    && marker.data.source.kind === 'dsh-rewind'
+    && marker.surfaceOp.startSeq === second.seq
+    && first.seq < second.seq, JSON.stringify({ result, marker }))
+}
 
 // 2-4. pre-step manifests, first-touch capture, preview and both-mode restore
 {
@@ -199,12 +224,22 @@ check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')
   check('one checkpoint per user message', checkpoints.filter(name => name.endsWith('.json')).length === 2, checkpoints.join(','))
   const preview = await previewOf(session, first.seq)
   check('preview reports the tracked restore', preview.ok === true && hasFile(preview, file, 'restore'), JSON.stringify(preview))
-  check('preview sees the current over-cap state as uncovered only when over cap',
-    preview.ok === true && preview.value.uncovered.length === 0, JSON.stringify(preview))
+  check('preview sees the current over-cap state as skipped only when over cap',
+    preview.ok === true && preview.value.files.skipped.length === 0, JSON.stringify(preview))
   check('preview is a pure query', session.snapshotEvents().at(-1).seq === second.seq, `last=${session.snapshotEvents().at(-1).seq} second=${second.seq}`)
 
-  const both = await call(agentFor(session), `@${first.seq} both`)
-  check('both rewind succeeds', both.kind === 'success' && /restored 1 file/.test(both.text), both.text)
+  const candidates = await apiPost('/api/dsh-rewind/candidates', { sessionId: session.id })
+  check('internal candidates read lists the full surface',
+    candidates.status === 200 && candidates.result.ok === true
+    && candidates.result.value.candidates.length === 2
+    && candidates.result.value.candidates[0].seq === second.seq,
+    JSON.stringify(candidates.result))
+
+  const both = await commitOf(session, first.seq, preview.value.headSeq, 'both')
+  check('v1 both commit succeeds', both.ok === true && both.value.files.applied === true
+    && both.value.files.restored.length === 1, JSON.stringify(both))
+  check('v1 both commit reports the conversation effect', both.ok === true && both.value.conversation.rewound === true, JSON.stringify(both))
+  check('route commit is a rewind marker', session.snapshotEvents().at(-1).data.source.kind === 'dsh-rewind', JSON.stringify(session.snapshotEvents().at(-1).data))
   check('target content restored', await readFile(file, 'utf8') === 'original', await readFile(file, 'utf8'))
 }
 
@@ -221,8 +256,8 @@ check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')
     whenIdle: async () => {},
   }
   agents.set(session.id, running)
-  const result = await call(running, `@${first.seq} chat`)
-  check('running agent is cancelled before rewind', result.kind === 'success' && session.snapshotEvents().at(-1).data.source.kind === 'dsh-rewind', result.text)
+  const result = await commitOf(session, first.seq, session.seq - 1, 'conversation')
+  check('running agent is cancelled before rewind', result.ok === true && session.snapshotEvents().at(-1).data.source.kind === 'dsh-rewind', JSON.stringify(result))
 }
 
 // 5. a file created after the target is deleted
@@ -231,8 +266,8 @@ check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')
   const first = await runUserStep(session, 'first')
   const file = join(wsDir, 'created.txt')
   await runTool(session, file, 'new')
-  const both = await call(agentFor(session), `@${first.seq} both`)
-  check('created file deleted', both.kind === 'success' && /deleted 1 file/.test(both.text), both.text)
+  const both = await commitOf(session, first.seq, session.seq - 1, 'both')
+  check('created file deleted', both.ok === true && both.value.files.deleted.includes(file), JSON.stringify(both))
   let gone = false
   try { await readFile(file) } catch { gone = true }
   check('created file is absent after rewind', gone, 'file still exists')
@@ -244,9 +279,11 @@ check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')
   const message = createUserMessage({ content: [{ type: 'text', text: 'old' }], source: { kind: 'user' } })
   session.append('user/message', message, { surfaceOp: 'append' })
   const seq = session.snapshotEvents().at(-1).seq
-  const both = await call(agentFor(session), `@${seq} both`)
-  check('no-checkpoint rewind succeeds', both.kind === 'success' && /no file checkpoint/.test(both.text), both.text)
-  check('no-checkpoint result uses one clause separator', /; no file checkpoint exists for the target message/.test(both.text) && !/;;/.test(both.text), both.text)
+  agentFor(session)
+  const both = await commitOf(session, seq, session.seq - 1, 'both')
+  check('no-checkpoint rewind succeeds', both.ok === true && both.value.conversation.rewound === true, JSON.stringify(both))
+  check('no-checkpoint file effect is reported', both.ok === true && both.value.files.applied === false
+    && both.value.files.reason === 'no-checkpoint', JSON.stringify(both))
   check('no-checkpoint rewind appends the marker', session.snapshotEvents().at(-1).data.source.kind === 'dsh-rewind', JSON.stringify(session.snapshotEvents().at(-1).data))
 }
 
@@ -260,9 +297,12 @@ check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')
   const file = join(wsDir, 'newer.txt')
   await writeFile(file, 'keep', 'utf8')
   const preview = await previewOf(session, first.seq)
-  check('newer store preview fails closed', preview.ok === false && /newer store format|file restore unavailable/.test(preview.error.message), JSON.stringify(preview))
-  const both = await call(agentFor(session), `@${first.seq} both`)
-  check('newer store keeps the conversation rewind', both.kind === 'success' && /file restore unavailable/.test(both.text), both.text)
+  check('newer store preview reports an availability reason',
+    preview.ok === true && preview.value.files.available === false
+    && preview.value.files.reason === 'store-unsupported', JSON.stringify(preview))
+  const both = await commitOf(session, first.seq, preview.value.headSeq, 'both')
+  check('newer store keeps the conversation rewind', both.ok === true && both.value.conversation.rewound === true
+    && both.value.files.applied === false && both.value.files.reason === 'store-unsupported', JSON.stringify(both))
   check('newer store leaves the file alone', await readFile(file, 'utf8') === 'keep', await readFile(file, 'utf8'))
 }
 
@@ -276,9 +316,12 @@ check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')
   await runUserStep(session, 'second')
   await writeFile(file, 'x'.repeat(CAP_BYTES + 1), 'utf8')
   const preview = await previewOf(session, first.seq)
-  check('preview lists the over-cap path', preview.ok === true && preview.value.uncovered.some(item => item.path === file), JSON.stringify(preview))
-  const both = await call(agentFor(session), `@${first.seq} both`)
-  check('over-cap restore is reported', both.kind === 'success' && /skipped 1 path/.test(both.text) && /backup limit/.test(both.text), both.text)
+  check('preview lists the over-cap path as skipped',
+    preview.ok === true && preview.value.files.available === true
+    && preview.value.files.skipped.some(item => item.path === file && item.reason === 'oversized'), JSON.stringify(preview))
+  const both = await commitOf(session, first.seq, preview.value.headSeq, 'both')
+  check('over-cap restore is reported', both.ok === true
+    && both.value.files.skipped.some(item => item.path === file && item.reason === 'oversized'), JSON.stringify(both))
   check('over-cap file is untouched', (await readFile(file, 'utf8')).length === CAP_BYTES + 1, `${(await readFile(file, 'utf8')).length} bytes`)
 }
 
@@ -293,8 +336,9 @@ if (process.platform !== 'win32') {
   await writeFile(victim, 'victim', 'utf8')
   await rm(file)
   await symlink(victim, file)
-  const both = await call(agentFor(session), `@${first.seq} both`)
-  check('symlink path is reported as skipped with a reason', both.kind === 'success' && /skipped 1 path/.test(both.text) && /symlink|hard link/.test(both.text), both.text)
+  const both = await commitOf(session, first.seq, session.seq - 1, 'both')
+  check('symlink path is reported as skipped with a reason', both.ok === true
+    && both.value.files.skipped.some(item => item.path === file), JSON.stringify(both))
   check('symlink target is untouched', await readFile(victim, 'utf8') === 'victim', await readFile(victim, 'utf8'))
 }
 

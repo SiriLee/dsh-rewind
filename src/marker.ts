@@ -1,3 +1,5 @@
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+
 /**
  * The rewind marker's message-source identity.
  *
@@ -17,6 +19,15 @@ declare module '@deepseek-ai/dsh-llm' {
 
 /** Producer kind carried by every marker this plugin appends. */
 const REWIND_MARKER_KIND = 'dsh-rewind'
+
+/**
+ * The marker's constant content. It must stay provider-independent: the log is
+ * append-only while the model serving a session may change, and a strict
+ * OpenAI-compatible gateway rejects an empty user message (HTTP 400, Issue #21).
+ */
+export const REWIND_MARKER_CONTENT: readonly ContentBlock[] = Object.freeze([
+  Object.freeze({ type: 'text', text: '(empty message)' }),
+])
 
 /** The marker's source: one producer-owned kind, no private fields. */
 export const REWIND_MARKER_SOURCE = Object.freeze({ kind: REWIND_MARKER_KIND } as const)

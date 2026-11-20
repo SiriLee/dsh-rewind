@@ -19,7 +19,7 @@ import { createVolatile, updateVolatile } from '@deepseek-ai/cosmokit'
 import { SESSION_FORMAT_VERSION, Session, SessionId, type UserMessage } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { en as enLocale, zh as zhLocale } from '../src/locales.ts'
-import { apply, Config, profileEntryKey, ENGINE_COMMAND, inject } from '../src/index.ts'
+import { apply, Config, profileEntryKey, inject } from '../src/index.ts'
 import { resolveCleanupStatePath } from '../src/snapshot-cleanup.ts'
 import { testConfig, textMessage } from './helpers.ts'
 
@@ -229,30 +229,6 @@ describe('host mount lifecycle', () => {
     expect(await preStep(mounted, session, [message])).toMatchObject({ kind: 'enter' })
     session.append('user/message', message, { surfaceOp: 'append' })
     expect(await readCheckpoints(session)).toHaveLength(1)
-    await mounted.dispose()
-  })
-
-  it('reports a missing checkpoint with one clause separator', async () => {
-    const mounted = mount()
-    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
-    const session = Session.create(SessionId('no-checkpoint-result'))
-    const message = textMessage('old')
-    session.append('user/message', message, { surfaceOp: 'append' })
-    const seq = session.snapshotEvents().at(-1)!.seq
-    const agent = {
-      id: session.id,
-      session,
-      status: 'idle',
-      inbox: { nextStep: [], remove: () => true },
-      whenIdle: async () => {},
-      cancel: () => {},
-    }
-    const result = await mounted.commands.get('rewind')!.handler({
-      agent, rawInput: `@${seq} both`, signal: new AbortController().signal,
-    }) as { kind: string; text: string }
-    expect(result.kind).toBe('success')
-    expect(result.text).toContain('; no file checkpoint exists for the target message')
-    expect(result.text).not.toContain(';;')
     await mounted.dispose()
   })
 
@@ -547,8 +523,6 @@ describe('host language preference', () => {
     // The mount-time read covers the descriptions, which register once.
     expect(mounted.commands.get('rewind')!.description).toBe(zhLocale['command.description'])
     expect(mounted.commands.get('undo')!.description).toBe(zhLocale['command.undoDescription'])
-    expect(mounted.commands.get(ENGINE_COMMAND)!.description).toBe(zhLocale['engine.description'])
-    expect(mounted.commands.get(ENGINE_COMMAND)!.input!.hint).toBe(zhLocale['engine.inputHint'])
     expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(zhLocale['cleanup.description'])
     // A command result renders in the same language.
     expect((await cleanupStatus(mounted)).text).toContain(zhStatus)
@@ -564,20 +538,8 @@ describe('host language preference', () => {
     // The occupant's row is untouched, and every other command registered.
     expect(mounted.commands.get('rewind')!.description).toBe('third-party')
     expect(mounted.commands.get('undo')).toBeDefined()
-    expect(mounted.commands.get(ENGINE_COMMAND)).toBeDefined()
     expect(mounted.commands.get('snapshot-auto-cleanup')).toBeDefined()
     expect(mounted.logger.warn).toHaveBeenCalledWith(expect.stringContaining('"rewind" is already registered'))
-    await mounted.dispose()
-  })
-
-  it('refuses an empty engine invocation instead of rewinding', async () => {
-    const mounted = mount()
-    mounted.setEntryId('include:dsh-rewind-plugin')
-    apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
-
-    const result = await mounted.commands.get(ENGINE_COMMAND)!.handler({ rawInput: '   ' }) as { kind: string; text?: string }
-    expect(result.kind).toBe('error')
-    expect(result.text).toBe(enLocale['engine.rejected'])
     await mounted.dispose()
   })
 

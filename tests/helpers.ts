@@ -62,6 +62,7 @@ export function rewindMarker(): UserMessage {
 export function testConfig(overrides: {
   readonly snapshotDir?: string
   readonly dshHome?: string
+  readonly maxFileBytes?: number
   readonly fileCheckpointingEnabled?: boolean
   readonly autoCleanupEnabled?: boolean
   readonly autoCleanupMaxAgeDays?: number
@@ -69,6 +70,7 @@ export function testConfig(overrides: {
   return {
     snapshotDir: overrides.snapshotDir,
     dshHome: overrides.dshHome,
+    maxFileBytes: overrides.maxFileBytes,
     fileCheckpointingEnabled: createVolatile(overrides.fileCheckpointingEnabled ?? true),
     autoCleanupEnabled: createVolatile(overrides.autoCleanupEnabled ?? false),
     autoCleanupMaxAgeDays: createVolatile(overrides.autoCleanupMaxAgeDays ?? 30),
@@ -135,7 +137,7 @@ export function buildTurnedSession(): Session {
  * @returns the marker's log seq.
  */
 export function applyRewind(session: Session, targetSeq: number): number {
-  const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: targetSeq })
+  const plan = planRewind(session.snapshotEvents(), session.surface.nodes, targetSeq)
   const event = session.append('user/message', rewindMarker(), {
     surfaceOp: { op: 'replace', startSeq: plan.surfaceStart as SessionSeq, endSeq: plan.surfaceEnd as SessionSeq },
     sourceEventSeqs: [...plan.shadowedSeqs] as SessionSeq[],

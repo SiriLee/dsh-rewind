@@ -110,12 +110,6 @@ export interface FileImpact {
   readonly action: 'restore' | 'delete'
 }
 
-/** A tracked path whose current size is over the per-file cap. */
-export interface UncoveredPath {
-  readonly path: string
-  readonly size?: number
-}
-
 /** Result of one restore pass; `noCheckpoint` means no file operation ran. */
 export interface RestoreOutcome {
   readonly restored: string[]

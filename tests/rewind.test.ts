@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import {
-  formatCandidate, listRewindCandidates, messagePreview, parseRewindTarget,
+  listRewindCandidates, messagePreview,
   planRewind, REWIND_MARKER_SOURCE, RewindError,
 } from '../src/rewind.ts'
 
@@ -61,27 +61,6 @@ function sampleLog(): { events: readonly SessionEvent[]; surface: readonly numbe
   ]
   return { events, surface: [0, 1, 2, 3, 4, 5] }
 }
-describe('parseRewindTarget', () => {
-  it('parses absolute seq targets', () => {
-    expect(parseRewindTarget('@12')).toEqual({ kind: 'seq', seq: 12 })
-    expect(parseRewindTarget(' @0 ')).toEqual({ kind: 'seq', seq: 0 })
-  })
-
-  it('parses recency indexes', () => {
-    expect(parseRewindTarget('1')).toEqual({ kind: 'index', index: 1 })
-    expect(parseRewindTarget('42')).toEqual({ kind: 'index', index: 42 })
-  })
-
-  it('rejects malformed tokens', () => {
-    expect(parseRewindTarget('')).toBeUndefined()
-    expect(parseRewindTarget('@-1')).toBeUndefined()
-    expect(parseRewindTarget('@x')).toBeUndefined()
-    expect(parseRewindTarget('0')).toBeUndefined()
-    expect(parseRewindTarget('-3')).toBeUndefined()
-    expect(parseRewindTarget('1.5')).toBeUndefined()
-  })
-})
-
 describe('messagePreview', () => {
   it('joins text blocks and truncates', () => {
     const message = createUserMessage({
@@ -102,10 +81,10 @@ describe('messagePreview', () => {
 })
 
 describe('listRewindCandidates', () => {
-  it('lists surface user messages most recent first, numbered from 1', () => {
+  it('lists surface user messages most recent first', () => {
     const { events, surface } = sampleLog()
     const candidates = listRewindCandidates(events, surface)
-    expect(candidates.map(c => [c.seq, c.index])).toEqual([[4, 1], [2, 2], [0, 3]])
+    expect(candidates.map(c => c.seq)).toEqual([4, 2, 0])
   })
 
   it('skips user messages shadowed by replacement (not on the surface)', () => {
@@ -143,17 +122,12 @@ describe('listRewindCandidates', () => {
     expect(candidates[99]!.seq).toBe(5)
   })
 
-  it('renders candidates with a time + preview line', () => {
-    const { events, surface } = sampleLog()
-    const line = formatCandidate(listRewindCandidates(events, surface)[0]!)
-    expect(line).toMatch(/^1\. \d{2}:\d{2} third question$/)
-  })
 })
 
 describe('planRewind', () => {
   it('withdraws the target AND everything after it', () => {
     const { events, surface } = sampleLog()
-    const plan = planRewind(events, surface, { kind: 'seq', seq: 2 })
+    const plan = planRewind(events, surface, 2)
     expect(plan.targetSeq).toBe(2)
     expect(plan.targetIndex).toBe(2)
     // Time-travel semantics: the target message itself is withdrawn too.
@@ -162,27 +136,9 @@ describe('planRewind', () => {
     expect(plan.surfaceEnd).toBe(5)
   })
 
-  it('resolves recency indexes to seqs', () => {
-    const { events, surface } = sampleLog()
-    expect(planRewind(events, surface, { kind: 'index', index: 1 }).targetSeq).toBe(4)
-    expect(planRewind(events, surface, { kind: 'index', index: 3 }).targetSeq).toBe(0)
-  })
-
-  it('rejects an out-of-range index', () => {
-    const { events, surface } = sampleLog()
-    expect(() => planRewind(events, surface, { kind: 'index', index: 9 }))
-      .toThrowError(RewindError)
-    try {
-      planRewind(events, surface, { kind: 'index', index: 9 })
-      throw new Error('expected throw')
-    } catch (error) {
-      expect((error as RewindError).code).toBe('invalid-index')
-    }
-  })
-
   it('rejects a target that is not a user message', () => {
     const { events, surface } = sampleLog()
-    expect(() => planRewind(events, surface, { kind: 'seq', seq: 1 })).toThrowError(/not a human user message/)
+    expect(() => planRewind(events, surface, 1)).toThrowError(/not a human user message/)
   })
 
   it('rejects an injected context user/message as a target', () => {
@@ -203,7 +159,7 @@ describe('planRewind', () => {
       } as unknown as SessionEvent<'user/message'>,
     ]
     const surface = [0, 1]
-    expect(() => planRewind(events, surface, { kind: 'seq', seq: 1 })).toThrowError(/not a human user message/)
+    expect(() => planRewind(events, surface, 1)).toThrowError(/not a human user message/)
   })
 
   it('rejects a user message shadowed by compaction', () => {
@@ -211,7 +167,7 @@ describe('planRewind', () => {
     // u2 no longer on the surface (compacted away).
     const surface = [0, 1, 6, 4, 5]
     try {
-      planRewind(events, surface, { kind: 'seq', seq: 2 })
+      planRewind(events, surface, 2)
       throw new Error('expected throw')
     } catch (error) {
       expect((error as RewindError).code).toBe('not-on-surface')
@@ -228,17 +184,13 @@ describe('planRewind', () => {
       userEvent(2, 'second question'),
     ]
     const surface = [0, 1, 2]
-    const plan = planRewind(events, surface, { kind: 'seq', seq: 2 })
+    const plan = planRewind(events, surface, 2)
     expect(plan.targetSeq).toBe(2)
     expect(plan.shadowedSeqs).toEqual([2])
     expect(plan.surfaceStart).toBe(2)
     expect(plan.surfaceEnd).toBe(2)
   })
 
-  it('rejects an out-of-range index in a user-less log', () => {
-    const events = [assistantEvent(0, 'answer only')]
-    expect(() => planRewind(events, [0], { kind: 'index', index: 1 })).toThrowError(RewindError)
-  })
 })
 
 describe('rewind marker message shape', () => {
