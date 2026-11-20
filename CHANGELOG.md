@@ -10,7 +10,35 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.2...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.23.0...vNEXT
+
+## [0.23.0] - 2026-11-21
+
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
+### 新增功能
+
+- **插件公开发布 v1 引擎契约，其他插件或界面可以按同一套路由驱动回退。** `GET /api/dsh-rewind/v1/health`、`POST /api/dsh-rewind/v1/preview`、`POST /api/dsh-rewind/v1/commit` 三个操作，`conversation` 与 `files` 两种效果可分别组合，错误码固定、只在主版本内兼容；契约与接入指南在仓库 `docs/contracts/` 下，不随包分发。本插件自己的按钮、命令与面板是它的第一个调用方。（#99）@slev-agent @SiriLee
+
+### 其他变更
+
+- **兼容性目标对齐 DSH `0.2.2-rc.5`。** 审计目标与 `@deepseek-ai/*` 开发依赖升到 rc.5（rc.4 对本插件只涉及版本号，rc.5 只改网页搜索默认），`engines.dsh` 范围保持 `>=0.2.2-rc.1 <0.3.0-0` 不变。 @SiriLee
+- **两处防御性加固。** 回退要撤回的文字与图片改为在回退执行前取好，不再依赖执行之后的那次读取；`/rewind` 的命令装饰被其他插件占用时只损失该提示，客户端其余部分照常装配。（#95）（#97）@abworks-dev
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### New Features
+
+- **The plugin now publishes a v1 engine contract, so other plugins or UIs can drive a rewind over the same routes.** `GET /api/dsh-rewind/v1/health`, `POST /api/dsh-rewind/v1/preview` and `POST /api/dsh-rewind/v1/commit` cover the `conversation` and `files` effects independently, with a fixed code set and compatibility only within the major version; the contract and its integration guide live under `docs/contracts/` and are not shipped in the tarball. The plugin's own button, commands and panel are its first caller. (#99) @slev-agent @SiriLee
+
+### Chores
+
+- **Align the compatibility target with DSH `0.2.2-rc.5`.** The audit target and the `@deepseek-ai/*` devDependencies move to rc.5 (rc.4 was a version-only release for this plugin, rc.5 only changes the web search default); the `engines.dsh` range stays `>=0.2.2-rc.1 <0.3.0-0`. @SiriLee
+- **Two defensive hardenings.** The text and images a rewind withdraws are captured before it runs instead of relying on the read that follows, and a `/rewind` command decoration taken by another plugin costs only that popup instead of aborting the client assembly. (#95) (#97) @abworks-dev
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.22.2...v0.23.0
 
 ## [0.22.2] - 2026-11-14
 
