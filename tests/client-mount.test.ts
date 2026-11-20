@@ -18,6 +18,7 @@ import { createRoot, type Root } from 'react-dom/client'
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 import { rewindActionRenderer } from '../src/client/action.tsx'
+import type { TakeoverSnapshot, TakeoverStore } from '../src/client/claim.ts'
 import { installRowAction, type RowAction, type SlotLedger } from '../src/client/mount.tsx'
 import { CLASS } from '../src/client/styles.ts'
 import { ActionsRow, Bubble, officialRow, ROW_PROPS, ROW_TEXT } from './support/chat-row.ts'
@@ -89,6 +90,25 @@ function render(component: unknown, props: Props = rowProps()): HTMLElement {
   return container
 }
 
+/** A mutable takeover store for render-time claim probes. */
+function takeoverStore(initial: TakeoverSnapshot = { owner: 'auto', claim: undefined, claimed: false }): TakeoverStore & {
+  set(next: TakeoverSnapshot): void
+} {
+  let snapshot = initial
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set(next) {
+      snapshot = next
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
 /** The action classes inside one rendered row, in DOM order. */
 function actionOrder(container: HTMLElement): string[] {
   return Array.from(container.querySelectorAll('[data-actions] > *')).map((node) => {
@@ -118,7 +138,7 @@ describe('row takeover', () => {
     const opened: { row: RowAction; anchor: HTMLElement }[] = []
     const dispose = installRowAction({
       slots: ledger,
-      render: rewindActionRenderer(t, () => true, (row, anchor) => opened.push({ row, anchor })),
+      render: rewindActionRenderer(t, () => true, (row, anchor) => opened.push({ row, anchor }), takeoverStore()),
     })
     // The ledger identity is what the outlets render, so the mount replaced it.
     expect(ledger.store[0]!.component).not.toBe(officialRow)
@@ -197,7 +217,7 @@ describe('row takeover', () => {
     const ledger = new FakeLedger([{ component: withExtra, options: { key: 'user' } }])
     const dispose = installRowAction({
       slots: ledger,
-      render: rewindActionRenderer(t, () => true, () => {}),
+      render: rewindActionRenderer(t, () => true, () => {}, takeoverStore()),
     })
     const container = render(ledger.store[0]!.component)
     expect(actionOrder(container)).toEqual(['copy', 'existing', 'action'])
@@ -319,11 +339,43 @@ describe('action eligibility', () => {
     const ledger = new FakeLedger([{ component: officialRow, options: { key: 'user' } }])
     const dispose = installRowAction({
       slots: ledger,
-      render: rewindActionRenderer(t, () => false, () => { throw new Error('must not open') }),
+      render: rewindActionRenderer(t, () => false, () => { throw new Error('must not open') }, takeoverStore()),
     })
     const container = render(ledger.store[0]!.component)
     expect(container.querySelector('[data-copy]')).not.toBeNull()
     expect(rewoundButton(container)).toBeNull()
+    dispose()
+  })
+})
+
+describe('takeover claim', () => {
+  it('removes the row action while a claim is present and restores it on release', () => {
+    const takeover = takeoverStore()
+    const ledger = new FakeLedger([{ component: officialRow, options: { key: 'user' } }])
+    const dispose = installRowAction({
+      slots: ledger,
+      render: rewindActionRenderer(t, () => true, () => {}, takeover),
+    })
+    const container = render(ledger.store[0]!.component)
+    expect(rewoundButton(container)).not.toBeNull()
+
+    act(() => { takeover.set({ owner: 'auto', claim: 'my-theme', claimed: true }) })
+    expect(rewoundButton(container)).toBeNull()
+
+    act(() => { takeover.set({ owner: 'auto', claim: undefined, claimed: false }) })
+    expect(rewoundButton(container)).not.toBeNull()
+    dispose()
+  })
+
+  it('keeps the action under uiOwner self even while a claim is present', () => {
+    const takeover = takeoverStore({ owner: 'self', claim: 'my-theme', claimed: false })
+    const ledger = new FakeLedger([{ component: officialRow, options: { key: 'user' } }])
+    const dispose = installRowAction({
+      slots: ledger,
+      render: rewindActionRenderer(t, () => true, () => {}, takeover),
+    })
+    const container = render(ledger.store[0]!.component)
+    expect(rewoundButton(container)).not.toBeNull()
     dispose()
   })
 })

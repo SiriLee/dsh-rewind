@@ -124,10 +124,10 @@ describe('checkpoint creation', () => {
     await writeFile(file, 'too large')
     await checkpoint(['m2'])
     expect((await readCheckpoint('m2')).files[file]).toEqual(before)
-    expect((await store.preview(sessionId, 'm2')).uncovered).toEqual([{ path: file, size: 9 }])
+    expect((await store.preview(sessionId, 'm2')).skipped).toEqual([{ path: file, reason: 'oversized' }])
   })
 
-  it('returns actions and uncovered paths from one preview call', async () => {
+  it('returns actions and oversized skips from one preview call', async () => {
     store = new SnapshotStore(storeRoot, { maxFileBytes: 4 })
     await store.loadSession(view(['m1', 'm2']))
     await checkpoint(['m1'])
@@ -141,7 +141,7 @@ describe('checkpoint creation', () => {
 
     const preview = await store.preview(sessionId, 'm2')
     expect(preview.files).toEqual([{ path: changed, action: 'restore' }])
-    expect(preview.uncovered).toEqual([{ path: big, size: 9 }])
+    expect(preview.skipped).toEqual([{ path: big, reason: 'oversized' }])
   })
 
   it('does not track a file first seen over the cap', async () => {
@@ -152,7 +152,7 @@ describe('checkpoint creation', () => {
     expect((await store.captureFirstTouch(sessionId, file)).recorded).toBe(false)
     await checkpoint(['m2'])
     expect((await readCheckpoint('m2')).files).toEqual({})
-    expect((await store.preview(sessionId, 'm2')).uncovered).toEqual([])
+    expect((await store.preview(sessionId, 'm2')).skipped).toEqual([])
   })
 
   it.runIf(posixOnly)('does not follow a symlink planted at a JSON temp name', async () => {

@@ -1,319 +1,208 @@
 /**
  * @vitest-environment jsdom
  *
- * Composer-refill probes for the rewind path (`runRewindAndFill` in
- * `rewind-flow.ts`): the empty-draft guard (a draft the user is editing must
- * not be clobbered), the narrowed contract that a normal rewind emits no
- * verbose diagnostics, and the teardown-safety rewrite
- * (a `session.command` throw becomes a `warn` on the
- * `void runRewindAndFill(...)` call site instead of a silent unhandled
- * rejection). The session face and chat snapshot are hand fakes.
+ * Composer-refill probes for the v1 rewind flow (`runRewindAndFill`): the
+ * preview/commit sequence, refill from `preview.withdraw`, image restore, the
+ * empty-draft guard, and code-based failure hints. The transport is a stubbed
+ * `fetch`; the session face and composer are hand fakes.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { ChatConversationViewNode } from '../src/client/hidden.ts'
 import { runRewindAndFill } from '../src/client/rewind-flow.ts'
-import { ENGINE_COMMAND, type ChatOf, type ChatWatch, type HiddenChat } from '../src/client/hidden.ts'
+import type { PreviewValue } from '../src/client/host-api.ts'
+import { CLASS } from '../src/client/styles.ts'
 
-const TARGET = 5
-const COMMAND_SEQ = 99
 const TEXT = 'hello world'
-
-/** A chat view node; only the fields the reading logic touches are real. */
-function node(key: string, kind: string, anchorSeq: number, data: unknown): ChatConversationViewNode {
-  return { key, kind, id: key, target: 'chat', anchorSeq, data } as unknown as ChatConversationViewNode
+const IMAGE = {
+  attachmentId: 'sha256:abc',
+  mediaType: 'image/png',
+  bytes: 12,
+  width: 3,
+  height: 4,
+  name: 'shot.png',
 }
 
-/** A user message row carrying the target seq + editable text. */
-function userNode(seq: number): ChatConversationViewNode {
-  return node(`u${seq}`, 'user', seq, { seq, content: [{ type: 'text', text: TEXT }] })
-}
-
-/** A durable image reference as a user-message content block carries it. */
-function imageRef(mediaType = 'image/png') {
-  return { attachmentId: `sha256:${'a'.repeat(64)}`, mediaType, bytes: 12, width: 3, height: 4 }
-}
-
-/** A user message row carrying one image block plus editable text. */
-function imageTextNode(seq: number): ChatConversationViewNode {
-  return node(`u${seq}`, 'user', seq, { seq, content: [{ type: 'image', attachment: imageRef() }, { type: 'text', text: TEXT }] })
-}
-
-/** A user message row carrying ONLY an image block. */
-function imageOnlyNode(seq: number): ChatConversationViewNode {
-  return node(`u${seq}`, 'user', seq, { seq, content: [{ type: 'image', attachment: imageRef() }] })
-}
-
-/** An executed rewind command row (success + marker) targeting `target`. */
-function executedRewind(seq: number, target: number): ChatConversationViewNode {
-  const data = {
-    kind: 'command', seq, time: 0, commandId: 'cid', name: ENGINE_COMMAND,
-    args: `@${target} both`,
-    outcome: { kind: 'success', text: `Withdrawn seq ${target} and everything after it.`, sourceEventSeq: seq },
-  } as unknown as CommandNode
-  return node(`c${seq}`, 'command', seq, data)
-}
-
-function makeChat(nodes: readonly ChatConversationViewNode[]): HiddenChat {
-  const order: string[] = []
-  const map = new Map<string, ChatConversationViewNode>()
-  for (const n of nodes) {
-    order.push(n.key)
-    map.set(n.key, n)
+function previewValue(overrides: Partial<PreviewValue> = {}): PreviewValue {
+  return {
+    headSeq: 11,
+    withdraw: { text: TEXT, attachments: [] },
+    files: { available: true, changes: [], skipped: [] },
+    ...overrides,
   }
-  return { order, nodes: { get: (k: string) => map.get(k) } } as HiddenChat
 }
 
-/** Build a fake session whose `command` appends the executed rewind node. */
-function fakeSession(target: ChatConversationViewNode = userNode(TARGET)) {
-  let chat = makeChat([target])
-  const command = vi.fn(async () => {
-    chat = makeChat([target, executedRewind(COMMAND_SEQ, TARGET)])
-    return { ok: true, value: { matched: true } }
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
   })
-  const session = {
-    sessionId: 's1',
-    command,
-    subscribe: vi.fn(() => () => {}),
-    getSnapshot: vi.fn(() => ({})),
-  } as unknown as SessionFace
-  const chatOf: ChatOf = () => chat
-  // First-check hit path: the watch is never needed (no-op), but the signature
-  // now requires it. See fakeSessionControlled for the watch-driven path.
-  const watch: ChatWatch = () => () => {}
-  return { session, chatOf, command, watch }
 }
 
-/**
- * A fake session whose rewind command makes the post-command chat read fail: the
- * target row is no longer readable from the chat snapshot afterwards. A stand-in
- * for any post-command read-channel failure — the withdrawn text must therefore
- * be captured BEFORE the command runs (issue #94).
- */
-function fakeSessionShadowing(target: ChatConversationViewNode = userNode(TARGET)) {
-  let chat = makeChat([target])
-  const command = vi.fn(async () => {
-    chat = makeChat([executedRewind(COMMAND_SEQ, TARGET)])
-    return { ok: true, value: { matched: true } }
-  })
-  const session = {
-    sessionId: 's1',
-    command,
-    subscribe: vi.fn(() => () => {}),
-    getSnapshot: vi.fn(() => ({})),
-  } as unknown as SessionFace
-  const chatOf: ChatOf = () => chat
-  const watch: ChatWatch = () => () => {}
-  return { session, chatOf, command, watch }
+interface FetchCall {
+  readonly url: string
+  readonly body: Record<string, unknown>
 }
 
-/**
- * A fake session that does NOT append the executed rewind node inside
- * `command`: the first check misses, and the refill only proceeds once the
- * chat-update `watch` fires (0.1.2 signal path). Exposes a manual trigger.
- */
-function fakeSessionControlled() {
-  let chat = makeChat([userNode(TARGET)])
-  let trigger: (() => void) | null = null
-  const command = vi.fn(async () => ({ ok: true, value: { matched: true } }))
-  const watch: ChatWatch = (_sid, cb) => {
-    trigger = cb
-    return () => {}
-  }
-  const session = {
-    sessionId: 's1',
-    command,
-    subscribe: vi.fn(() => () => {}),
-    getSnapshot: vi.fn(() => ({})),
-  } as unknown as SessionFace
-  const chatOf: ChatOf = () => chat
-  const settleChat = (): void => {
-    chat = makeChat([userNode(TARGET), executedRewind(COMMAND_SEQ, TARGET)])
-  }
-  return { session, chatOf, command, watch, settleChat, getTrigger: (): (() => void) | null => trigger }
+/** Stub fetch; `preview`/`commit` answer the two contract calls. */
+function stubContract(options: {
+  preview?: () => Response | Promise<Response>
+  commit?: () => Response | Promise<Response>
+}): FetchCall[] {
+  const calls: FetchCall[] = []
+  vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input)
+    calls.push({ url, body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> })
+    if (url.endsWith('/preview')) return await (options.preview?.() ?? jsonResponse({ ok: true, value: previewValue() }))
+    return await (options.commit?.() ?? jsonResponse({ ok: true, value: { conversation: { rewound: true } } }))
+  }))
+  return calls
 }
 
-/** A `[data-composer-input]` contenteditable holding an existing draft. */
-function addEditableDraft(text: string): HTMLElement {
-  const editable = document.createElement('div')
-  editable.setAttribute('data-composer-input', '')
-  editable.setAttribute('contenteditable', 'true')
-  editable.textContent = text
-  document.body.appendChild(editable)
-  return editable
+/** The fake session face the flow reads. */
+function fakeSession(): SessionFace {
+  return { sessionId: 's1' } as unknown as SessionFace
+}
+
+/** Put a composer element in the DOM and return its current draft text. */
+function composer(): HTMLElement {
+  const element = document.createElement('div')
+  element.setAttribute('data-composer-input', '')
+  document.body.append(element)
+  return element
+}
+
+/** The last rendered status hint. */
+function hintText(): string | null {
+  return document.querySelector<HTMLElement>(`.${CLASS.guardHint}`)?.textContent ?? null
+}
+
+async function run(overrides: {
+  seq?: number
+  mode?: 'conversation' | 'both'
+  mainView?: boolean
+  setComposerText?: (sessionId: string, text: string) => boolean
+  restoreImages?: (sessionId: string, images: readonly { attachmentId: string }[]) => Promise<void>
+  failureText?: (code: string) => string
+} = {}): Promise<void> {
+  await runRewindAndFill(
+    fakeSession(),
+    overrides.seq ?? 5,
+    overrides.mode ?? 'conversation',
+    () => overrides.mainView ?? true,
+    overrides.setComposerText ?? vi.fn(() => true),
+    overrides.restoreImages,
+    overrides.failureText ?? (code => `E:${code}`),
+  )
 }
 
 afterEach(() => {
-  document.body.innerHTML = ''
-  localStorage.removeItem('dsh-rewind.debug')
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
+  document.body.innerHTML = ''
 })
 
-describe('runRewindAndFill (durable rewind refill)', () => {
-  /** The session of every fixture below is the main-view session. */
-  const isMainViewSession = (sessionId: string): boolean => sessionId === 's1'
-
-  it('refills the empty composer (normal path emits no verbose diagnostics)', async () => {
-    const { session, chatOf, command, watch } = fakeSession()
-    const setComposerText = vi.fn(() => true)
-    // The DEBUG switch no longer gates any call in this path: even with it
-    // on, a successful rewind must not emit verbose info/debug output.
-    localStorage.setItem('dsh-rewind.debug', 'dsh-rewind:refill,dsh-rewind:hiding')
-    const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
-    const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(command).toHaveBeenCalledWith(`/rewind-plugin @${TARGET} both`)
-    expect(setComposerText).toHaveBeenCalledTimes(1)
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
-    expect(info).not.toHaveBeenCalled()
-    expect(debug).not.toHaveBeenCalled()
+describe('runRewindAndFill', () => {
+  it('previews, commits the bound head, then refills the withdrawn text', async () => {
+    composer()
+    const calls = stubContract({})
+    const setText = vi.fn(() => true)
+    await run({ mode: 'both', setComposerText: setText })
+    expect(calls.map(call => call.url)).toEqual([
+      './api/dsh-rewind/v1/preview',
+      './api/dsh-rewind/v1/commit',
+    ])
+    expect(calls[0]?.body).toEqual({ sessionId: 's1', seq: 5 })
+    expect(calls[1]?.body).toEqual({ sessionId: 's1', seq: 5, headSeq: 11, mode: 'both' })
+    expect(setText).toHaveBeenCalledWith('s1', TEXT)
+    expect(hintText()).toBeNull()
   })
 
-  it('captures the withdrawn text before the command can invalidate the chat read (issue #94)', async () => {
-    const { session, chatOf, watch } = fakeSessionShadowing()
-    const setComposerText = vi.fn(() => true)
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(setComposerText).toHaveBeenCalledTimes(1)
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+  it('restores images from withdraw.attachments before the text', async () => {
+    composer()
+    stubContract({
+      preview: () => jsonResponse({
+        ok: true,
+        value: previewValue({
+          withdraw: { text: TEXT, attachments: [{ type: 'image', attachment: IMAGE }] },
+        }),
+      }),
+    })
+    const restored: Array<readonly { attachmentId: string }[]> = []
+    const restoreImages = vi.fn(async (_sessionId: string, images: readonly { attachmentId: string }[]) => {
+      restored.push(images)
+    })
+    await run({ restoreImages })
+    expect(restored).toHaveLength(1)
+    expect(restored[0]?.[0]?.attachmentId).toBe(IMAGE.attachmentId)
   })
 
-  it('captures the withdrawn image references before the command can invalidate the chat read (issue #94)', async () => {
-    const { session, chatOf, watch } = fakeSessionShadowing(imageTextNode(TARGET))
-    const setComposerText = vi.fn(() => true)
-    const restoreImages = vi.fn(async () => {})
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
-    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef()])
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
+  it('does not clobber an in-progress draft', async () => {
+    composer().textContent = 'draft'
+    stubContract({})
+    const setText = vi.fn(() => true)
+    await run({ setComposerText: setText })
+    expect(setText).not.toHaveBeenCalled()
   })
 
-  it('skips the refill when the composer already holds a draft (guard)', async () => {
-    addEditableDraft('in progress draft')
-    const { session, chatOf, watch } = fakeSession()
-    const setComposerText = vi.fn(() => true)
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(setComposerText).not.toHaveBeenCalled()
+  it('does not refill after the user switched sessions', async () => {
+    composer()
+    stubContract({})
+    const setText = vi.fn(() => true)
+    await run({ mainView: false, setComposerText: setText })
+    expect(setText).not.toHaveBeenCalled()
   })
 
-  it('turns a session.command throw into a warn instead of an unhandled rejection', async () => {
-    const { session, chatOf, watch } = fakeSession()
-    session.command = vi.fn(async () => { throw new Error('teardown') }) as SessionFace['command']
-    const setComposerText = vi.fn(() => true)
-    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await expect(runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)).resolves.toBeUndefined()
-    expect(setComposerText).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledTimes(1)
+  it('shows the localized commit failure and leaves the composer alone', async () => {
+    composer()
+    stubContract({
+      commit: () => jsonResponse({
+        ok: false,
+        error: { code: 'head-changed', message: 'session head is 12, expected 11' },
+      }, 409),
+    })
+    const setText = vi.fn(() => true)
+    await run({ setComposerText: setText })
+    expect(setText).not.toHaveBeenCalled()
+    expect(hintText()).toBe('E:head-changed')
   })
 
-  it('does nothing on an unmatched rewind (matched !== true)', async () => {
-    const { session, chatOf, watch } = fakeSession()
-    session.command = vi.fn(async () => ({ ok: true, value: { matched: false } })) as SessionFace['command']
-    const setComposerText = vi.fn(() => true)
-    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(setComposerText).not.toHaveBeenCalled()
-    // The admission miss is never silent: it is the "click does nothing"
-    // symptom of SiriLee/dsh-rewind#26.
-    expect(warn).toHaveBeenCalledTimes(1)
+  it('shows the localized preview failure and never commits', async () => {
+    composer()
+    const calls = stubContract({
+      preview: () => jsonResponse({
+        ok: false,
+        error: { code: 'target-missing', message: 'no user message at seq 5' },
+      }, 404),
+    })
+    const setText = vi.fn(() => true)
+    await run({ setComposerText: setText })
+    expect(calls).toHaveLength(1)
+    expect(setText).not.toHaveBeenCalled()
+    expect(hintText()).toBe('E:target-missing')
   })
 
-  it('warns with the host reason when the host rejects the command (ok:false)', async () => {
-    const { session, chatOf, watch } = fakeSession()
-    const failure = { code: 'session/agent-busy', message: 'session "sub-1" is owned by subagent routing', details: {} }
-    session.command = vi.fn(async () => ({ ok: false, error: failure })) as unknown as SessionFace['command']
-    const setComposerText = vi.fn(() => true)
-    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(setComposerText).not.toHaveBeenCalled()
-    expect(warn).toHaveBeenCalledTimes(1)
-    expect(warn.mock.calls[0]?.[2]).toEqual(failure)
+  it('still refills when a both-mode file effect is unavailable', async () => {
+    composer()
+    stubContract({
+      commit: () => jsonResponse({
+        ok: true,
+        value: {
+          conversation: { rewound: true },
+          files: { applied: false, reason: 'no-checkpoint' },
+        },
+      }),
+    })
+    const setText = vi.fn(() => true)
+    await run({ mode: 'both', setComposerText: setText })
+    expect(setText).toHaveBeenCalledWith('s1', TEXT)
   })
 
-  it('refills after the chat-update watch fires (0.1.2 signal path: the first check misses)', async () => {
-    const { session, chatOf, command, watch, settleChat, getTrigger } = fakeSessionControlled()
-    const setComposerText = vi.fn(() => true)
-    const call = runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    // command resolves (matched) and the first check misses; the refill waits on watch
-    await Promise.resolve()
-    await Promise.resolve()
-    settleChat()
-    getTrigger()?.()
-    await call
-    expect(command).toHaveBeenCalledWith(`/rewind-plugin @${TARGET} both`)
-    expect(setComposerText).toHaveBeenCalledTimes(1)
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
-  })
-
-  it('still honours the empty-composer guard when the watch fires late', async () => {
-    addEditableDraft('in progress draft')
-    const { session, chatOf, watch, settleChat, getTrigger } = fakeSessionControlled()
-    const setComposerText = vi.fn(() => true)
-    const call = runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    await Promise.resolve()
-    await Promise.resolve()
-    settleChat()
-    getTrigger()?.()
-    await call
-    expect(setComposerText).not.toHaveBeenCalled()
-  })
-
-  it('restores the image blocks of an image-bearing message alongside its text', async () => {
-    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
-    const setComposerText = vi.fn(() => true)
-    const restoreImages = vi.fn(async () => {})
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
-    expect(restoreImages).toHaveBeenCalledTimes(1)
-    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef()])
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
-  })
-
-  it('restores the image of an image-only message (no text refill, no crash)', async () => {
-    const { session, chatOf, watch } = fakeSession(imageOnlyNode(TARGET))
-    const setComposerText = vi.fn(() => true)
-    const restoreImages = vi.fn(async () => {})
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
-    expect(restoreImages).toHaveBeenCalledTimes(1)
-    expect(restoreImages).toHaveBeenCalledWith('s1', [imageRef()])
-    expect(setComposerText).not.toHaveBeenCalled()
-  })
-
-  it('restores images even when a draft blocks the text refill (nothing clobbers the draft)', async () => {
-    addEditableDraft('in progress draft')
-    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
-    const setComposerText = vi.fn(() => true)
-    const restoreImages = vi.fn(async () => {})
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)
-    expect(restoreImages).toHaveBeenCalledTimes(1)
-    expect(setComposerText).not.toHaveBeenCalled()
-  })
-
-  it('keeps the text refill when the image restore throws (best-effort restore)', async () => {
-    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
-    const setComposerText = vi.fn(() => true)
-    const restoreImages = vi.fn(async () => { throw new Error('image store down') })
-    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await expect(runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText, restoreImages)).resolves.toBeUndefined()
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
-    expect(warn).toHaveBeenCalledTimes(1)
-  })
-
-  it('degrades to the text-only refill when no restorer was injected', async () => {
-    const { session, chatOf, watch } = fakeSession(imageTextNode(TARGET))
-    const setComposerText = vi.fn(() => true)
-    const warn = vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    await runRewindAndFill(session, TARGET, 'both', isMainViewSession, chatOf, watch, setComposerText)
-    expect(setComposerText).toHaveBeenCalledWith('s1', TEXT)
-    expect(warn).not.toHaveBeenCalled()
-  })
-
-  it('skips the refill when the rewound session is no longer the main view', async () => {
-    // alpha.2 replaces `SessionListState.current` with the list row's
-    // `mainView` reference count: a user who switched sessions mid-rewind must
-    // not get the withdrawn text in the other session's composer.
-    const { session, chatOf, watch } = fakeSession()
-    const setComposerText = vi.fn(() => true)
-    const notMainView = (): boolean => false
-    await runRewindAndFill(session, TARGET, 'both', notMainView, chatOf, watch, setComposerText)
-    expect(setComposerText).not.toHaveBeenCalled()
+  it('turns a transport timeout into a generic hint instead of an unhandled rejection', async () => {
+    composer()
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new DOMException('timed out', 'TimeoutError') }))
+    const setText = vi.fn(() => true)
+    await run({ setComposerText: setText })
+    expect(setText).not.toHaveBeenCalled()
+    expect(hintText()).toBe('E:internal')
   })
 })

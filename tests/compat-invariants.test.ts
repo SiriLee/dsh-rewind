@@ -117,14 +117,14 @@ describe('I1 log replayability (probe: token-meter + resume preflight)', () => {
     const target = session.surface.nodes.find(seq =>
       session.snapshotEvents().find(e => e.seq === seq)?.type === 'user/message')!
     const surfaceBefore = [...baseline.surface.nodes]
-    const planBefore = planRewind(baseline.snapshotEvents(), baseline.surface.nodes, { kind: 'seq', seq: target })
+    const planBefore = planRewind(baseline.snapshotEvents(), baseline.surface.nodes, target)
 
     const cast = (s: Session) => s as unknown as { append(type: string, data: unknown): unknown }
     cast(session).append('workspace/changes', { turn: 1 })
     cast(session).append('workspace/changes', { turn: 2 })
 
     expect([...session.surface.nodes]).toEqual(surfaceBefore)
-    expect(planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: target }))
+    expect(planRewind(session.snapshotEvents(), session.surface.nodes, target))
       .toEqual(planBefore)
 
     applyRewind(session, target)

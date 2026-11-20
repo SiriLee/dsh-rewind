@@ -31,7 +31,7 @@ const t = ((key: string, params?: Record<string, unknown>) =>
   params === undefined ? key : `${key}:${String(params['path'] ?? params['message'] ?? params['preview'])}`) as unknown as PopoverOptions['t']
 
 /** Open the durable popover; `preview`, when given, answers the host query. */
-function open(preview?: () => Promise<PreviewOutcome>): void {
+function open(preview?: () => Promise<PreviewOutcome>, checkpointingEnabled = true): void {
   if (preview !== undefined) registerPreviewCall(() => preview())
   openPopover({
     session: fakeSession(),
@@ -40,8 +40,14 @@ function open(preview?: () => Promise<PreviewOutcome>): void {
     preview: 'hello',
     anchor: document.body,
     t,
+    checkpointingEnabled,
     onRewind: () => {},
   })
+}
+
+/** A successful preview value with one file diff and no skipped paths. */
+function previewValue(changes: readonly { path: string; action: 'restore' | 'delete' }[] = []) {
+  return { headSeq: 11, withdraw: { text: 'hello', attachments: [] }, files: { available: true as const, changes, skipped: [] } }
 }
 
 /** Flush the microtask chain of the background impact probe. */
@@ -65,10 +71,10 @@ afterEach(() => {
 
 describe('openPopover (a failed impact probe settles the modes step)', () => {
   it('shows the host reason when the preview request fails', async () => {
-    open(async () => ({ kind: 'error', text: 'owned by subagent routing' }))
+    open(async () => ({ kind: 'error', code: 'target-missing', message: 'owned by subagent routing' }))
     await settle()
     expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
-      .toContain('owned by subagent routing')
+      .toContain('popover.impact.failed:error.internal')
     // The step resolved: the code-restore entry is hidden, not left "checking…".
     expect(optionHints()).not.toContain('popover.checking')
   })
@@ -82,7 +88,7 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
     open()
     await settle()
     expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
-      .toContain('host query is unavailable')
+      .toContain('popover.impact.failed:error.internal')
     expect(optionHints()).not.toContain('popover.checking')
   })
 
@@ -101,8 +107,11 @@ describe('openPopover (a failed impact probe settles the modes step)', () => {
 
 describe('openPopover (the impact step reports checkpointing-off)', () => {
   /** Open, settle a successful preview, then enter the both-mode impact step. */
-  async function impactText(files: readonly { path: string; action: 'restore' | 'delete' }[], backupOff: boolean): Promise<string> {
-    open(async () => ({ kind: 'success', files, backupOff }))
+  async function impactText(
+    changes: readonly { path: string; action: 'restore' | 'delete' }[],
+    checkpointingEnabled: boolean,
+  ): Promise<string> {
+    open(async () => ({ kind: 'success', value: previewValue(changes) }), checkpointingEnabled)
     await settle()
     const both = [...document.querySelectorAll<HTMLButtonElement>('button')]
       .find(button => button.textContent?.includes('popover.both'))
@@ -111,8 +120,8 @@ describe('openPopover (the impact step reports checkpointing-off)', () => {
     return document.querySelector(`.${CLASS.popoverImpact}`)?.textContent ?? ''
   }
 
-  it('appends the note when the host reports backupOff', async () => {
-    const impact = await impactText([{ path: '/a', action: 'restore' }], true)
+  it('appends the note while file snapshots are off', async () => {
+    const impact = await impactText([{ path: '/a', action: 'restore' }], false)
     expect(impact).toContain('popover.impact.restore:/a')
     expect(impact).toContain('popover.backupDisabled')
     const note = document.querySelector(`.${CLASS.popoverNote}`)
@@ -120,11 +129,26 @@ describe('openPopover (the impact step reports checkpointing-off)', () => {
     expect(note?.closest(`.${CLASS.popoverImpact}`)).not.toBeNull()
   })
 
-  it('omits the note when the host does not report it', async () => {
-    const impact = await impactText([{ path: '/a', action: 'restore' }], false)
+  it('omits the note while file snapshots are on', async () => {
+    const impact = await impactText([{ path: '/a', action: 'restore' }], true)
     expect(impact).toContain('popover.impact.restore:/a')
     expect(impact).not.toContain('popover.backupDisabled')
     expect(document.querySelector(`.${CLASS.popoverNote}`)).toBeNull()
+  })
+
+  it('hides the both entry and explains an unavailable file effect', async () => {
+    open(async () => ({
+      kind: 'success',
+      value: {
+        headSeq: 11,
+        withdraw: { text: 'hello', attachments: [] },
+        files: { available: false, reason: 'no-checkpoint' },
+      },
+    }))
+    await settle()
+    expect(document.querySelector(`.${CLASS.popoverImpact}`)?.textContent)
+      .toContain('popover.impact.failed:files.unavailable')
+    expect(optionHints()).not.toContain('popover.checking')
   })
 })
 

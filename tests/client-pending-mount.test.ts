@@ -19,6 +19,7 @@ import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client
 // jsdom + React act: the environment must opt in so act() does not warn.
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+import type { TakeoverSnapshot, TakeoverStore } from '../src/client/claim.ts'
 import { createPendingBridge } from '../src/client/pending-mount.tsx'
 import type { InboxMessageLike } from '../src/client/pending.ts'
 import { CLASS } from '../src/client/styles.ts'
@@ -122,14 +123,34 @@ function pendingBubble(text: string, options: { readonly attachments?: number; r
   return row
 }
 
+/** A mutable takeover store for claim-gated pending probes. */
+function takeoverStore(initial: TakeoverSnapshot = { owner: 'auto', claim: undefined, claimed: false }): TakeoverStore & {
+  set(next: TakeoverSnapshot): void
+} {
+  let snapshot = initial
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set(next) {
+      snapshot = next
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
 /** The layer deps over one fake session. */
-function depsFor(session: SessionFace) {
+function depsFor(session: SessionFace, takeover = takeoverStore()) {
   return {
     sessionOf: () => session,
     setComposerText: vi.fn(() => true),
     restoreImages: vi.fn(async () => {}),
     t: (key: string) => key,
     subscribeLocale: () => () => {},
+    takeover,
   }
 }
 
@@ -141,11 +162,11 @@ function composer(): void {
 }
 
 /** Render the bridge for one session and return its container + root. */
-async function mountBridge(session: SessionFace) {
+async function mountBridge(session: SessionFace, takeover = takeoverStore()) {
   const container = document.createElement('div')
   document.body.append(container)
   const root = createRoot(container)
-  const Bridge = createPendingBridge(depsFor(session))
+  const Bridge = createPendingBridge(depsFor(session, takeover))
   await act(async () => { root.render(createElement(Bridge, { sessionId: 's1' })) })
   return { root, container }
 }
@@ -382,5 +403,28 @@ describe('pending layer (click → confirm → queue removal)', () => {
     expect(inbox.updateQueue).toHaveBeenCalledTimes(1)
     expect(inbox.updateQueue.mock.calls[0]?.[0]).toBe('a')
     expect(deps.setComposerText).toHaveBeenCalledWith('s1', 'rewrite me')
+  })
+})
+
+describe('takeover claim', () => {
+  it('portals no retract button while a claim owns the action interface', async () => {
+    const takeover = takeoverStore()
+    const fake = fakeSession()
+    const { root } = await mountBridge(fake.session, takeover)
+    const region = contentRoot()
+    const bubble = pendingBubble('rewrite me')
+    region.append(bubble)
+    fake.acceptInbox([steeringRow('a', 'rewrite me')])
+    await act(async () => { await Promise.resolve() })
+    expect(bubble.querySelector('button[data-pending-retract]')).not.toBeNull()
+
+    await act(async () => { takeover.set({ owner: 'auto', claim: 'my-theme', claimed: true }) })
+    await act(async () => { await Promise.resolve() })
+    expect(bubble.querySelector('button[data-pending-retract]')).toBeNull()
+
+    await act(async () => { takeover.set({ owner: 'auto', claim: undefined, claimed: false }) })
+    await act(async () => { await Promise.resolve() })
+    expect(bubble.querySelector('button[data-pending-retract]')).not.toBeNull()
+    act(() => { root.unmount() })
   })
 })

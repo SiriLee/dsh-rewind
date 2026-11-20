@@ -16,11 +16,13 @@
  */
 
 import {
-  ENGINE_COMMANDS,
+  REWIND_COMMANDS,
+  hasRewindMarker,
   rewindCutsOf,
   type ChatConversationViewNode,
   type RewindCut,
 } from './hidden.ts'
+import { registerRewindMarker } from './marker-node.ts'
 import { rewindLog } from './log.ts'
 
 interface BuilderLike {
@@ -59,6 +61,8 @@ interface BindingLike {
 
 interface UiConversationLike {
   readonly views?: ViewsLike
+  /** Public Conversation Definition registry; publishes the marker node. */
+  readonly events?: { register(definition: unknown): () => void }
   binding?(sessionId: string): BindingLike | undefined
 }
 
@@ -121,6 +125,19 @@ function installOn(ui: UiConversationLike | undefined, sessions: SessionsLike | 
   currentCleanup = undefined
   if (ui?.views === undefined) return
 
+  // The marker Definition is the durable cut source (I9). It must be registered
+  // before the first Chat builder runs so the marker node is already present.
+  let disposeMarker: (() => void) | undefined
+  try {
+    if (ui.events === undefined) {
+      rewindLog.error('visibility', 'uiConversation.events is unavailable; rewind spans cannot be derived')
+    } else {
+      disposeMarker = registerRewindMarker(ui.events)
+    }
+  } catch (error) {
+    rewindLog.error('visibility', 'rewind-marker registration failed', error)
+  }
+
   const views = ui.views
   const ensure = (): void => {
     try {
@@ -151,6 +168,7 @@ function installOn(ui: UiConversationLike | undefined, sessions: SessionsLike | 
   ensure()
   currentCleanup = () => {
     unsubscribe?.()
+    disposeMarker?.()
     restorePatches()
     // Existing builders keep the wrapper until recreated.
     rebuildOpenSessions(ui, sessions)
@@ -189,7 +207,7 @@ function rebuildOpenSessions(ui: UiConversationLike, sessions: SessionsLike | un
  */
 export class RewindVisibilityBuilder implements BuilderLike {
   private originals = new Map<string, ChatConversationViewNode>()
-  private commands = new Map<string, ChatConversationViewNode>()
+  private markers = new Map<string, ChatConversationViewNode>()
   private byTurn = new Map<number, Map<string, ChatConversationViewNode>>()
   private turnProcess = new Map<number, string>()
   private derived = new Map<string, ChatConversationViewNode>()
@@ -212,17 +230,17 @@ export class RewindVisibilityBuilder implements BuilderLike {
 
   apply(input: BuilderApplyInput): unknown {
     const affected = new Set<number>()
-    let commandsChanged = false
+    let markersChanged = false
     for (const node of input.upserts) {
       const previous = this.originals.get(node.key)
       const previousTurn = previous === undefined ? undefined : turnOf(previous)
       const nextTurn = turnOf(node)
       if (previousTurn !== undefined) affected.add(previousTurn)
       if (nextTurn !== undefined) affected.add(nextTurn)
-      if (previous?.kind === 'command' || node.kind === 'command') commandsChanged = true
+      if ((previous !== undefined && hasRewindMarker(previous)) || hasRewindMarker(node)) markersChanged = true
       this.setOriginal(node)
     }
-    if (commandsChanged) this.refreshCuts()
+    if (markersChanged) this.refreshCuts()
     if (this.cutSignature !== this.lastSignature) {
       this.lastSignature = this.cutSignature
       return this.inner.replace({ nodes: this.deriveAll(), timeline: input.timeline, ...changed(input) })
@@ -254,7 +272,7 @@ export class RewindVisibilityBuilder implements BuilderLike {
 
   private setAll(nodes: readonly ChatConversationViewNode[]): void {
     this.originals.clear()
-    this.commands.clear()
+    this.markers.clear()
     this.byTurn.clear()
     this.turnProcess.clear()
     this.derived.clear()
@@ -266,7 +284,7 @@ export class RewindVisibilityBuilder implements BuilderLike {
     const previous = this.originals.get(node.key)
     if (previous !== undefined) this.unindex(previous)
     this.originals.set(node.key, node)
-    if (node.kind === 'command') this.commands.set(node.key, node)
+    if (hasRewindMarker(node)) this.markers.set(node.key, node)
     const turn = turnOf(node)
     if (turn === undefined) return
     const members = this.byTurn.get(turn) ?? new Map<string, ChatConversationViewNode>()
@@ -276,7 +294,7 @@ export class RewindVisibilityBuilder implements BuilderLike {
   }
 
   private unindex(node: ChatConversationViewNode): void {
-    if (node.kind === 'command') this.commands.delete(node.key)
+    if (hasRewindMarker(node)) this.markers.delete(node.key)
     const turn = turnOf(node)
     if (turn === undefined) return
     const members = this.byTurn.get(turn)
@@ -295,7 +313,7 @@ export class RewindVisibilityBuilder implements BuilderLike {
   }
 
   private refreshCuts(): void {
-    this.cuts = rewindCutsOf(this.commands.values())
+    this.cuts = rewindCutsOf(this.markers.values())
     this.cutSignature = JSON.stringify(
       this.cuts.map(cut => `${cut.target}:${cut.marker}`).sort(),
     )
@@ -318,16 +336,19 @@ export class RewindVisibilityBuilder implements BuilderLike {
 
   private deriveOne(node: ChatConversationViewNode, cuts: readonly RewindCut[]): ChatConversationViewNode {
     const base = this.originals.get(node.key) ?? node
+    if (hasRewindMarker(base)) return hidden(base)
     if (base.kind === 'command') {
       const command = base.data as {
         name?: string | null
         args?: string | null
         outcome?: { kind?: string; sourceEventSeq?: number } | null
       }
-      if (command.name !== undefined && command.name !== null && ENGINE_COMMANDS.has(command.name)) {
+      if (command.name !== undefined && command.name !== null && REWIND_COMMANDS.has(command.name)) {
         const args = command.args ?? ''
         const probe = args.includes('preview') || args.includes('__candidates')
-        const executed = command.outcome?.kind === 'success' && command.outcome.sourceEventSeq !== undefined
+        // A successful engine command is a rewind row; newer command outcomes do
+        // not carry a marker seq (the marker node owns the cut now).
+        const executed = command.outcome?.kind === 'success'
         if (probe || executed) return hidden(base)
       }
       return base

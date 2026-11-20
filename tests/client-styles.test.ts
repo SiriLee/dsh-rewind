@@ -3,8 +3,8 @@
  * still owns (mode popover, failure toast, keyboard focus) and the cleanup
  * card's own CSS — the shared form frame (its unavailable, read-only, save, and
  * failure lines included) and the numeric field are the harness's components
- * now, so this pins only the block the card still owns — the auto-cleanup toggle
- * row and its hint.
+ * now, so this pins only the block the card still owns — the toggle rows, their
+ * hints, and the divider.
  *
  * Source-text on purpose: jsdom applies no stylesheet, so only a real browser
  * could assert these numbers by rendering.

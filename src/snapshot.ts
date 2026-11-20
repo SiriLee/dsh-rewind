@@ -43,7 +43,6 @@ import {
   type PruneStaleReport,
   type RestoreOutcome,
   type SkippedPath,
-  type UncoveredPath,
 } from './snapshot-format.ts'
 import {
   dirBytes,
@@ -67,7 +66,6 @@ export {
   type PruneStaleReport,
   type RestoreOutcome,
   type SkippedPath,
-  type UncoveredPath,
 } from './snapshot-format.ts'
 
 /** Sub-directory of the harness home holding this plugin's snapshots. */
@@ -137,7 +135,6 @@ interface RestorePlan {
   readonly actions: PlannedAction[]
   readonly skipped: SkippedPath[]
   readonly failed: { readonly path: string; readonly message: string }[]
-  readonly uncovered: UncoveredPath[]
   readonly noCheckpoint: boolean
 }
 
@@ -333,7 +330,10 @@ export class SnapshotStore {
    */
   async preview(sessionId: string, messageId: string): Promise<{
     readonly files: readonly FileImpact[]
-    readonly uncovered: readonly UncoveredPath[]
+    /** Paths the restore would leave alone, sorted by path. */
+    readonly skipped: readonly SkippedPath[]
+    /** The target has no recorded checkpoint. */
+    readonly noCheckpoint: boolean
   }> {
     return await this.withLock(sessionId, async (state) => {
       this.assertUsable(state)
@@ -342,7 +342,8 @@ export class SnapshotStore {
         files: plan.actions
           .map(action => ({ path: action.path, action: action.action }))
           .sort((a, b) => a.path.localeCompare(b.path)),
-        uncovered: plan.uncovered,
+        skipped: [...plan.skipped].sort((a, b) => a.path.localeCompare(b.path)),
+        noCheckpoint: plan.noCheckpoint,
       }
     })
   }
@@ -612,13 +613,12 @@ export class SnapshotStore {
   private async planLocked(state: SessionState, messageId: string): Promise<RestorePlan> {
     const target = state.order.find(checkpoint => checkpoint.messageId === messageId)
     if (target === undefined || state.order.length === 0) {
-      return { actions: [], skipped: [], failed: [], uncovered: [], noCheckpoint: true }
+      return { actions: [], skipped: [], failed: [], noCheckpoint: true }
     }
     const latest = state.order[state.order.length - 1]!
     const actions: PlannedAction[] = []
     const skipped: SkippedPath[] = []
     const failed: { path: string; message: string }[] = []
-    const uncovered: UncoveredPath[] = []
     for (const path of Object.keys(latest.files)) {
       const row = Object.hasOwn(target.files, path)
         ? target.files[path]!
@@ -637,9 +637,6 @@ export class SnapshotStore {
           return null
         })
         if (live === null) continue
-        if (live !== undefined && live.isFile() && this.isOverFileCap(live.size)) {
-          uncovered.push({ path, size: live.size })
-        }
         if (live !== undefined && !(await parentStillMatches(path, row.parent))) {
           skipped.push({ path, reason: 'parent' })
           continue
@@ -667,7 +664,6 @@ export class SnapshotStore {
       }
       const live = await lstat(path).catch(() => undefined)
       if (live !== undefined && live.isFile() && this.isOverFileCap(live.size)) {
-        uncovered.push({ path, size: live.size })
         skipped.push({ path, reason: 'oversized' })
         continue
       }
@@ -694,8 +690,7 @@ export class SnapshotStore {
       })
     }
     actions.sort((a, b) => a.path.localeCompare(b.path))
-    uncovered.sort((a, b) => a.path.localeCompare(b.path))
-    return { actions, skipped, failed, uncovered, noCheckpoint: false }
+    return { actions, skipped, failed, noCheckpoint: false }
   }
 
   /** Earliest retained row containing `path` strictly after `time`. */

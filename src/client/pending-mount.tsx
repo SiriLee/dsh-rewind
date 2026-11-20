@@ -13,10 +13,11 @@
  * @module dsh-rewind/client/pending-mount
  */
 
-import { useLayoutEffect, useReducer, useState, type ReactNode } from 'react'
+import { useLayoutEffect, useReducer, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import { RewindActionButton } from './action.tsx'
+import type { TakeoverStore } from './claim.ts'
 import type { MessageImageRef } from './hidden.ts'
 import type { RewindKey } from './locales.ts'
 import { rewindLog } from './log.ts'
@@ -53,6 +54,8 @@ export interface PendingBridgeDeps {
   restoreImages?(sessionId: string, images: readonly MessageImageRef[]): Promise<void>
   t: Translate
   subscribeLocale(cb: () => void): () => void
+  /** Live third-party claim; while claimed, this layer portals nothing. */
+  takeover: TakeoverStore
 }
 
 /**
@@ -192,6 +195,11 @@ function RetractButton({ target, sessionId, deps }: {
 /** The session-scoped layer: inbox-gated refresh, scoped observer, and the portals. */
 function PendingRetractLayer({ sessionId, deps }: { sessionId: string; deps: PendingBridgeDeps }): ReactNode {
   const [targets, setTargets] = useState<readonly PendingTarget[]>(NO_TARGETS)
+  const claimed = useSyncExternalStore(
+    deps.takeover.subscribe,
+    () => deps.takeover.getSnapshot().claimed,
+    () => false,
+  )
   const [, forceRender] = useReducer((count: number) => count + 1, 0)
   // The labels are read at render; a locale switch re-renders the portaled buttons.
   useLayoutEffect(() => deps.subscribeLocale(() => { forceRender() }), [deps])
@@ -225,6 +233,12 @@ function PendingRetractLayer({ sessionId, deps }: { sessionId: string; deps: Pen
     /** The gate: read the inbox, then attach, refresh or tear down accordingly. */
     const refresh = (): void => {
       if (stopped) return
+      // A third-party claimant owns the action interface: no observer, no button.
+      if (claimed) {
+        setTargets(NO_TARGETS)
+        stopObserver()
+        return
+      }
       const session = resolveSession(deps, sessionId)
       const steering = session === undefined ? [] : steeringItemsOf(inboxOf(session)?.['next-step'])
       if (session === undefined || steering.length === 0 || isRewindInertSession(session.getSnapshot())) {
@@ -261,7 +275,7 @@ function PendingRetractLayer({ sessionId, deps }: { sessionId: string; deps: Pen
       unsubscribe?.()
       stopObserver()
     }
-  }, [sessionId, deps])
+  }, [sessionId, deps, claimed])
 
   return targets.map(target => createPortal(
     <RetractButton key={target.itemId} target={target} sessionId={sessionId} deps={deps} />,

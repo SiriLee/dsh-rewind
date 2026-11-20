@@ -2,7 +2,7 @@
  * The rewind mode-selection popover (plain DOM, no React). Step two of the
  * `/rewind` text flow: the target is already fixed (the picked message); the
  * popover offers the two modes. Choosing "both" fetches the impact list over
- * the host `/api` preview route and shows it before confirming.
+ * the v1 contract preview route and shows it before confirming.
  *
  * Keyboard: ↑/↓ move focus across the step's ACTION buttons only (the two
  * modes, or the confirm button on the impact step), Enter activates the
@@ -15,9 +15,8 @@
  */
 
 import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
-import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { chatNodesOf, type ChatOf, type ChatWatch, type HiddenChat } from './hidden.ts'
 import type { PreviewCall, PreviewOutcome } from './host-api.ts'
+import { availabilityKey, contractErrorKey } from './errors.ts'
 import type { RewindKey } from './locales.ts'
 import { rewindLog } from './log.ts'
 import { guardPlacement } from './placement-guard.ts'
@@ -39,10 +38,12 @@ export interface PopoverOptions {
   readonly t: Translate
   /**
    * Execute one rewind in the given mode. The popover closes itself first;
-   * the callback owns the command + composer-refill lifecycle (see
+   * the callback owns the preview/commit + composer-refill lifecycle (see
    * runRewindAndFill in rewind-flow.ts).
    */
-  readonly onRewind?: (mode: 'chat' | 'both') => void
+  readonly onRewind?: (mode: 'conversation' | 'both') => void
+  /** Live file-checkpointing policy, for the incomplete-restore note. */
+  readonly checkpointingEnabled?: boolean
   /** Pending variant: retract a pre-sent steering message (single-confirm flow). */
   readonly retract?: { readonly itemId: string; readonly text: string | null }
   /** Pending variant: executed after the retract confirm closes the popover. */
@@ -108,80 +109,9 @@ export function closePopover(): void {
   }
 }
 
-/** Find the newest rewind command node matching a predicate. */
-function findCommand(chat: HiddenChat | undefined, match: (node: CommandNode) => boolean): CommandNode | undefined {
-  if (chat === undefined) return undefined
-  let found: CommandNode | undefined
-  // `nodes.values()` includes command rows the visibility layer hid, and its
-  // order is store insertion order — not anchor order. Compare seq so a hidden
-  // command still settles the wait instead of being missed.
-  for (const node of chatNodesOf(chat)) {
-    if (node.kind !== 'command') continue
-    const command = node.data as CommandNode
-    if (!match(command)) continue
-    if (found === undefined || command.seq >= found.seq) found = command
-  }
-  return found
-}
-
-/**
- * Seqs of the command nodes currently matching `match`. Sample BEFORE issuing
- * a new command of the same shape so the subsequent wait can exclude them: a
- * repeated rewind of the same target must not settle on the previous command's
- * stale outcome.
- */
-export function knownCommandSeqs(session: SessionFace, chatOf: ChatOf, match: (node: CommandNode) => boolean): Set<number> {
-  const known = new Set<number>()
-  const chat = chatOf(session)
-  if (chat === undefined) return known
-  for (const node of chatNodesOf(chat)) {
-    if (node.kind !== 'command') continue
-    const command = node.data as CommandNode
-    if (match(command)) known.add(command.seq)
-  }
-  return known
-}
-
-/**
- * Resolve the outcome of the newest matching rewind command by watching the
- * session snapshot (command/run + command/done land as one CommandNode).
- * @returns the outcome text-bearing node, or null on timeout.
- */
-export function waitForCommand(
-  session: SessionFace,
-  chatOf: ChatOf,
-  match: (node: CommandNode) => boolean,
-  timeoutMs = 8000,
-  watch: (cb: () => void) => () => void,
-): Promise<{ kind: 'success' | 'error'; text?: string } | null> {
-  return new Promise(resolve => {
-    let settled = false
-    const settle = (value: { kind: 'success' | 'error'; text?: string } | null): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      unsubscribe()
-      resolve(value)
-    }
-    const check = (): void => {
-      const node = findCommand(chatOf(session), match)
-      if (node?.outcome !== null && node?.outcome !== undefined) {
-        settle({ kind: node.outcome.kind, text: node.outcome.text })
-      }
-    }
-    // The chat-update signal: the session face's `subscribe` does
-    // not fire when the chat snapshot changes (the chat moved to the
-    // `uiConversation` view), so the waiting caller passes a watch bound to
-    // that view.
-    const unsubscribe = watch(check)
-    const timer = setTimeout(() => settle(null), timeoutMs)
-    check()
-  })
-}
-
 /** The preview transport before registration and after unload. */
 const UNAVAILABLE: PreviewCall = () =>
-  Promise.resolve({ kind: 'error', text: 'host query is unavailable' })
+  Promise.resolve({ kind: 'error', code: 'internal', message: 'contract preview is unavailable' })
 
 /** The registered host call; the unavailable default until apply registers one. */
 let previewCall: PreviewCall = UNAVAILABLE
@@ -191,7 +121,7 @@ export function registerPreviewCall(call: PreviewCall | null): void {
   previewCall = call ?? UNAVAILABLE
 }
 
-/** Resolve one target's impact through the host preview route. */
+/** Resolve one target's impact through the contract preview route. */
 function previewImpact(sessionId: string, seq: number): Promise<PreviewOutcome> {
   return previewCall(sessionId, seq)
 }
@@ -260,7 +190,8 @@ interface DurablePopoverOptions {
   readonly preview: string
   readonly anchor: HTMLElement
   readonly t: Translate
-  readonly onRewind: (mode: 'chat' | 'both') => void
+  readonly onRewind: (mode: 'conversation' | 'both') => void
+  readonly checkpointingEnabled: boolean
 }
 
 /**
@@ -296,11 +227,16 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
       return
     }
     if (outcome.kind === 'error') {
-      impact.textContent = t('popover.impact.failed', { message: outcome.text })
+      impact.textContent = t('popover.impact.failed', { message: t(contractErrorKey(outcome.code)) })
       return
     }
-    const restores = outcome.files.filter(file => file.action === 'restore').map(file => file.path)
-    const deletes = outcome.files.filter(file => file.action === 'delete').map(file => file.path)
+    const files = outcome.value.files
+    if (!files.available) {
+      impact.textContent = t('popover.impact.failed', { message: t(availabilityKey(files.reason)) })
+      return
+    }
+    const restores = files.changes.filter(file => file.action === 'restore').map(file => file.path)
+    const deletes = files.changes.filter(file => file.action === 'delete').map(file => file.path)
     if (restores.length === 0 && deletes.length === 0) {
       impact.textContent = t('popover.impact.none')
     } else {
@@ -308,7 +244,7 @@ function renderImpactStep(root: HTMLElement, opts: DurablePopoverOptions, back: 
         ...restores.map(path => t('popover.impact.restore', { path })),
         ...deletes.map(path => t('popover.impact.delete', { path })),
       ]
-      if (outcome.backupOff) {
+      if (!opts.checkpointingEnabled) {
         const list = document.createElement('div')
         list.textContent = lines.join('\n')
         impact.replaceChildren(list, el('div', CLASS.popoverNote, t('popover.backupDisabled')))
@@ -468,7 +404,16 @@ export function openPopover(opts: PopoverOptions): void {
   const onRewind = opts.onRewind
   if (seq === undefined || time === undefined || onRewind === undefined) return
   markOpen(anchor)
-  const durableOpts: DurablePopoverOptions = { session, seq, time, preview, anchor, t, onRewind }
+  const durableOpts: DurablePopoverOptions = {
+    session,
+    seq,
+    time,
+    preview,
+    anchor,
+    t,
+    onRewind,
+    checkpointingEnabled: opts.checkpointingEnabled !== false,
+  }
 
   const root = el('div', CLASS.popover)
   root.setAttribute('role', 'dialog')
@@ -497,7 +442,7 @@ export function openPopover(opts: PopoverOptions): void {
       el('div', CLASS.popoverTarget, previewText),
       modeOption(t('popover.chat'), t('popover.chat.hint'), () => {
         closePopover()
-        durableOpts.onRewind('chat')
+        durableOpts.onRewind('conversation')
       }),
     ]
     if (bothState.state === 'noChanges') {
@@ -557,12 +502,20 @@ export function openPopover(opts: PopoverOptions): void {
     const outcome = await previewImpact(session.sessionId, seq)
     impactOutcome = outcome
     if (outcome !== null && outcome.kind === 'success') {
-      bothState = { state: outcome.files.length > 0 ? 'hasChanges' : 'noChanges' }
+      const files = outcome.value.files
+      if (!files.available) {
+        bothState = { state: 'error', message: t(availabilityKey(files.reason)) }
+      } else {
+        bothState = { state: files.changes.length > 0 ? 'hasChanges' : 'noChanges' }
+      }
     } else {
       // Surface the reason (host rejection — e.g. "no longer in the model
       // context (shadowed by compaction)" — or a never-settled wait) instead
       // of leaving the modes step stuck with a permanently disabled entry.
-      bothState = { state: 'error', message: outcome?.kind === 'error' ? outcome.text : 'preview request timed out' }
+      bothState = {
+        state: 'error',
+        message: outcome?.kind === 'error' ? t(contractErrorKey(outcome.code)) : 'preview request timed out',
+      }
     }
     renderModes()
   })().catch((error: unknown) => {

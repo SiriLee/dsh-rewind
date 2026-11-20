@@ -39,11 +39,6 @@ describe('host locale dictionaries', () => {
     expect(translate(lang, 'command.description')).toBe(HOST_DICTS[lang]['command.description'])
   })
 
-  it.each(languages)('%s noCheckpoint carries no leading separator', (lang) => {
-    // The command result adds `sep.clause`; the value must not add another.
-    expect(HOST_DICTS[lang]['noCheckpoint']).not.toMatch(/^[;；\s]/)
-  })
-
   it('interpolates named params', () => {
     expect(translate(DEFAULT_HOST_LOCALE, 'success', { targetSeq: 5, restore: '' }))
       .toContain('seq 5')
@@ -54,9 +49,7 @@ describe('host locale dictionaries', () => {
     expect(translate(DEFAULT_HOST_LOCALE, 'no.such.key')).toBe('no.such.key')
   })
 
-  it('interpolates all params and leaves unknown placeholders untouched', () => {
-    const rendered = translate(DEFAULT_HOST_LOCALE, 'failures.item', { path: 'a.ts', message: 'boom' })
-    expect(rendered).toBe('a.ts (boom)')
+  it('leaves unknown placeholders untouched', () => {
     // An unknown param name is ignored; an unprovided placeholder stays.
     const restored = translate(DEFAULT_HOST_LOCALE, 'success', { targetSeq: 9, restore: '' })
     expect(restored).toContain('Withdrawn seq 9')

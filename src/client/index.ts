@@ -10,9 +10,10 @@
  * plugin keeps. The
  * command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or its
  * alias `/undo`) open the harness's own popupSelect instead of executing; the
- * parameterized `@<seq>` form stays the execution channel, while the popover's
- * impact and candidate reads go over the host's exact `/api` routes. The
- * executed rewind and its composer refill live in `rewind-flow.ts`.
+ * parameterized `@<seq>` form stays the execution channel; the action and the
+ * picker drive the v1 contract (preview → commit), and the picker lists the
+ * loaded chat snapshot. The executed rewind and its composer refill live in
+ * `rewind-flow.ts`.
  *
  * @module dsh-rewind/client
  */
@@ -43,8 +44,10 @@ import { installRowAction, type RowAction, type SlotLedger } from './mount.tsx'
 import { rewindActionRenderer } from './action.tsx'
 import { createPendingBridge } from './pending-mount.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
-import { chatSnapshotOf, resolveChatWatch, type ChatOf, type ChatWatch, type MessageImageRef } from './hidden.ts'
+import { chatSnapshotOf, type ChatOf, type MessageImageRef } from './hidden.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
+import { contractErrorKey } from './errors.ts'
+import { createTakeoverStore } from './claim.ts'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
 import { CLIENT_DICTS } from './locales.ts'
@@ -172,6 +175,29 @@ export function apply(ctx: ClientContext): void {
     const t = ctx.locale.bind(NS)
 
     registerPreviewCall(previewOverApi)
+    // The entry configuration also carries the live checkpointing policy and
+    // `uiOwner`; both are read-only here.
+    interface SettingsRead extends SettingsPolicy {
+      readonly uiOwner?: 'auto' | 'self'
+    }
+    const settingsScope = (() => {
+      try {
+        return ctx.configForms.get<SettingsRead>(SETTINGS_ENTRY_ID)
+      } catch {
+        return undefined
+      }
+    })()
+    const checkpointingEnabled = (): boolean =>
+      settingsScope?.getSnapshot().value?.fileCheckpointingEnabled !== false
+    // Third-party action-interface takeover.
+    const takeover = createTakeoverStore({
+      readOwner: () => settingsScope?.getSnapshot().value?.uiOwner === 'self' ? 'self' : 'auto',
+      subscribeOwner: listener => settingsScope?.subscribe(listener) ?? (() => {}),
+      ...(typeof document === 'undefined' ? {} : { document }),
+    })
+    const stopTakeoverWatch = takeover.subscribe(() => {
+      if (takeover.getSnapshot().claimed) closePopover()
+    })
 
     const style = document.createElement('style')
     // The loader row id (the harness matches its owned-style fallback by
@@ -350,23 +376,6 @@ export function apply(ctx: ClientContext): void {
       }
     })
 
-    /**
-     * Subscribe to one session's live chat-update signal (the wait signal for
-     * `waitForCommand`): the `uiConversation` "chat" view's
-     * `subscribe` (see `resolveChatWatch`). Never throws.
-     */
-    const watchChat: ChatWatch = (sessionId, cb) => resolveChatWatch(
-      id => {
-        try {
-          return uiConversation()?.binding(id).target(CHAT_VIEW)
-        } catch {
-          return undefined
-        }
-      },
-      sessionId,
-      cb,
-    )
-
     const slots = ctx.slots as unknown as SlotsLike
 
     // ---- plugin configuration form (sidebar Plugins page) ----
@@ -420,17 +429,15 @@ export function apply(ctx: ClientContext): void {
       return chat !== undefined && rewindCandidatesOfChat(chat as unknown as CandidateChat).length > 0
     }
 
-    /**
-     * Fetch the FULL candidate list over the host query route, covering the host
-     * surface rather than the loaded window. Undefined when the query fails.
-     */
-    const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[] | undefined> =>
-      candidatesOverApi(face.sessionId)
-
-    // Cache the last-fetched candidate list per session: `options` fills it,
-    // `onSelect` reads it to resolve the picked seq's time/preview without a
-    // second host round-trip.
-    const hostCandidatesCache = new Map<string, readonly RewindCandidate[]>()
+    /** Internal host candidate read for the picker. */
+    const hostCandidates = new Map<string, readonly RewindCandidate[]>()
+    const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[]> => {
+      const cached = hostCandidates.get(face.sessionId)
+      const next = await candidatesOverApi(face.sessionId)
+      if (next === undefined) return cached ?? []
+      hostCandidates.set(face.sessionId, next)
+      return next
+    }
 
     /** The composer card the mode popover anchors to. */
     const composerAnchor = (): HTMLElement => {
@@ -450,17 +457,12 @@ export function apply(ctx: ClientContext): void {
         kind: 'popupSelect',
         options: async session => {
           const face = sessionOf(session.sessionId)
-          if (face === undefined) return []
-          const candidates = await fetchHostCandidates(face)
-          if (candidates !== undefined) hostCandidatesCache.set(session.sessionId, candidates)
-          return candidates === undefined ? [] : rewindOptionsFromCandidates(candidates, t)
+          return face === undefined ? [] : rewindOptionsFromCandidates(await fetchHostCandidates(face), t)
         },
         onSelect: (option, session) => {
           const face = sessionOf(session.sessionId)
           if (face === undefined) return
-          const candidate = hostCandidatesCache.get(session.sessionId)?.find(
-            candidate => candidate.seq === Number(option.id),
-          )
+          const candidate = hostCandidates.get(face.sessionId)?.find(candidate => candidate.seq === Number(option.id))
           if (candidate === undefined) return
           openPopover({
             session: face,
@@ -469,7 +471,8 @@ export function apply(ctx: ClientContext): void {
             preview: candidate.preview,
             anchor: composerAnchor(),
             t,
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
+            checkpointingEnabled: checkpointingEnabled(),
+            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, setComposerText, restoreImages, code => t(contractErrorKey(code))) },
           })
         },
       },
@@ -508,7 +511,8 @@ export function apply(ctx: ClientContext): void {
         anchor,
         placement: 'below',
         t,
-        onRewind: mode => { void runRewindAndFill(face, row.seq, mode, isMainViewSession, chatOf, watchChat, setComposerText, restoreImages) },
+        checkpointingEnabled: checkpointingEnabled(),
+        onRewind: mode => { void runRewindAndFill(face, row.seq, mode, isMainViewSession, setComposerText, restoreImages, code => t(contractErrorKey(code))) },
       })
     }
 
@@ -517,7 +521,7 @@ export function apply(ctx: ClientContext): void {
     try {
       yield installRowAction({
         slots: ctx.slots as unknown as SlotLedger,
-        render: rewindActionRenderer(t, canRewindIn, openRewindFor),
+        render: rewindActionRenderer(t, canRewindIn, openRewindFor, takeover),
       })
     } catch (error) {
       rewindLog.error('action', 'rewind action mount failed', error)
@@ -529,7 +533,7 @@ export function apply(ctx: ClientContext): void {
     try {
       yield slots.inject(HEADER_ACTIONS_SLOT, () => slots.register(
         { name: HEADER_ACTIONS_SLOT, id: 'dsh-rewind-pending', order: 1000 },
-        createPendingBridge({ sessionOf, setComposerText, restoreImages, t, subscribeLocale }),
+        createPendingBridge({ sessionOf, setComposerText, restoreImages, t, subscribeLocale, takeover }),
       ))
     } catch (error) {
       rewindLog.error('retract', 'pending retract mount failed', error)
@@ -540,6 +544,8 @@ export function apply(ctx: ClientContext): void {
       document.querySelector<HTMLElement>(COMPOSER_EDITABLE_SELECTOR)
 
     yield () => {
+      stopTakeoverWatch()
+      takeover.dispose()
       // A live disable can land while the mode popover is open. The popover is
       // plain DOM plus document capture-phase key listeners, so it must be
       // closed with this fiber: otherwise the node and the key steal (↑/↓/Esc

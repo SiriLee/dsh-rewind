@@ -5,7 +5,8 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { ENGINE_COMMAND, rewindCutsOf, type ChatConversationViewNode, type RewindCut } from '../src/client/hidden.ts'
+import { RETIRED_REWIND_COMMAND, REWIND_COMMAND, REWIND_MARKER_KIND, rewindCutsOf, type ChatConversationViewNode, type RewindCut } from '../src/client/hidden.ts'
+import { rewindMarkerDefinition } from '../src/client/marker-node.ts'
 import { installChatViewVisibility, RewindVisibilityBuilder } from '../src/client/visibility.ts'
 
 type Node = ChatConversationViewNode
@@ -67,9 +68,21 @@ function turnProcess(key: string, anchorSeq: number, turn: number, startSeq: num
 
 function command(key: string, anchorSeq: number, seq: number, target: number, marker: number): Node {
   return node(key, 'command', anchorSeq, {
-    kind: 'command', seq, time: 0, commandId: key, name: ENGINE_COMMAND,
+    kind: 'command', seq, time: 0, commandId: key, name: REWIND_COMMAND,
     args: `@${target} chat`, outcome: { kind: 'success', sourceEventSeq: marker },
   } as unknown as CommandNode)
+}
+
+function marker(key: string, markerSeq: number, target: number): Node {
+  return node(key, 'context', markerSeq, {
+    seq: markerSeq,
+    time: 0,
+    content: [{ type: 'text', text: '(empty message)' }],
+    source: { kind: 'dsh-rewind' },
+    producer: { role: 'inject', label: 'dsh-rewind' },
+    form: null,
+    rewind: { target, marker: markerSeq },
+  })
 }
 
 class FakeBuilder {
@@ -117,48 +130,94 @@ const baseNodes = (): Node[] => [
 ]
 
 describe('rewindCutsOf', () => {
-  it('reads one cut per marker-carrying successful engine command', () => {
-    expect(rewindCutsOf([command('cmd1', 40, 40, 5, 20), command('cmd2', 50, 50, 35, 45)]))
+  it('reads one cut per marker node', () => {
+    expect(rewindCutsOf([marker('m1', 20, 5), marker('m2', 45, 35)]))
       .toEqual<RewindCut[]>([{ target: 5, marker: 20 }, { target: 35, marker: 45 }])
   })
 
-  it('ignores failed, markerless, probe, and unparsable commands', () => {
-    const failed = node('f', 'command', 1, {
-      kind: 'command', seq: 1, time: 0, commandId: 'f', name: ENGINE_COMMAND,
-      args: '@5 chat', outcome: { kind: 'error', text: 'no' },
+  it('ignores non-marker nodes and malformed coordinates', () => {
+    expect(rewindCutsOf([
+      command('cmd', 40, 40, 5, 20),
+      node('bad-a', 'context', 3, { rewind: { target: 1 } }),
+      node('bad-b', 'context', 4, { rewind: { marker: 4 } }),
+      node('bad-c', 'context', 6, { rewind: { target: 9, marker: 6 } }),
+      node('bad-d', 'context', 7, { rewind: { target: 1.5, marker: 7 } }),
+    ])).toEqual([])
+  })
+})
+
+describe('rewind-marker Definition', () => {
+  const event = {
+    type: 'user/message',
+    seq: 20,
+    data: {
+      id: 'm1',
+      source: { kind: 'dsh-rewind' },
+      content: [{ type: 'text', text: '(empty message)' }],
+    },
+    surfaceOp: { op: 'replace' },
+    sourceEventSeqs: [5, 6],
+  }
+  const definition = rewindMarkerDefinition()
+
+  it('matches only this plugin marker shape', () => {
+    const match = definition.match['user/message']
+    expect(match(event)).toEqual({ id: 'm1', role: 'start' })
+    // Content is not the distinguishing fact; the producer source is.
+    expect(match({ ...event, data: { ...event.data, content: [{ type: 'text', text: 'other' }] } })).toEqual({ id: 'm1', role: 'start' })
+    expect(match({ ...event, data: { ...event.data, source: { kind: 'user' } } })).toBeNull()
+    expect(match({ ...event, surfaceOp: { op: 'append' } })).toBeNull()
+    expect(match({ ...event, sourceEventSeqs: [] })).toBeNull()
+    expect(match({ ...event, data: { ...event.data, id: '' } })).toBeNull()
+  })
+
+  it('publishes one hidden node carrying the durable cut', () => {
+    const state = definition.start({}, { event })
+    const view = definition.buildViewNode({ state, start: { event } })
+    expect(view).toMatchObject({
+      kind: 'context',
+      id: 'm1',
+      target: 'chat',
+      anchorSeq: 20,
+      location: { kind: 'session' },
+      data: { rewind: { target: 5, marker: 20 } },
+      visibility: 'hidden',
     })
-    const markerless = node('m', 'command', 2, {
-      kind: 'command', seq: 2, time: 0, commandId: 'm', name: ENGINE_COMMAND,
-      args: '@5 chat', outcome: { kind: 'success', text: 'hint' },
-    })
-    const probe = node('p', 'command', 3, {
-      kind: 'command', seq: 3, time: 0, commandId: 'p', name: ENGINE_COMMAND,
-      args: 'preview @5 both', outcome: { kind: 'success', sourceEventSeq: 3 },
-    })
-    expect(rewindCutsOf([failed, markerless, probe])).toEqual([])
+    expect(view?.key).toBe(`${REWIND_MARKER_KIND.length}:${REWIND_MARKER_KIND}m1`)
   })
 })
 
 describe('RewindVisibilityBuilder', () => {
   it('hides the span, the command, and an emptied Turn-process summary', () => {
     const builder = new RewindVisibilityBuilder(new FakeBuilder())
-    const snapshot = builder.replace({ nodes: [...baseNodes(), command('cmd1', 40, 40, 5, 20)], timeline }) as {
+    const markerless = node('cmd0', 'command', 41, {
+      kind: 'command', seq: 41, time: 0, commandId: 'cmd0', name: REWIND_COMMAND,
+      args: '@5 chat', outcome: { kind: 'success', text: 'done' },
+    })
+    const legacy = node('cmd-legacy', 'command', 42, {
+      kind: 'command', seq: 42, time: 0, commandId: 'cmd-legacy', name: RETIRED_REWIND_COMMAND,
+      args: '@5 chat', outcome: { kind: 'success', text: 'done' },
+    })
+    const snapshot = builder.replace({ nodes: [...baseNodes(), marker('m1', 20, 5), command('cmd1', 40, 40, 5, 20), markerless, legacy], timeline }) as {
       order: readonly string[]
       nodes: Map<string, Node>
     }
     expect(snapshot.order).toEqual(['p2', 'u2', 'a2'])
     expect(snapshot.nodes.get('u1')?.visibility).toBe('hidden')
     expect(snapshot.nodes.get('p1')?.visibility).toBe('hidden')
+    expect(snapshot.nodes.get('m1')?.visibility).toBe('hidden')
     expect(snapshot.nodes.get('cmd1')?.visibility).toBe('hidden')
+    expect(snapshot.nodes.get('cmd0')?.visibility).toBe('hidden')
+    expect(snapshot.nodes.get('cmd-legacy')?.visibility).toBe('hidden')
     // The data stays readable for composer refill.
     expect((snapshot.nodes.get('u1')?.data as { content: Array<{ text: string }> }).content[0]?.text).toBe('u1')
   })
 
   it('recomputes all nodes when a later cut appears through apply', () => {
     const builder = new RewindVisibilityBuilder(new FakeBuilder())
-    builder.replace({ nodes: [...baseNodes(), command('cmd1', 40, 40, 5, 20)], timeline })
+    builder.replace({ nodes: [...baseNodes(), marker('m1', 20, 5)], timeline })
     const snapshot = builder.apply({
-      upserts: [command('cmd2', 50, 50, 35, 45)],
+      upserts: [marker('m2', 45, 35)],
       timeline,
     }) as { order: readonly string[]; nodes: Map<string, Node> }
     expect(snapshot.order).toEqual([])
@@ -168,7 +227,7 @@ describe('RewindVisibilityBuilder', () => {
 
   it('hides a content-only upsert that lands inside an active cut', () => {
     const builder = new RewindVisibilityBuilder(new FakeBuilder())
-    builder.replace({ nodes: [...baseNodes(), command('cmd1', 40, 40, 5, 20)], timeline })
+    builder.replace({ nodes: [...baseNodes(), marker('m1', 20, 5)], timeline })
     const snapshot = builder.apply({
       upserts: [assistant('a1b', 7, 1, 1)],
       timeline,
@@ -179,7 +238,7 @@ describe('RewindVisibilityBuilder', () => {
 
   it('hides a node contained by either of two cuts', () => {
     const builder = new RewindVisibilityBuilder(new FakeBuilder())
-    const nodes = [...baseNodes(), command('cmd1', 40, 40, 5, 40), command('cmd2', 50, 50, 20, 50)]
+    const nodes = [...baseNodes(), marker('m1', 40, 5), marker('m2', 50, 20)]
     nodes.push(user('u30', 30, 2, 30))
     const snapshot = builder.replace({ nodes, timeline }) as { order: readonly string[] }
     expect(snapshot.order).not.toContain('u30')
@@ -191,11 +250,14 @@ describe('installChatViewVisibility', () => {
     const definition = { target: 'chat', create: () => new FakeBuilder() }
     const unsubscribe = vi.fn()
     const rebuild = vi.fn()
+    const unregisterMarker = vi.fn()
+    const registerMarker = vi.fn(() => unregisterMarker)
     const ui = {
       views: {
         entries: () => [definition],
         subscribe: () => unsubscribe,
       },
+      events: { register: registerMarker },
       binding: () => ({ rebuild }),
     }
     const sessions = {
@@ -218,10 +280,12 @@ describe('installChatViewVisibility', () => {
     }
     installChatViewVisibility(ctx as never)
     expect(rebuild).toHaveBeenCalledTimes(1)
+    expect(registerMarker).toHaveBeenCalledTimes(1)
     expect(definition.create()).toBeInstanceOf(RewindVisibilityBuilder)
 
     dispose?.()
     expect(unsubscribe).toHaveBeenCalledTimes(1)
+    expect(unregisterMarker).toHaveBeenCalledTimes(1)
     expect(definition.create()).toBeInstanceOf(FakeBuilder)
   })
 })

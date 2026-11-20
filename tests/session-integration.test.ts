@@ -108,7 +108,7 @@ describe('in-place rewind over a real session', () => {
     const session = buildSession()
     expect([...session.surface.nodes]).toEqual([0, 1, 2, 3])
 
-    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'index', index: 1 })
+    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, 2)
     expect(plan.targetSeq).toBe(2)
     expect(plan.shadowedSeqs).toEqual([2, 3])
 
@@ -135,7 +135,7 @@ describe('in-place rewind over a real session', () => {
 
   it('regression: a rewind followed by the harness next turn never violates turn-tail ordering', () => {
     const session = buildTurnedSession()
-    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: 1 })
+    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, 1)
     const markerSeq = applyRewind(session, plan)
     const marker = session.snapshotEvents().find(event => event.seq === markerSeq)!
     expect(marker.type).toBe('user/message')
@@ -163,11 +163,11 @@ describe('in-place rewind over a real session', () => {
 
   it('keeps rewinding after a rewind (rewind can itself be rewound)', () => {
     const session = buildSession()
-    const first = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'index', index: 1 })
+    const first = planRewind(session.snapshotEvents(), session.surface.nodes, 2)
     applyRewind(session, first)
     expect([...session.surface.nodes]).toEqual([0, 1, 4])
 
-    const second = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'index', index: 1 })
+    const second = planRewind(session.snapshotEvents(), session.surface.nodes, 0)
     expect(second.targetSeq).toBe(0)
     expect(second.shadowedSeqs).toEqual([0, 1, 4])
     const markerSeq = applyRewind(session, second)
@@ -183,7 +183,7 @@ describe('in-place rewind over a real session', () => {
     open.append('user/message', textMessage('oops, sent by mistake'), { surfaceOp: 'append' })
     expect([...open.surface.nodes]).toEqual([0, 1])
 
-    const withdraw = planRewind(open.snapshotEvents(), open.surface.nodes, { kind: 'seq', seq: 1 })
+    const withdraw = planRewind(open.snapshotEvents(), open.surface.nodes, 1)
     expect(withdraw.shadowedSeqs).toEqual([1])
     applyRewind(open, withdraw)
     expect([...open.surface.nodes]).toEqual([0, 2])
@@ -198,7 +198,7 @@ describe('in-place rewind over a real session', () => {
 
   it('survives a rewind followed by new user traffic', () => {
     const session = buildSession()
-    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: 0 })
+    const plan = planRewind(session.snapshotEvents(), session.surface.nodes, 0)
     const markerSeq = applyRewind(session, plan)
     session.append('user/message', textMessage('follow-up question'), { surfaceOp: 'append' })
     const messages = session.deriveMessages()

@@ -101,10 +101,10 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
     simulateCompaction(session, nodes[0]!, nodes[1]!) // shadow turn 1
 
     // seq 2 (turn 1's question) is no longer on the surface.
-    expect(() => planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: 2 }))
+    expect(() => planRewind(session.snapshotEvents(), session.surface.nodes, 2))
       .toThrow(RewindError)
     try {
-      planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: 2 })
+      planRewind(session.snapshotEvents(), session.surface.nodes, 2)
       expect.unreachable('expected RewindError')
     } catch (error) {
       expect(error).toBeInstanceOf(RewindError)
@@ -113,10 +113,10 @@ describe('I5 compaction interop (probe: tool-pairing balance)', () => {
 
     // A compaction checkpoint itself is not a human user message → refused.
     const checkpointSeq = session.surface.nodes[0]!
-    expect(() => planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: checkpointSeq }))
+    expect(() => planRewind(session.snapshotEvents(), session.surface.nodes, checkpointSeq))
       .toThrow(RewindError)
     try {
-      planRewind(session.snapshotEvents(), session.surface.nodes, { kind: 'seq', seq: checkpointSeq })
+      planRewind(session.snapshotEvents(), session.surface.nodes, checkpointSeq)
       expect.unreachable('expected RewindError')
     } catch (error) {
       expect((error as RewindError).code).toBe('not-a-user-message')

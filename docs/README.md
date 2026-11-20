@@ -10,6 +10,8 @@ index/navigation entry point.
 | --- | --- | --- |
 | `architecture.md` | Source layout, module layering, rewind/checkpoint pipelines, open directions | maintainers |
 | `boundaries.md` | Design boundaries: what the plugin owns, what it leaves to other tools, and why (`.zh` mirror) | users / maintainers |
+| `contracts/engine-v1.md` | The v1 engine contract: health/preview/commit, stable codes, takeover signal, invariants | users / maintainers |
+| `contracts/integration.md` | Developer guide for driving the engine from another plugin: minimal integration, recipes, failures, takeover, packaging | developers |
 | `format.md` | Durable on-disk format spec (`meta.json`, checkpoint manifests, version files, validation, GC) | maintainers |
 | `security-model.md` | Security model: trust boundary, containment, crash safety, non-goals | maintainers |
 | `harness-reference.md` | DeepSeek Harness interface reference (subsystems + key source) | maintainers |

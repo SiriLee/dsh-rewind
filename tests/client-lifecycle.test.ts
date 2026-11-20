@@ -294,10 +294,12 @@ describe('client plugin lifecycle', () => {
     // card's listener reachable through the scope.
     const mounted = mountClient()
     apply(mounted.ctx)
-    expect(mounted.formSubscriptions()).toBe(1)
+    // One subscription feeds the staged settings card; one feeds the live
+    // takeover policy (uiOwner). Both must be released on unload.
+    expect(mounted.formSubscriptions()).toBe(2)
     expect(mounted.formUnsubscriptions()).toBe(0)
     mounted.dispose()
-    expect(mounted.formUnsubscriptions()).toBe(1)
+    expect(mounted.formUnsubscriptions()).toBe(2)
   })
 
   it('injects its styles under the package identity the harness reaps by', () => {

@@ -19,23 +19,9 @@ import type { SessionEvent, UserMessage } from '@deepseek-ai/dsh-session'
 
 export { REWIND_MARKER_SOURCE } from './marker.ts'
 
-/** Which of the two rewind modes a rewind executes. */
-export type RewindMode = 'chat' | 'both'
-
-/**
- * Parse-level rewind target. The command line accepts both forms:
- * - `@<seq>` — an absolute log seq (what the UI button always sends);
- * - `<index>` — a 1-based recency index into the listed candidates
- *   (1 = most recent user message; the step-by-step command flow uses this).
- */
-export type RewindTarget =
-  | { kind: 'seq'; seq: number }
-  | { kind: 'index'; index: number }
-
 /** Expected failure codes; each maps to a concise human outcome. */
 export type RewindErrorCode =
   | 'no-user-messages'
-  | 'invalid-index'
   | 'not-a-user-message'
   | 'not-on-surface'
 
@@ -58,8 +44,6 @@ export interface RewindCandidate {
   readonly time: number
   /** Truncated plain-text preview of the message content. */
   readonly preview: string
-  /** 1-based recency index in the candidate list (1 = most recent). */
-  readonly index: number
 }
 
 /** A validated rewind: the target plus the exact surface range to shadow. */
@@ -123,34 +107,6 @@ export function messagePreview(message: UserMessage): string {
     : `${text.slice(0, CANDIDATE_PREVIEW_CHARS - 1)}…`
 }
 
-/** Absolute-seq token: `@` followed by decimal digits only. */
-const SEQ_TOKEN = /^@(\d+)$/
-
-/** Recency-index token: decimal digits only. */
-const INDEX_TOKEN = /^(\d+)$/
-
-/**
- * Parse a raw command token into a rewind target. Both forms must be plain
- * decimal integers: a bare `Number()` would also accept `@1e3`, `@0x10` and
- * `@+5`, and would read a bare `@` as seq 0.
- * @param raw - one token: `@123` (absolute seq) or `12` (recency index).
- * @returns the parsed target, or undefined when the token is malformed.
- */
-export function parseRewindTarget(raw: string): RewindTarget | undefined {
-  const token = raw.trim()
-  const seq = SEQ_TOKEN.exec(token)
-  if (seq !== null) {
-    const value = Number(seq[1] ?? '')
-    return Number.isSafeInteger(value) ? { kind: 'seq', seq: value } : undefined
-  }
-  const index = INDEX_TOKEN.exec(token)
-  if (index !== null) {
-    const value = Number(index[1] ?? '')
-    return Number.isSafeInteger(value) && value >= 1 ? { kind: 'index', index: value } : undefined
-  }
-  return undefined
-}
-
 /**
  * List the selectable rewind candidates: user messages currently on the
  * surface, most recent first. Shadowed (compacted-away) user messages are
@@ -180,7 +136,6 @@ export function listRewindCandidates(
       seq: event.seq,
       time: event.time,
       preview: messagePreview(event.data),
-      index: candidates.length + 1,
     })
   }
   return candidates
@@ -197,19 +152,8 @@ export function listRewindCandidates(
 export function planRewind(
   events: readonly SessionEvent[],
   surface: readonly number[],
-  target: RewindTarget,
+  targetSeq: number,
 ): RewindPlan {
-  let targetSeq: number
-  if (target.kind === 'seq') {
-    targetSeq = target.seq
-  } else {
-    const candidate = listRewindCandidates(events, surface, target.index)[target.index - 1]
-    if (candidate === undefined) {
-      throw new RewindError('invalid-index', `rewind index ${target.index} has no candidate`)
-    }
-    targetSeq = candidate.seq
-  }
-
   const targetEvent = events.find(event => event.seq === targetSeq)
   if (targetEvent === undefined) {
     throw new RewindError('not-a-user-message', `no session event at seq ${targetSeq}`)
@@ -243,12 +187,4 @@ export function planRewind(
     surfaceStart: shadowedSeqs[0]!,
     surfaceEnd: shadowedSeqs[shadowedSeqs.length - 1]!,
   }
-}
-
-/** Human rendering of a candidate list line (`/rewind` step 1). */
-export function formatCandidate(candidate: RewindCandidate): string {
-  const time = new Date(candidate.time)
-  const hh = String(time.getHours()).padStart(2, '0')
-  const mm = String(time.getMinutes()).padStart(2, '0')
-  return `${candidate.index}. ${hh}:${mm} ${candidate.preview || '(no text)'}`
 }
