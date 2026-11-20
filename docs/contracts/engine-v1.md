@@ -20,8 +20,6 @@ model and no general extension point. The native client is the first caller.
   whether the native UI exposes a file-only action.
 - **Effects**: `conversation` (cut the model-visible surface) and `files`
   (restore the workspace) are orthogonal. Callers choose the combination.
-- **Responsibility**: the engine owns the effects; the caller owns the trigger
-  interface and the copy it renders.
 
 ## 2. Wire format
 
@@ -35,7 +33,6 @@ model and no general extension point. The native client is the first caller.
   promised to stay the same.
 - Callers must ignore unknown fields and unknown `value` keys. Unknown error
   codes are failures, never successes.
-- `contract` in the health value is the only version query point.
 
 ## 3. Operations
 
@@ -231,8 +228,6 @@ is a valid target: the operation withdraws the message itself.
 - Appends one marker (`user/message` carrying `surfaceOp: replace` and
   `sourceEventSeqs`); the model-visible surface moves to before the target. The
   log stays append-only.
-- A running turn is cancelled (user cause) and awaited; if it does not stop
-  within 15 seconds the commit is `turn-running`.
 - Pending steering (next-step) messages are dropped; queued next-turn messages
   are kept. Withdrawn messages stay in the log and are not restored by this
   contract.
@@ -242,29 +237,19 @@ is a valid target: the operation withdraws the message itself.
 - Uses the target's checkpoint as the baseline, reconciles every path against the
   current disk, and writes only the differences. Each write is a per-file atomic
   replacement; deletes remove files only.
-- The running turn is **not** cancelled for this effect; while it runs, a
-  files-only commit is `turn-running`.
-- Missing checkpoint, disabled checkpointing, newer store format, unsafe paths and
-  changed parents are reported at the effect or path level as described in
-  §3.2; they never abort a whole commit.
+- Whole-effect unavailability and path-level refusals are reported as in §3.2
+  and §3.3; they never abort an unrelated effect of the same commit.
 - A file over the per-file cap is not restored and enters
   `skipped: oversized`; `preview` already shows it.
 - After a restore the host's filesystem-observation cache is re-synced, because
   the restore writes through plain host filesystem calls.
 
-### 6.4 Orthogonality
-
-See the `mode` table in §3.3. The two effects never imply each other.
-
-### 6.5 Binding and concurrency
+### 6.4 Binding and concurrency
 
 - The server stores no plan state. `headSeq` is the only binding value.
-- The head is compared before cancellation and before any write; mismatch means
-  zero writes and zero cancellation. Target existence is checked first, then the
-  head; for a conversation effect, cancellation and quiescence precede surface
-  eligibility and planning. A replayed conversation commit reports `head-changed`
-  (its head moved), while the same now-cut target with a current head is
-  `target-missing` (after the cancellation, for a conversation effect).
+- The order and the zero-write rule are in §3.3. A replayed conversation commit
+  reports `head-changed` (its head moved), while the same now-cut target with a
+  current head is `target-missing`.
 - One commit per session at a time; different sessions do not block each other.
 - `files` commits are repeatable (the target checkpoint stays authoritative; a
   second pass finds an empty diff). `conversation` commits cannot be replayed:
@@ -272,7 +257,7 @@ See the `mode` table in §3.3. The two effects never imply each other.
 - The workspace is not bound: external changes after preview are reconciled per
   path and appear as `skipped`, not as a whole-commit refusal.
 
-### 6.6 Side effects and what is not undone
+### 6.5 Side effects and what is not undone
 
 This contract undoes workspace content and the model-visible surface only. Git
 commits, external services, process effects and checkpoint-store writes are not
@@ -292,41 +277,11 @@ undone.
 | I8 | Under the same disk state, `preview.files` and the following `commit.files` describe the same change set. |
 | I9 | Withdrawn content stays hidden after a reload and is independent of the trigger (command, native button or contract). |
 
-## 8. Integration checklist
+## 8. Integrating
 
-1. `GET health`: if absent or `contract !== 1`, render no action.
-2. Take the target `seq` from an event on your chat snapshot.
-3. On the user's action, `POST preview`; render the confirmation from `withdraw`
-   and `files`.
-4. On confirmation, `POST commit` with the preview `headSeq` and the chosen
-   `mode`.
-5. On success, refill from `preview.withdraw.text` (edit/rerun) or send it.
-6. On failure, branch on `code`; `head-changed` means preview again.
-7. If you take over the action interface, set `data-dsh-rewind-claim` only after
-   health passes and you will render, and remove it on unload.
-
-```js
-const v1 = '/api/dsh-rewind/v1'
-const post = (path, body) => fetch(v1 + path, {
-  method: 'POST',
-  credentials: 'same-origin',
-  headers: { 'content-type': 'application/json' },
-  body: JSON.stringify(body),
-}).then(r => r.json())
-
-const health = await fetch(v1 + '/health').then(r => r.json()).catch(() => null)
-if (health?.ok !== true || health.value.contract !== 1) return
-
-document.documentElement.dataset.dshRewindClaim = 'my-theme'
-
-async function rewind(sessionId, seq, mode = 'conversation') {
-  const preview = await post('/preview', { sessionId, seq })
-  if (preview.ok !== true) return preview.error.code
-  const { headSeq, withdraw, files } = preview.value
-  const done = await post('/commit', { sessionId, seq, headSeq, mode })
-  return done.ok === true ? withdraw.text : done.error.code
-}
-```
+This document is the contract. A step-by-step guide with worked examples lives
+in [integration.md](integration.md); it is not normative and adds no
+requirements.
 
 ## 9. Responsibility
 
@@ -336,28 +291,13 @@ async function rewind(sessionId, seq, mode = 'conversation') {
 | The trigger interface rendered after a takeover, its copy and its calls into this contract | the claimant |
 | This contract (fields, codes, semantics, version) | dsh-rewind |
 
-A claimant that sets the signal accepts responsibility for the interface while
-it is up. The engine never disables commands, visibility or the settings card
-because of a takeover; a user can recover the native interface with
-`uiOwner: self`.
+A claimant accepts responsibility for the interface while its signal is up;
+§5 defines what the signal does and does not affect.
 
 ## 10. Versioning
 
 - The major version is in the path (`v1`) and only breaking changes raise it.
   `health.contract` is the single version query point.
-- Within a major version, fields and `skipped.reason` values may be added;
-  callers must ignore unknown fields and treat unknown error codes as failures.
+- Within a major version, fields and `skipped.reason` values may be added.
 - The contract version is independent of the plugin package version and the DSH
   version.
-
-## 11. curl examples
-
-```bash
-curl -s localhost:3080/api/dsh-rewind/v1/health
-curl -s -X POST localhost:3080/api/dsh-rewind/v1/preview \
-  -H 'content-type: application/json' \
-  -d '{"sessionId":"<id>","seq":42}'
-curl -s -X POST localhost:3080/api/dsh-rewind/v1/commit \
-  -H 'content-type: application/json' \
-  -d '{"sessionId":"<id>","seq":42,"headSeq":137,"mode":"both"}'
-```
