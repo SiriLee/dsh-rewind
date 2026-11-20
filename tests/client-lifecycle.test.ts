@@ -68,7 +68,7 @@ interface FakeNodeEntry {
   readonly options: { readonly key?: string }
 }
 
-/** Which command surface the mount finds: absent, throwing, or the shipped one. */
+/** Which command surface the mount finds: one that refuses a name, or the shipped one. */
 interface MountOptions {
   readonly commandUi?: unknown
 }

@@ -480,8 +480,8 @@ export function apply(ctx: ClientContext): void {
       } catch (error) {
         // `decorate` throws when the name is already owned — another plugin may
         // have taken `/rewind` — and a refused decoration must cost that one
-        // picker only: the mount keeps going, so the row action, the pending
-        // bridge and the visibility layer still come up.
+        // picker only: the mount keeps going, so the row action and the pending
+        // bridge still come up.
         rewindLog.warn('command', `the ${name} decoration was refused or malformed`, error)
       }
     }
