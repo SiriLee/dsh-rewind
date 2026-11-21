@@ -7,6 +7,11 @@ to use it and is not normative.
 Normal users never need any of this: the plugin's own buttons, picker and
 settings cover the product.
 
+Several examples follow the probe — a third-party client we used to verify this
+contract. It has one fixed button, takes over the action interface, commits
+`conversation` only and never refills the composer; its minimal choices keep the
+mechanism visible.
+
 ## What you can build
 
 | Goal | What you do |
@@ -20,8 +25,8 @@ settings cover the product.
 
 Three calls, one attribute:
 
-1. `GET /api/dsh-rewind/v1/health` — render nothing unless it answers
-   `contract: 1`.
+1. `GET /api/dsh-rewind/v1/health` — render nothing (or an install hint) unless
+   it answers `contract: 1`.
 2. `POST /api/dsh-rewind/v1/preview` — describes what would happen.
 3. `POST /api/dsh-rewind/v1/commit` — performs it, bound to `preview`'s
    `headSeq`.
@@ -29,7 +34,7 @@ Three calls, one attribute:
    `data-dsh-rewind-claim="<your-id>"` on `<html>` after step 1; remove it when
    your plugin unloads.
 
-A row button, end to end:
+A button, end to end — the probe's whole rewind path:
 
 ```js
 const v1 = '/api/dsh-rewind/v1'
@@ -81,7 +86,7 @@ you are acting on. There is no contract operation that lists targets.
 
 ### One-click “rewind the last turn”
 
-This is what a minimal integration looks like: a single button, no dialog.
+The probe is this shape: a single fixed button, no dialog.
 
 ```js
 if (await engineContract()) {
@@ -91,8 +96,8 @@ if (await engineContract()) {
 }
 ```
 
-It deliberately ignores `withdraw` (no refill) and offers no file effect. The
-withdrawn messages hide immediately and stay hidden after a reload.
+It ignores `withdraw` and the file effect on purpose. The withdrawn messages
+hide immediately and stay hidden after a reload.
 
 ### File-only restore
 
@@ -143,10 +148,13 @@ and when to set and remove it.
 <html data-dsh-rewind-claim="my-theme">
 ```
 
+Taking over is more than a button: you own the control and its placement, the
+conversation/file choice, the refill into an empty composer, and every message a
+failure produces.
+
 - A leftover attribute keeps the native buttons hidden until the page reloads.
-- Taking over includes the pending-steering retract; the plugin will not render
-  it for you. Implement it with the session's own queue API (`updateQueue` with
-  `remove`).
+- The pending-steering retract is yours too: implement it with the session's own
+  queue API (`updateQueue` with `remove`).
 - Users can recover the native interface with the plugin config item
   `uiOwner: self` (a file-level setting, not a settings-card toggle).
 
@@ -156,16 +164,27 @@ If your UI cannot work without the engine, install it as a dependency so adding
 your plugin adds the engine too:
 
 ```json
-{ "dependencies": { "dsh-rewind-plugin": "^1.0.0" } }
+{ "dependencies": { "dsh-rewind-plugin": ">=0.23.0" } }
 ```
 
 and insert its loader row in your bundle patch:
 
 ```yaml
 - insert:
-    - id: dsh-rewind-engine
+    - id: dsh-rewind-plugin
       name: 'dsh-rewind-plugin'
 ```
+
+The id is the engine's own: loader entries are keyed by id, so the row merges
+with one a user already has, and the profile keeps a single engine package
+however many plugins insert that row. Leave `disabled` off it, and use `config`
+only for the initial policy described under Configuring.
+
+Installed this way, the engine is a component of your plugin: it has no card of
+its own, so you enable, configure and remove it through your card — unless
+someone also installs it directly. Removing your plugin drops your row; the
+package goes only when nothing installed still depends on it and it is not a
+direct dependency.
 
 Caveats:
 
@@ -173,13 +192,48 @@ Caveats:
   resolve the package by that name;
 - profiles install dependencies hoisted, so a transitive dependency resolves
   from the profile root;
-- the dependency range only guides installation; the runtime gate is
-  `health.contract`, which you already check;
-- if a user already enabled dsh-rewind as its own bundle, inserting another row
-  loads a second instance; the plugin cannot detect this today, so treat the two
-  installation styles as either/or;
-- updating the engine is independent of your release; stay on one contract major
-  and gate on `health.contract`.
+- the dependency range only guides installation, and engine updates are
+  independent of your release: stay on one contract major and gate on
+  `health.contract`.
+
+## Configuring the engine
+
+The row your patch inserts can carry `config`:
+
+```yaml
+- id: dsh-rewind-plugin
+  name: 'dsh-rewind-plugin'
+  config: { fileCheckpointingEnabled: false, autoCleanupEnabled: false }
+```
+
+That is an initial value, not a lock. One entry has one configuration, and more
+than your row feeds it: another bundle inserting the same row, an engine upgrade
+that moves a default, and the user editing the profile all compose over it. So do
+not pin behavior to a default plus a hidden control, and do not assume a field
+still holds the value you saw: read the form when it matters.
+
+Where the controls live is your call:
+
+- your own settings surface, through `ctx.configForms.get('dsh-rewind-plugin')`
+  (`set`, `unset`, `subscribe`);
+- the component's own config page, by registering `plugins.row.config` under
+  `<your package>#dsh-rewind-plugin`.
+
+Expose only the fields you decide to support; anything you leave out stays
+editable in the profile config. Store options — `snapshotDir`, `dshHome`,
+`maxFileBytes`, `autoSweepIntervalMs` — are read when the plugin mounts, so a
+change needs a remount or a restart. The policy fields apply live.
+
+If you set a value the user may not want, leave a way back: `unset(field)`
+returns the field to your value, not to the engine default, so label it "restore
+this plugin's default", not "factory reset". The probe does both — two switches
+off in its row, a restore-default next to each.
+
+Three details to get right. Turning `fileCheckpointingEnabled` off makes
+`preview.files.reason` `checkpointing-disabled`, which you should explain rather
+than report as a failure. `uiOwner` is the user's escape hatch, not a caller
+switch: takeover is `data-dsh-rewind-claim`. And when `health` is absent the form
+is `unavailable`; hide the controls.
 
 ## Testing your integration
 
@@ -192,5 +246,5 @@ curl -s -X POST localhost:3080/api/dsh-rewind/v1/commit \
   -d '{"sessionId":"<id>","seq":42,"headSeq":137,"mode":"both"}'
 ```
 
-Check the effect after a reload, not only in the page that performed it: the
-withdrawn span must stay hidden.
+Use your host's port and token. Check the effect after a reload, not only in the
+page that performed it: the withdrawn span must stay hidden.
