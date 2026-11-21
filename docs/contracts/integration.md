@@ -186,15 +186,21 @@ it through your card — unless someone also installs it directly. Removing your
 plugin drops your row; the package goes only when nothing installed still
 depends on it and it is not a direct dependency.
 
+An injected engine gets no update entry of its own: reinstalling your plugin
+re-resolves it only when your range no longer accepts the installed version.
+Set the floor to the engine version you last verified — and raise it when you
+need a newer engine, so the two move together. The contract reports its major
+version, not the package version, so check the engine release when you build,
+not at runtime.
+
 Caveats:
 
 - the row's `name` must be the package name; the client module and the loader
   resolve the package by that name;
 - profiles install dependencies hoisted, so a transitive dependency resolves
   from the profile root;
-- the dependency range only guides installation, and engine updates are
-  independent of your release: stay on one contract major and gate on
-  `health.contract`.
+- the dependency range only guides installation; the runtime gate is
+  `health.contract`, which you already check.
 
 ## Configuring the engine
 
