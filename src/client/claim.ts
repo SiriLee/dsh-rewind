@@ -4,8 +4,8 @@
  * A page claims the action interface by setting
  * `data-dsh-rewind-claim="<name>"` on the document root. The claim only affects
  * the TRIGGER surface (row action, mode popover, pending retract buttons); the
- * engine, commands, visibility and settings card keep working, and `uiOwner:
- * self` ignores the claim entirely. The claim name is diagnostic and display
+ * engine, commands, visibility and configuration surface keep working, and
+ * `uiOwner: self` ignores the claim entirely. The claim name is diagnostic and display
  * data only; the engine never validates that the claimant renders anything.
  *
  * @module dsh-rewind/client/claim

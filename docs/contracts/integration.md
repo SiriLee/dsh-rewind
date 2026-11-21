@@ -181,10 +181,10 @@ however many plugins insert that row. Leave `disabled` off it, and use `config`
 only for the initial policy described under Configuring.
 
 Installed this way, the engine is a component of your plugin: it has no card of
-its own, so you enable, configure and remove it through your card — unless
-someone also installs it directly. Removing your plugin drops your row; the
-package goes only when nothing installed still depends on it and it is not a
-direct dependency.
+its own, so plan to host its configuration — you enable, configure and remove
+it through your card — unless someone also installs it directly. Removing your
+plugin drops your row; the package goes only when nothing installed still
+depends on it and it is not a direct dependency.
 
 Caveats:
 
@@ -207,10 +207,10 @@ The row your patch inserts can carry `config`:
 ```
 
 That is an initial value, not a lock. One entry has one configuration, and more
-than your row feeds it: another bundle inserting the same row, an engine upgrade
-that moves a default, and the user editing the profile all compose over it. So do
-not pin behavior to a default plus a hidden control, and do not assume a field
-still holds the value you saw: read the form when it matters.
+than your row feeds it: another bundle inserting the same row, an engine
+upgrade that moves a default, and the user editing the profile all compose over
+it. So do not pin behavior to a default plus a hidden control, and do not
+assume a field still holds the value you saw: read the form when it matters.
 
 Where the controls live is your call:
 
@@ -230,10 +230,10 @@ this plugin's default", not "factory reset". The probe does both — two switche
 off in its row, a restore-default next to each.
 
 Three details to get right. Turning `fileCheckpointingEnabled` off makes
-`preview.files.reason` `checkpointing-disabled`, which you should explain rather
-than report as a failure. `uiOwner` is the user's escape hatch, not a caller
-switch: takeover is `data-dsh-rewind-claim`. And when `health` is absent the form
-is `unavailable`; hide the controls.
+`preview.files.reason` `checkpointing-disabled`, which you should explain
+rather than report as a failure. `uiOwner` is the user's escape hatch, not a
+caller switch: takeover is `data-dsh-rewind-claim`. And when `health` is absent
+the form is `unavailable`; hide the controls.
 
 ## Testing your integration
 

@@ -195,8 +195,13 @@ value". While it is present, the engine hides its own:
 - retract button on an unsent steering bubble.
 
 The engine does **not** hide: the withdrawn-span visibility computation, the
-`/rewind` and `/undo` commands and their decorations, or the settings card.
-Commands remain usable; a command-triggered rewind still works.
+`/rewind` and `/undo` commands and their decorations, or its own settings form
+when its installation has a plugin page. Commands remain usable; a
+command-triggered rewind still works.
+
+A settings page belongs to a direct installation. An engine mounted as another
+plugin's component has none, with or without a claim; the plugin that inserted
+the row owns the configuration surface.
 
 The value is diagnostic and display data only. The engine does not validate that
 the claimant renders anything, and it does not arbitrate between multiple
@@ -273,7 +278,7 @@ undone.
 | I4 | A `conversation` commit does not touch the workspace (file bytes are unchanged). |
 | I5 | `head-changed` performs zero writes and zero cancellation. |
 | I6 | With a claim present and `uiOwner: auto`, the inline action is not in the document; removing the claim restores it. |
-| I7 | Takeover does not affect commands, visibility computation, or the settings card. |
+| I7 | Takeover yields only the trigger: commands, visibility computation and configuration are unaffected. |
 | I8 | Under the same disk state, `preview.files` and the following `commit.files` describe the same change set. |
 | I9 | Withdrawn content stays hidden after a reload and is independent of the trigger (command, native button or contract). |
 
