@@ -1,7 +1,7 @@
 /**
- * dsh-rewind client half: the `/rewind` and `/undo` client commands, the locale
- * registration, the mode popover the commands open, the visibility layer, and
- * the per-message rewind action.
+ * dsh-rewind client half: the `/rewind` and `/undo` client commands plus the
+ * command-face takeover service, the locale registration, the mode popover the
+ * commands open, the visibility layer, and the per-message rewind action.
  *
  * A durable message's action lives in the Chat row's own actions row: `mount.tsx`
  * takes over the official user/steering renderer identity and injects one more
@@ -9,9 +9,11 @@
  * `pending-mount.tsx` attaches the retract action through the only DOM path the
  * plugin keeps. The client commands (`ctx.commandUi.register`) make a bare
  * `/rewind` (or its alias `/undo`) open the harness's own popupSelect instead
- * of executing. The action and the picker drive the v1 contract
- * (preview → commit), and the picker lists the loaded chat snapshot. The
- * executed rewind and its composer refill live in `rewind-flow.ts`.
+ * of executing; a third-party UI can take the same command face over through
+ * `ctx.dshRewind.commands.takeover()` (`command-takeover.ts`). The action and
+ * the picker drive the v1 contract (preview → commit), and the picker lists
+ * the loaded chat snapshot. The executed rewind and its composer refill live in
+ * `rewind-flow.ts`.
  *
  * @module dsh-rewind/client
  */
@@ -41,6 +43,7 @@ import { rewindActionRenderer } from './action.tsx'
 import { createPendingBridge } from './pending-mount.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
 import type { MessageImageRef } from './hidden.ts'
+import { createCommandFace } from './command-takeover.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { contractErrorKey } from './errors.ts'
 import { createTakeoverStore, type UiOwner } from './claim.ts'
@@ -58,6 +61,13 @@ import {
 } from './settings-card.tsx'
 
 export const name = 'dsh-rewind'
+export { CommandTakeoverError } from './command-takeover.ts'
+export type {
+  CommandTakeoverErrorCode,
+  CommandTakeoverPermission,
+  RewindCommandFace,
+  RewindCommands,
+} from './command-takeover.ts'
 // `configForms` IS a module-level inject: the rewind surface itself never needs
 // it, but the configuration card is addressed through it, and the web profile
 // always composes `ui-settings` (the same dependency the official settings
@@ -106,6 +116,8 @@ export interface ClientContext {
   get(name: string): unknown
   slots: unknown
   commandUi: unknown
+  /** Register this bundle's public command-face service (`ctx.dshRewind`). */
+  provide(name: string, value?: unknown): unknown
   /** Per-entry configuration forms (this bundle's own entry included). */
   configForms: { get<T>(entryId: string): ConfigForm<T> }
 }
@@ -363,7 +375,8 @@ export function apply(ctx: ClientContext): void {
     // full and Entered — opens the harness's own popupSelect shell through the
     // client command contract (CommandContribution). The plugin never
     // re-implements a menu; picking a candidate continues through the mode
-    // popover below.
+    // popover below. A third-party UI can take this whole face over through
+    // the provided `ctx.dshRewind` service (`command-takeover.ts`).
     const commandUi = ctx.get('commandUi') as CommandUiContract
 
     /**
@@ -429,14 +442,19 @@ export function apply(ctx: ClientContext): void {
       ui: rewindPopupSpec,
     })
 
-    // Each registration is isolated so a name another client contribution owns
-    // costs only that command, never the other picker or the rest of the mount.
-    for (const contribution of [commandContribution('rewind'), commandContribution('undo')]) {
-      try {
-        yield commandUi.register(contribution)
-      } catch (error) {
-        rewindLog.warn('command', `the ${contribution.name} client command was refused`, error)
-      }
+    const commandFace = createCommandFace({
+      contributions: [commandContribution('rewind'), commandContribution('undo')],
+      register: contribution => commandUi.register(contribution),
+      dismiss: name => { commandUi.dismiss(name) },
+      readOwner,
+    })
+    ctx.effect(() => () => commandFace.dispose(), 'dsh-rewind command face')
+    try {
+      ctx.provide('dshRewind', commandFace.service)
+    } catch (error) {
+      // Another copy of this bundle already owns the page-level service. The
+      // commands still work; only the takeover channel is unavailable.
+      rewindLog.error('command', 'command-face service registration failed', error)
     }
 
     // ---- per-message rewind action (a child of the official actions row) ----

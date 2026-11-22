@@ -48,6 +48,8 @@ interface Mounted {
   readonly registered: readonly string[]
   /** The accepted contribution for one command name. */
   contribution(name: string): FakeContribution | undefined
+  /** Services the plugin provided on the context (`ctx.provide`). */
+  readonly provided: Readonly<Record<string, unknown>>
   /** Subscriptions the cleanup form opened on its configuration scope. */
   readonly formSubscriptions: () => number
   /** Releases of those subscriptions (the model's `dispose`). */
@@ -91,6 +93,7 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
   const slotEntries: { name: string; id?: string; key?: string }[] = []
   const registered: string[] = []
   const contributions = new Map<string, FakeContribution>()
+  const provided: Record<string, unknown> = {}
   // The cleanup form's subscription to its configuration scope: the plugin must
   // release it on unload, so both ends are counted.
   const subscribeScope = vi.fn(() => () => {})
@@ -139,6 +142,12 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
       list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }) },
     },
     get: (name: string) => (name === 'commandUi' ? commandUi : undefined),
+    provide: (name: string, value?: unknown) => {
+      provided[name] = value
+      const off = () => { delete provided[name] }
+      disposers.push(off)
+      return off
+    },
     // The per-entry configuration form the cleanup card stages over. A minimal
     // read/write face is enough for the registration probe; the card's own
     // behaviour is covered by tests/client-settings-card.test.ts.
@@ -160,6 +169,7 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
     slotEntries,
     registered,
     contribution: name => contributions.get(name),
+    provided,
     formSubscriptions: () => subscribeScope.mock.calls.length,
     formUnsubscriptions: () => unsubscribeScope.mock.calls.length,
     dispose: () => {
@@ -210,6 +220,7 @@ describe('client plugin lifecycle', () => {
     expect(mounted.slotEntries[0]?.key).toBe('dsh-rewind-plugin')
     expect(mounted.slotEntries[1]?.id).toBe('dsh-rewind-pending')
     expect([...mounted.registered].sort()).toEqual(['rewind', 'undo'])
+    expect(mounted.provided['dshRewind']).toBeDefined()
     mounted.dispose()
   })
 

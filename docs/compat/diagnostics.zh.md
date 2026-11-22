@@ -23,7 +23,7 @@
 | --- | --- |
 | `boot` | 启动身份行——`loaded v<version> (build <hash>)`，由详细输出开关控制（见下）。用于确认运行中的 bundle 是否匹配某个修复。 |
 | `refill` | 回退后的 preview → commit 流程与输入框回填（请求失败、提交被拒绝、预览超时，或回填故障） |
-| `command` | `/rewind` 与 `/undo` 的客户端命令注册（名字已被其它 client contribution 占用，或注册被拒绝） |
+| `command` | `/rewind` 与 `/undo` 的客户端命令注册与命令面接管（名字已被其它 client contribution 占用、注册被拒绝，或命令无法恢复） |
 | `preview` | 模式气泡背后的预览传输（请求失败、结果非法、超时，或面板渲染时的意外故障） |
 | `commit` | 确认后的提交传输（请求失败、结果非法或超时） |
 | `claim` | 第三方接管观察（声明注入或订阅失败） |
