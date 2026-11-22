@@ -4,8 +4,8 @@
  * Client-plugin lifecycle wiring: the disposer `apply` yields is exactly what a
  * live disable runs. `tests/client-popover.test.ts` covers `closePopover`
  * itself; this file covers the WIRING — the disposer calling it, the injected
- * `<style data-plugin>` marker the harness reaps by, the Chat-row takeover and
- * its restore, and the action's click → mode-popover path.
+ * `<style>` lifecycle, the Chat-row takeover and its restore, and the action's
+ * click → mode-popover path.
  *
  * The client context is a hand fake with exactly the surface `apply` uses; a
  * mount that needs another service fails loudly. The configuration form is
@@ -302,13 +302,12 @@ describe('client plugin lifecycle', () => {
     expect(mounted.formUnsubscriptions()).toBe(2)
   })
 
-  it('injects its styles under the package identity the harness reaps by', () => {
+  it('installs and removes its style on unload', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
-    // The owned-style fallback removes plugin styles by this id on unload; the
-    // plugin itself only marks them.
     expect(document.head.querySelector('style[data-plugin="dsh-rewind-plugin"]')).not.toBeNull()
     mounted.dispose()
+    expect(document.head.querySelector('style[data-plugin="dsh-rewind-plugin"]')).toBeNull()
   })
 
   it('closes an open mode popover when the plugin is unloaded', () => {

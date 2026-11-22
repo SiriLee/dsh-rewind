@@ -200,8 +200,7 @@ export function apply(ctx: ClientContext): void {
     })
 
     const style = document.createElement('style')
-    // The loader row id (the harness matches its owned-style fallback by
-    // `data-plugin === entryId`, and the entry id is the package name).
+    // Keep the package identity for diagnostics; the plugin owns removal.
     style.dataset.plugin = PLUGIN_PACKAGE
     style.textContent = STYLE
     document.head.appendChild(style)
@@ -550,9 +549,10 @@ export function apply(ctx: ClientContext): void {
       // plain DOM plus document capture-phase key listeners, so it must be
       // closed with this fiber: otherwise the node and the key steal (↑/↓/Esc
       // routed away from the composer) outlive the unload, and a later remount
-      // would overwrite the singleton reference and leak both for good. The
-      // harness reaps the styled marker itself (owned-style fallback).
+      // would overwrite the singleton reference and leak both for good.
       closePopover()
+      // The loader no longer reaps style[data-plugin]; remove it with the fiber.
+      style.remove()
     }
   }, 'dsh-rewind client lifecycle')
 }
