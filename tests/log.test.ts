@@ -15,8 +15,24 @@ import { rewindLog } from '../src/client/log.ts'
 
 const KEY = 'dsh-rewind.debug'
 
+/**
+ * Node 26 exposes a global `localStorage` that is unavailable without
+ * `--localstorage-file`, and jsdom's window is left without one in that
+ * environment. The logger only needs get/set/remove, so give the window a
+ * plain in-memory store for this test.
+ */
+const values = new Map<string, string>()
+Object.defineProperty(window, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => { values.set(key, value) },
+    removeItem: (key: string) => { values.delete(key) },
+  } satisfies Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>,
+})
+
 afterEach(() => {
-  localStorage.removeItem(KEY)
+  window.localStorage.removeItem(KEY)
   vi.restoreAllMocks()
 })
 
@@ -40,14 +56,14 @@ describe('log layering (verbose off by default)', () => {
   })
 
   it('treats an empty switch value as off', () => {
-    localStorage.setItem(KEY, '')
+    window.localStorage.setItem(KEY, '')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
     expect(info).not.toHaveBeenCalled()
   })
 
   it('enables info/debug when the switch is on (wildcard dsh-rewind*)', () => {
-    localStorage.setItem(KEY, 'dsh-rewind*')
+    window.localStorage.setItem(KEY, 'dsh-rewind*')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     const debug = vi.spyOn(console, 'debug').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
@@ -58,7 +74,7 @@ describe('log layering (verbose off by default)', () => {
   })
 
   it('filters by namespace: refill only, hiding stays silent', () => {
-    localStorage.setItem(KEY, 'dsh-rewind:refill')
+    window.localStorage.setItem(KEY, 'dsh-rewind:refill')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
     rewindLog.debug('hiding', 'h')
@@ -66,7 +82,7 @@ describe('log layering (verbose off by default)', () => {
   })
 
   it('supports comma-separated namespaces', () => {
-    localStorage.setItem(KEY, 'dsh-rewind:refill,dsh-rewind:hiding')
+    window.localStorage.setItem(KEY, 'dsh-rewind:refill,dsh-rewind:hiding')
     const info = vi.spyOn(console, 'info').mockReturnValue(undefined)
     rewindLog.info('refill', 'm')
     rewindLog.debug('hiding', 'h')
