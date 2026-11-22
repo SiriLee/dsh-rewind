@@ -77,7 +77,7 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.2.0-alpha.1",
+    "@deepseek-ai/cordis": "^4.1.0",
     "@deepseek-ai/dsh-client-connection": ">=0.2.2-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-client-locale": ">=0.2.2-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-client-ui-commands": ">=0.2.2-rc.1 <0.3.0-0",
@@ -94,7 +94,7 @@
     "@deepseek-ai/dsh-settings": ">=0.2.2-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-tools": ">=0.2.2-rc.1 <0.3.0-0",
     "@deepseek-ai/dsh-working-directory": ">=0.2.2-rc.1 <0.3.0-0",
-    "@deepseek-ai/schemastery": "^3.20.0-alpha.1"
+    "@deepseek-ai/schemastery": "^3.19.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {
