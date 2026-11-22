@@ -136,7 +136,6 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 
 ## Compatibility
 
-- Node.js `>=24.9.0`.
 - Supported DSH versions are declared by `package.json` `engines.dsh`.
 - Compatibility definition, verification method, and version alignment: see [docs/compat/audit.md](docs/compat/audit.md).
 

@@ -139,10 +139,6 @@ describe('package layout', () => {
     }
   })
 
-  it('keeps the engines range aligned with the CI matrix', () => {
-    expect(pkg.engines?.node).toBe('>=24.9.0')
-  })
-
   it('declares the adapted DSH range on the peer tuple', () => {
     // release.md: since DSH 0.2.1-alpha.4 `engines.dsh` is the sole admission
     // criterion, so it declares the whole range — the floor on the peer tuple

@@ -14,7 +14,7 @@ first), and the docs live under `docs/` with an index in `docs/README.md`.
 
 ## Prerequisites
 
-- Node `>=24.9.0` (see `engines` in `package.json`), npm.
+- Node.js and npm (use a Node version supported by the target DSH release).
 
 ## Setup and commands
 

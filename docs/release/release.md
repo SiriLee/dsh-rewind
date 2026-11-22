@@ -59,7 +59,7 @@ Each release is `git push <branch>` followed by `git push <branch> --tags`.
   **idempotent** — an already published version is skipped.
 - CI (`.github/workflows/ci.yml`) runs `npm run check` — typecheck + tests +
   build + artifact verification + a `npm pack --dry-run` — on every push / PR
-  across both Node engines boundary versions; the tarball layout is guarded by
+  across the CI Node matrix; the tarball layout is guarded by
   `tests/package-layout.test.ts`.
 - The GitHub Release body is **that block**, extracted by
   `node scripts/changelog-extract.mjs <tag>` and attached with `--notes-file`
