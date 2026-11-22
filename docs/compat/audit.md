@@ -121,8 +121,8 @@ only an install that shadows an older copy is affected; true of any plugin.
 **Stance:** keep the floor; never treat the range as enforcement.
 
 **U10 · Upstream defect — no longer used, no plugin impact.**
-`connection.rpc.handle` registers through the Connection owner's context, which
-injects only `credentials`. **Impact:** none now — the v1 contract routes use exact
+`connection.rpc.handle` registers through the Connection owner's context rather
+than the caller's. **Impact:** none now — the v1 contract routes use exact
 `/api` routes and never read `owner.webServer`. **Stance:** no
 compensation; reported upstream.
 
@@ -149,10 +149,9 @@ These are paths verified manually or not yet in CI, not known-broken behavior.
 - **Real LLM streaming / auto title (L2 stubbed)**, and
   **`session-reference`'s `SessionReferenceResolver.prepare`** (needs a full session-query
   service; its data base is already covered by the G1 probe).
-- **Real HTTP carrier and browser authentication**: `verify-host` mounts the real
-  `HostConnectionService` and drives the exact `/api` routes through its shared Fetch handler;
-  the HTTP bridge, browser cookie authentication and the served page are verified manually on
-  a live Web host, not in CI.
+- **Real HTTP carrier and browser authentication**: `verify-host` drives the exact `/api`
+  routes through a minimal Fetch registry; the real HTTP bridge, browser authentication and
+  the served page are verified manually on a live Web host, not in CI.
 - **Policy-enabled restore sync**: the compensation is checked by its `fs/observed` emissions,
   not by a following write under the re-enabled policy.
 
