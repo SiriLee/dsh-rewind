@@ -145,7 +145,7 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 
 ## Known limitations
 
-1. **Turn navigation keeps rewound turns** — the right-side turn navigation keeps an "unloaded" tick for each rewound turn, and hovering previews the withdrawn content. Only a display difference; no functional impact.
+1. **Turn navigation keeps rewound turns** — the left-side turn navigation keeps an "unloaded" tick for each rewound turn, and hovering previews the withdrawn content. Only a display difference; no functional impact.
 2. **A far rewind may show a blank transcript** — when the target predates the loaded history, the conversation area goes blank; click **Load earlier** to page back until the history appears.
 
 > [!NOTE]
