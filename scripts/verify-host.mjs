@@ -3,13 +3,15 @@
  * Host-half verification: boots the built plugin (`lib/index.js`) on a real
  * cordis context with a real dsh-session, drives the checkpoint pipeline
  * (pre-step manifests + tools/execute first touches), the read-only API routes
- * and the `/rewind` command end to end — no model, no UI. Files are real files
- * under a temporary directory, so restores are checked against real content.
+ * and the `/snapshot-auto-cleanup` command end to end — no model, no UI. Files
+ * are real files under a temporary directory, so restores are checked against
+ * real content.
  *
  * Run: `npm run build && node scripts/verify-host.mjs`
  *
  * What it proves:
- *  1. the plugin registers `/rewind`, `/undo` and the cleanup command;
+ *  1. the host registers only `/snapshot-auto-cleanup` (the rewind commands are
+ *     client contributions);
  *  2. one dense checkpoint per user message is written at `agent/pre-step`;
  *  3. a `write` first touch records the pre-touch state before the body;
  *  4. preview and both-mode restore agree on the target manifest;
@@ -189,25 +191,11 @@ const check = (name, ok, detail) => {
   check('v1 health reports contract 1', status === 200 && result.ok === true && result.value.contract === 1, JSON.stringify(result))
 }
 
-// 1. commands
-check('rewind registered', typeof commands.get('rewind')?.handler === 'function' && commands.get('rewind').name === 'rewind', JSON.stringify(commands.get('rewind')))
-check('undo alias shares the handler', commands.get('undo')?.handler === commands.get('rewind')?.handler, JSON.stringify(commands.get('undo')))
-check('cleanup command registered', typeof commands.get('snapshot-auto-cleanup')?.handler === 'function', JSON.stringify(commands.get('snapshot-auto-cleanup')))
-
-// 1b. bare /rewind host fallback: the latest message, conversation only
-{
-  const session = Session.create(SessionId('verify-bare'))
-  const first = await runUserStep(session, 'first')
-  const second = await runUserStep(session, 'second')
-  const result = await commands.get('rewind').handler({
-    commandId: CommandId('bare'), agent: agentFor(session), rawInput: '   ', signal: aborted(),
-  })
-  const marker = session.snapshotEvents().at(-1)
-  check('bare /rewind withdraws the latest message', result.kind === 'success'
-    && marker.data.source.kind === 'dsh-rewind'
-    && marker.surfaceOp.startSeq === second.seq
-    && first.seq < second.seq, JSON.stringify({ result, marker }))
-}
+// 1. commands: the host keeps only the cleanup command; `/rewind` and `/undo`
+// are client contributions and never reach a host ctx.commands registry.
+check('only the cleanup command is registered', commands.size === 1
+  && typeof commands.get('snapshot-auto-cleanup')?.handler === 'function', JSON.stringify([...commands.keys()]))
+check('no host /rewind or /undo', commands.get('rewind') === undefined && commands.get('undo') === undefined, JSON.stringify([...commands.keys()]))
 
 // 2-4. pre-step manifests, first-touch capture, preview and both-mode restore
 {

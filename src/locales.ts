@@ -1,6 +1,10 @@
 /**
- * Host-side localization for dsh-rewind's command output and command
- * description.
+ * Host-side localization for dsh-rewind's remaining host command,
+ * `/snapshot-auto-cleanup`: its description and its rendered output.
+ *
+ * The `/rewind` and `/undo` commands are client contributions now; their
+ * labels and descriptions live in the client dictionaries
+ * (`src/client/locales.ts`) and never pass through this module.
  *
  * Architecture (matches the dsh ecosystem): the HOST half of a dual-face
  * plugin has no locale service — only the browser client carries one. The host
@@ -21,7 +25,8 @@
  * DSH localizes only its OWN command descriptions via the client locale — a
  * closed `HOST_FACES` allowlist; third-party plugin descriptions are
  * not in that channel (see docs/compat/audit.md, RU-I18N), and no host command
- * OUTPUT is localized for anyone, so this dictionary is what carries it.
+ * OUTPUT is localized for anyone, so this dictionary is what carries the
+ * cleanup command's copy.
  *
  * English is the canonical key set: every other dictionary is typed complete
  * against it, and the tests compare every dictionary's template placeholders
@@ -32,14 +37,6 @@
 
 /** English dictionary — the canonical key set (neutral default). */
 export const en = {
-  'inflight': 'A rewind is already running for this session; please wait.',
-  'stopFailed': 'Could not stop the running agent; rewind cancelled. Please try again.',
-  'cancelled': 'Rewind cancelled.',
-  'failed': 'Rewind failed: {error}. The session is unchanged.',
-  'success': 'Withdrawn seq {targetSeq} and everything after it (conversation returned to earlier){restore}.',
-  'noUserMessages': 'This session has no rewindable user messages yet.',
-  'command.description': 'Rewind the conversation and/or files to a previous point',
-  'command.undoDescription': 'Alias of /rewind',
   'cleanup.description': 'Manage automatic cleanup of session snapshot backups',
   'cleanup.inputHint': 'on | off | max-age <days> | run [--apply] [--current]',
   'cleanup.status': 'Auto-cleanup: {state}. Max age: {days} day(s).',
@@ -67,14 +64,6 @@ export type HostKey = keyof typeof en
 
 /** Chinese dictionary, checked complete against the en key set. */
 export const zh: Record<HostKey, string> = {
-  'inflight': '该会话已有一个回退正在执行，请稍候。',
-  'stopFailed': '无法停止运行中的 agent，回退已取消。请稍后再试。',
-  'cancelled': '回退已取消。',
-  'failed': '回退失败：{error}。会话未改变。',
-  'success': '已撤回 seq {targetSeq} 及之后内容（对话已回到此前）{restore}。',
-  'noUserMessages': '当前会话还没有可回退的用户消息。',
-  'command.description': '把对话和/或文件回退到之前的某条消息',
-  'command.undoDescription': '/rewind 的别名',
   'cleanup.description': '管理会话快照备份的自动清理',
   'cleanup.inputHint': 'on | off | max-age <天数> | run [--apply] [--current]',
   'cleanup.status': '自动清理：{state}。最大保留天数：{days} 天。',
@@ -99,14 +88,6 @@ export const zh: Record<HostKey, string> = {
 
 /** Japanese dictionary, checked complete against the en key set. */
 export const ja: Record<HostKey, string> = {
-  'inflight': 'このセッションでは既に巻き戻しが実行中です。お待ちください。',
-  'stopFailed': '実行中のエージェントを停止できなかったため、巻き戻しをキャンセルしました。もう一度お試しください。',
-  'cancelled': '巻き戻しをキャンセルしました。',
-  'failed': '巻き戻しに失敗しました：{error}。セッションは変更されていません。',
-  'success': 'seq {targetSeq} とそれ以降を撤回しました（会話は以前の状態に戻りました）{restore}。',
-  'noUserMessages': 'このセッションにはまだ巻き戻しできるユーザーメッセージがありません。',
-  'command.description': '会話やファイルを以前の時点まで巻き戻します',
-  'command.undoDescription': '/rewind のエイリアス',
   'cleanup.description': 'セッションのスナップショットバックアップの自動クリーンアップを管理します',
   'cleanup.inputHint': 'on | off | max-age <日数> | run [--apply] [--current]',
   'cleanup.status': '自動クリーンアップ：{state}。最大保持期間：{days} 日。',
@@ -131,14 +112,6 @@ export const ja: Record<HostKey, string> = {
 
 /** Spanish dictionary, checked complete against the en key set. */
 export const es: Record<HostKey, string> = {
-  'inflight': 'Ya hay un rebobinado en curso para esta sesión; espere por favor.',
-  'stopFailed': 'No se pudo detener el agente en ejecución; rebobinado cancelado. Inténtelo de nuevo.',
-  'cancelled': 'Rebobinado cancelado.',
-  'failed': 'Error al rebobinar: {error}. La sesión no ha cambiado.',
-  'success': 'Retirado seq {targetSeq} y todo lo posterior (conversación devuelta a un punto anterior){restore}.',
-  'noUserMessages': 'Esta sesión aún no tiene mensajes de usuario a los que rebobinar.',
-  'command.description': 'Rebobinar la conversación y/o los archivos a un punto anterior',
-  'command.undoDescription': 'Alias de /rewind',
   'cleanup.description': 'Gestionar la limpieza automática de las copias de seguridad de instantáneas de sesión',
   'cleanup.inputHint': 'on | off | max-age <días> | run [--apply] [--current]',
   'cleanup.status': 'Limpieza automática: {state}. Antigüedad máxima: {days} día(s).',
@@ -163,14 +136,6 @@ export const es: Record<HostKey, string> = {
 
 /** French dictionary, checked complete against the en key set. */
 export const fr: Record<HostKey, string> = {
-  'inflight': 'Un rembobinage est déjà en cours pour cette session ; veuillez patienter.',
-  'stopFailed': 'Impossible d’arrêter l’agent en cours ; rembobinage annulé. Veuillez réessayer.',
-  'cancelled': 'Rembobinage annulé.',
-  'failed': 'Échec du rembobinage : {error}. La session est inchangée.',
-  'success': 'Retiré seq {targetSeq} et tout ce qui suit (conversation revenue à un point antérieur){restore}.',
-  'noUserMessages': 'Cette session n’a pas encore de messages utilisateur vers lesquels rembobiner.',
-  'command.description': 'Rembobiner la conversation et/ou les fichiers à un point antérieur',
-  'command.undoDescription': 'Alias de /rewind',
   'cleanup.description': 'Gérer le nettoyage automatique des sauvegardes d’instantanés de session',
   'cleanup.inputHint': 'on | off | max-age <jours> | run [--apply] [--current]',
   'cleanup.status': 'Nettoyage automatique : {state}. Ancienneté max. : {days} jour(s).',
@@ -195,14 +160,6 @@ export const fr: Record<HostKey, string> = {
 
 /** German dictionary, checked complete against the en key set. */
 export const de: Record<HostKey, string> = {
-  'inflight': 'Für diese Sitzung läuft bereits ein Zurückspulen; bitte warten.',
-  'stopFailed': 'Der laufende Agent konnte nicht gestoppt werden; Zurückspulen abgebrochen. Bitte erneut versuchen.',
-  'cancelled': 'Zurückspulen abgebrochen.',
-  'failed': 'Zurückspulen fehlgeschlagen: {error}. Die Sitzung ist unverändert.',
-  'success': 'seq {targetSeq} und alles danach zurückgezogen (Unterhaltung auf einen früheren Stand zurückgesetzt){restore}.',
-  'noUserMessages': 'Diese Sitzung hat noch keine Benutzernachrichten, zu denen zurückgespult werden kann.',
-  'command.description': 'Unterhaltung und/oder Dateien auf einen früheren Stand zurückspulen',
-  'command.undoDescription': 'Alias von /rewind',
   'cleanup.description': 'Automatische Bereinigung der Snapshot-Sicherungen von Sitzungen verwalten',
   'cleanup.inputHint': 'on | off | max-age <Tage> | run [--apply] [--current]',
   'cleanup.status': 'Automatische Bereinigung: {state}. Max. Alter: {days} Tag(e).',
@@ -227,14 +184,6 @@ export const de: Record<HostKey, string> = {
 
 /** Russian dictionary, checked complete against the en key set. */
 export const ru: Record<HostKey, string> = {
-  'inflight': 'Для этого сеанса уже выполняется откат; подождите.',
-  'stopFailed': 'Не удалось остановить работающий агент; откат отменён. Повторите попытку.',
-  'cancelled': 'Откат отменён.',
-  'failed': 'Не удалось выполнить откат: {error}. Сеанс не изменён.',
-  'success': 'Отозвано seq {targetSeq} и всё после него (беседа возвращена к более раннему состоянию){restore}.',
-  'noUserMessages': 'В этом сеансе пока нет сообщений пользователя для отката.',
-  'command.description': 'Откатить беседу и/или файлы к более раннему состоянию',
-  'command.undoDescription': 'Псевдоним /rewind',
   'cleanup.description': 'Управление автоматической очисткой резервных копий снимков сеансов',
   'cleanup.inputHint': 'on | off | max-age <дней> | run [--apply] [--current]',
   'cleanup.status': 'Автоочистка: {state}. Макс. возраст: {days} дн.',
@@ -259,14 +208,6 @@ export const ru: Record<HostKey, string> = {
 
 /** Brazilian Portuguese dictionary, checked complete against the en key set. */
 export const pt: Record<HostKey, string> = {
-  'inflight': 'Já há um rebobinamento em andamento para esta sessão; aguarde.',
-  'stopFailed': 'Não foi possível parar o agente em execução; rebobinamento cancelado. Tente novamente.',
-  'cancelled': 'Rebobinamento cancelado.',
-  'failed': 'Falha no rebobinamento: {error}. A sessão não foi alterada.',
-  'success': 'Retirado seq {targetSeq} e tudo depois dele (conversa retornada a um ponto anterior){restore}.',
-  'noUserMessages': 'Esta sessão ainda não tem mensagens de usuário para rebobinar.',
-  'command.description': 'Rebobinar a conversa e/ou os arquivos para um ponto anterior',
-  'command.undoDescription': 'Alias de /rewind',
   'cleanup.description': 'Gerenciar a limpeza automática dos backups de snapshots de sessão',
   'cleanup.inputHint': 'on | off | max-age <dias> | run [--apply] [--current]',
   'cleanup.status': 'Limpeza automática: {state}. Idade máxima: {days} dia(s).',

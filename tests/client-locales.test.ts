@@ -29,3 +29,14 @@ describe('client locale dictionaries', () => {
     }
   })
 })
+
+describe('command copy', () => {
+  it('keeps the descriptions verbatim and adds the menu labels', () => {
+    // Moved from the host dictionary without rewriting the descriptions (§2.1).
+    expect(CLIENT_DICTS.en['command.description'])
+      .toBe('Rewind the conversation and/or files to a previous point')
+    expect(CLIENT_DICTS.en['command.undoDescription']).toBe('Alias of /rewind')
+    expect(CLIENT_DICTS.zh['command.rewindLabel']).toBe('回退')
+    expect(CLIENT_DICTS.zh['command.undoLabel']).toBe('撤销')
+  })
+})

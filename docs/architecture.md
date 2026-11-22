@@ -18,8 +18,8 @@ credentials access.
 The module map:
 
 ```
-src/index.ts            host plugin: /rewind, /undo, /snapshot-auto-cleanup, v1 routes + checkpoint pipeline
-src/engine.ts           host-internal preview/commit operations shared by commands and routes
+src/index.ts            host plugin: /snapshot-auto-cleanup, v1 routes + checkpoint pipeline
+src/engine.ts           host-internal preview/commit operations behind the v1 routes
 src/rewind.ts           pure planning: target resolution, surface range, candidate listing
 src/snapshot.ts         checkpoint store: dense manifests, first-touch capture,
                         restore/preview, retention/GC, whole-session cleanup
@@ -29,7 +29,9 @@ src/snapshot-fs.ts      filesystem primitives: atomic JSON, streaming compares,
                         location pin, unsafe-target rejection
 src/snapshot-cleanup.ts cleanup policy + config persistence + auto-sweep throttle
 src/locales.ts          host i18n (t() renderer, HostKey)
-src/client/index.ts     client entry: command decoration, mounts, locale, teardown
+src/client/index.ts     client entry: /rewind + /undo commands, mounts, locale, teardown
+src/client/command-takeover.ts  command-face takeover service (ctx.dshRewind.commands)
+src/client/icon.tsx     the shared ↶ glyph (row action and command row)
 src/client/action.tsx   the ↶ button both mount paths share
 src/client/mount.tsx    durable-row action: takes over the user/steering renderer
 src/client/pending-mount.tsx  unclaimed-steering retract layer
@@ -76,8 +78,8 @@ Two dependency rules keep the design testable:
 ## Rewind pipeline
 
 ```
-↶ button / third-party POST commit
-  → adapter (v1 route, or the bare /rewind host fallback):
+↶ button / client /rewind command / third-party POST commit
+  → adapter (client picker, or the v1 route):
     validate input, resolve the target
   → engine.commit: reserve the session → compare headSeq (head-changed = no
     write, no cancel) → conversation: cancel + await (≤15s) → plan the
@@ -94,9 +96,10 @@ Two dependency rules keep the design testable:
     independent of the trigger
 ```
 
-The takeover attribute (`data-dsh-rewind-claim`) only changes the trigger
-surface: row action, pending retract and mode popover yield; the engine,
-commands, visibility and settings card keep working.
+The action takeover attribute (`data-dsh-rewind-claim`) only changes the row
+action surface: the row action, pending retract and mode popover yield; the
+engine, the client command surface, visibility and the settings card keep
+working.
 
 Key invariants:
 

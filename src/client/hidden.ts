@@ -4,14 +4,14 @@
  * @module dsh-rewind/client/hidden
  */
 
-/** The live front-door command; a bare host invocation still appends its row. */
-export const REWIND_COMMAND = 'rewind'
-
-/** The retired engine channel; its rows appear only in older session logs. */
+/**
+ * The retired engine channel. Its rows appear only in older session logs; the
+ * visibility layer keeps hiding them so those logs replay correctly. The live
+ * `/rewind` and `/undo` commands are client contributions now and leave no
+ * command rows, so the name `rewind` is no longer owned by this plugin and is
+ * never hidden by name.
+ */
 export const RETIRED_REWIND_COMMAND = 'rewind-plugin'
-
-/** Command names whose rows a rewind leaves in the log; the visibility layer hides them. */
-export const REWIND_COMMANDS: ReadonlySet<string> = new Set([REWIND_COMMAND, RETIRED_REWIND_COMMAND])
 
 /** A Chat-snapshot view node as the client readers see it. */
 export interface ChatConversationViewNode {

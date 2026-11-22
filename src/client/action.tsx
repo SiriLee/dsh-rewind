@@ -16,24 +16,12 @@ import { useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { Tooltip } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TakeoverStore } from './claim.ts'
+import { RewindIcon } from './icon.tsx'
 import type { RewindKey } from './locales.ts'
 import type { RowAction, RowActionRenderer } from './mount.tsx'
 import { CLASS } from './styles.ts'
 
 type Translate = (key: RewindKey, params?: Record<string, unknown>) => string
-
-/**
- * The ↶ glyph, drawn inline because the product icon set has no rewind
- * artwork. It renders at the row's glyph scale (the neighbouring Copy/branch
- * icons are 15px) with a 1.25 stroke; at 1 the single open stroke reads thinner
- * than their dense outlines.
- */
-const ICON = (
-  <svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <path d="M6.5 2.5 2.5 6.5l4 4" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M2.5 6.5h7a4 4 0 0 1 4 4v1.5" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" />
-  </svg>
-)
 
 /** The shared button's inputs. */
 export interface RewindActionButtonProps {
@@ -62,7 +50,7 @@ export function RewindActionButton({ t, titleKey, ariaKey, pending = false, onOp
           onOpen(event.currentTarget)
         }}
       >
-        {ICON}
+        <RewindIcon size={15} />
       </button>
     </Tooltip>
   )

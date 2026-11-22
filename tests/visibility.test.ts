@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, vi } from 'vitest'
 import type { CommandNode } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { RETIRED_REWIND_COMMAND, REWIND_COMMAND, REWIND_MARKER_KIND, rewindCutsOf, type ChatConversationViewNode, type RewindCut } from '../src/client/hidden.ts'
+import { RETIRED_REWIND_COMMAND, REWIND_MARKER_KIND, rewindCutsOf, type ChatConversationViewNode, type RewindCut } from '../src/client/hidden.ts'
 import { rewindMarkerDefinition } from '../src/client/marker-node.ts'
 import { installChatViewVisibility, RewindVisibilityBuilder } from '../src/client/visibility.ts'
 
@@ -68,7 +68,7 @@ function turnProcess(key: string, anchorSeq: number, turn: number, startSeq: num
 
 function command(key: string, anchorSeq: number, seq: number, target: number, marker: number): Node {
   return node(key, 'command', anchorSeq, {
-    kind: 'command', seq, time: 0, commandId: key, name: REWIND_COMMAND,
+    kind: 'command', seq, time: 0, commandId: key, name: RETIRED_REWIND_COMMAND,
     args: `@${target} chat`, outcome: { kind: 'success', sourceEventSeq: marker },
   } as unknown as CommandNode)
 }
@@ -188,26 +188,28 @@ describe('rewind-marker Definition', () => {
 })
 
 describe('RewindVisibilityBuilder', () => {
-  it('hides the span, the command, and an emptied Turn-process summary', () => {
+  it('hides the span and the retired command row, leaving `rewind` rows alone', () => {
     const builder = new RewindVisibilityBuilder(new FakeBuilder())
-    const markerless = node('cmd0', 'command', 41, {
-      kind: 'command', seq: 41, time: 0, commandId: 'cmd0', name: REWIND_COMMAND,
+    const live = node('cmd0', 'command', 41, {
+      kind: 'command', seq: 41, time: 0, commandId: 'cmd0', name: 'rewind',
       args: '@5 chat', outcome: { kind: 'success', text: 'done' },
     })
     const legacy = node('cmd-legacy', 'command', 42, {
       kind: 'command', seq: 42, time: 0, commandId: 'cmd-legacy', name: RETIRED_REWIND_COMMAND,
       args: '@5 chat', outcome: { kind: 'success', text: 'done' },
     })
-    const snapshot = builder.replace({ nodes: [...baseNodes(), marker('m1', 20, 5), command('cmd1', 40, 40, 5, 20), markerless, legacy], timeline }) as {
+    const snapshot = builder.replace({ nodes: [...baseNodes(), marker('m1', 20, 5), command('cmd1', 40, 40, 5, 20), live, legacy], timeline }) as {
       order: readonly string[]
       nodes: Map<string, Node>
     }
-    expect(snapshot.order).toEqual(['p2', 'u2', 'a2'])
+    // `rewind` is no longer this plugin's exclusive name: only the retired
+    // `rewind-plugin` row is hidden by name.
+    expect(snapshot.order).toEqual(['p2', 'u2', 'a2', 'cmd0'])
     expect(snapshot.nodes.get('u1')?.visibility).toBe('hidden')
     expect(snapshot.nodes.get('p1')?.visibility).toBe('hidden')
     expect(snapshot.nodes.get('m1')?.visibility).toBe('hidden')
     expect(snapshot.nodes.get('cmd1')?.visibility).toBe('hidden')
-    expect(snapshot.nodes.get('cmd0')?.visibility).toBe('hidden')
+    expect(snapshot.nodes.get('cmd0')?.visibility).toBe('visible')
     expect(snapshot.nodes.get('cmd-legacy')?.visibility).toBe('hidden')
     // The data stays readable for composer refill.
     expect((snapshot.nodes.get('u1')?.data as { content: Array<{ text: string }> }).content[0]?.text).toBe('u1')
