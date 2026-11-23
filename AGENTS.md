@@ -13,8 +13,8 @@
 - **Minimal**: avoid over-abstraction; keep the plugin light and maintainable.
 
 ## Layout at a glance
-- `src/index.ts` — host plugin: `/rewind`, `/undo`, `/snapshot-auto-cleanup`,
-  and the checkpoint pipeline.
+- `src/index.ts` — host plugin: `/snapshot-auto-cleanup`, v1 routes, and the
+  checkpoint pipeline.
 - `src/rewind.ts` — pure planning: target resolution, surface range, candidate
   listing.
 - `src/snapshot.ts` — checkpoint store: dense manifests at message boundaries,
@@ -26,8 +26,8 @@
 - `src/snapshot-cleanup.ts` — cleanup policy, config persistence, auto-sweep
   throttle.
 - `src/locales.ts` — host i18n.
-- `src/client/` — client plugin: ↶ button, mode popover, hidden-span
-  computation.
+- `src/client/` — client plugin: `/rewind` and `/undo` commands, ↶ button, mode
+  popover, hidden-span computation.
 - `scripts/` — build, badge, host verification, session codec.
 - `tests/` — vitest suites (rewind / checkpoint / client / lifecycle).
 - `docs/` — `compat/`, `release/`, plus the design, format and interface docs.

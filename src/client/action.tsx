@@ -6,8 +6,8 @@
  * copy and a marker, into an unclaimed steering bubble.
  *
  * The action only records intent: a click opens the popover variant, which
- * confirms and runs the host command / queue mutation (see `popover.ts`,
- * `rewind-flow.ts`, `retract.ts`); the host's admission stays the authority.
+ * confirms and runs the v1 commit or the queue mutation (see `popover.ts`,
+ * `rewind-flow.ts`, `retract.ts`); the host remains the authority.
  *
  * @module dsh-rewind/client/action
  */
