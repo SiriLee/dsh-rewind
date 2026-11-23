@@ -1,5 +1,5 @@
 /**
- * Pure Chat-snapshot readers and rewind-marker cut derivation.
+ * Rewind-marker cut derivation and message image readers, pure.
  *
  * @module dsh-rewind/client/hidden
  */
@@ -7,7 +7,7 @@
 /** The retired engine channel; its rows appear only in older session logs. */
 export const RETIRED_REWIND_COMMAND = 'rewind-plugin'
 
-/** A Chat-snapshot view node as the client readers see it. */
+/** A Chat-snapshot view node. */
 export interface ChatConversationViewNode {
   readonly key: string
   readonly kind?: string
@@ -17,57 +17,6 @@ export interface ChatConversationViewNode {
   readonly location?: { readonly turn?: { readonly turn?: unknown; readonly start?: unknown } }
   /** Chat-only row visibility; absent on older test doubles. */
   readonly visibility?: 'visible' | 'hidden'
-}
-
-/** Minimal Chat-snapshot reader the client helpers need. */
-export interface HiddenChat {
-  readonly order: readonly string[]
-  readonly nodes: {
-    get(key: string): ChatConversationViewNode | undefined
-    /** Every materialized node, including hidden ones. Absent on older snapshots. */
-    values?(): readonly ChatConversationViewNode[]
-  }
-}
-
-/**
- * Every materialized Chat node, preferring the store's own values (which also
- * includes rows the visibility layer hid) and falling back to the visible
- * order for older snapshots / test doubles.
- * @param chat - the live chat snapshot, when available.
- * @returns all nodes in store insertion order.
- */
-export function chatNodesOf(chat: HiddenChat | undefined): readonly ChatConversationViewNode[] {
-  if (chat === undefined) return EMPTY_NODES
-  const values = chat.nodes.values
-  if (typeof values === 'function') return [...values.call(chat.nodes)]
-  const nodes: ChatConversationViewNode[] = []
-  for (const key of chat.order) {
-    const node = chat.nodes.get(key)
-    if (node !== undefined) nodes.push(node)
-  }
-  return nodes
-}
-
-const EMPTY_NODES: readonly ChatConversationViewNode[] = []
-
-/**
- * Reader for one session's live chat snapshot: the chat is served by the
- * `uiConversation` service's named "chat" view (contributed by
- * dsh-client-ui-chat through the uiSession slot hook).
- */
-export type ChatOf = (
-  session: { readonly sessionId: string } | undefined,
-) => HiddenChat | undefined
-
-/**
- * Resolve the chat snapshot from the `uiConversation` "chat" view. The view's
- * `getSnapshot()` returns undefined until the named view is registered, which
- * degrades to `undefined` (no targets — never a crash).
- */
-export function chatSnapshotOf(
-  chatView: { getSnapshot(): unknown } | undefined,
-): HiddenChat | undefined {
-  return (chatView?.getSnapshot() ?? undefined) as HiddenChat | undefined
 }
 
 /**

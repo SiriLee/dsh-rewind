@@ -97,7 +97,7 @@ apply(ctx, resolvedConfig)
 // first synthesized step, as the loader does by awaiting the mount effect.
 await new Promise(resolve => setTimeout(resolve, 10))
 
-/** One fake agent around a real session (the fields executeRewind reads). */
+/** One fake agent around a real session (the fields the engine commit reads). */
 function agentFor(session) {
   let agent = agents.get(session.id)
   if (agent === undefined) {

@@ -144,8 +144,8 @@ interface SlotsLike {
 }
 
 /**
- * Client plugin body: command decoration + parameterized guard + locale +
- * visibility + the settings card.
+ * Client plugin body: the client commands, the command-face takeover service,
+ * locale, visibility and the settings card.
  * @param ctx - client root context carrying `slots`, `sessions`, `locale` and `commandUi`.
  */
 export function apply(ctx: ClientContext): void {

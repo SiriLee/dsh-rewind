@@ -757,12 +757,11 @@ function formatClearReport(report: ClearSessionReport): string {
  * The `--apply` mutation must only run once the session is STOPPED: a running
  * turn (the LLM thinking/outputting/editing, actively driving write tools)
  * would otherwise let a concurrent first-touch write interleave with this
- * directory `rm`. Mirroring `rewind`, we ACTIVELY pause the running turn —
- * cancel it and wait for quiescence — before clearing; if it cannot stop, we
- * error (`stopFailed`) and never clear, so the plugin is never left corrupted.
- * `agent.status` reads `idle` during a maintenance phase, so a mere status read
- * is not enough — the `whenIdle` race is required, exactly as in
- * `executeRewind`.
+ * directory `rm`. The clear ACTIVELY pauses the running turn — cancel it and
+ * wait for quiescence — before clearing; if it cannot stop, it errors
+ * (`cleanup.clearActive`) and never clears, so the plugin is never left
+ * corrupted. `agent.status` reads `idle` during a maintenance phase, so a mere
+ * status read is not enough — the `whenIdle` race is required.
  *
  * Clearing is an explicit abandonment of this session's checkpoint archive.
  * The memory reset is part of `clearSession`; it is what keeps the next

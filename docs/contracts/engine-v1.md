@@ -222,17 +222,10 @@ passes and it will actually render, and removes it on unload).
 
 ## 6. Taking over the command surface
 
-The client half provides a page-level command-face service (present only while
-the client half is loaded):
-
-```ts
-const permission = await ctx.dshRewind.commands.takeover()
-```
-
-It resolves after every client command this engine contributed is unregistered.
-The claimant may register its own commands with `ctx.commandUi.register`
-(registering none is hide-only); `permission.dispose()` restores the engine's
-commands.
+The client half exposes `ctx.dshRewind.commands.takeover()`. It resolves after
+every client command this engine contributed is unregistered and returns a
+permission whose `dispose()` restores them. The claimant registers its own
+commands with `ctx.commandUi.register`; registering none is hide-only.
 
 - Only one claimant at a time; a second call rejects with `code:
   'already-taken'`.

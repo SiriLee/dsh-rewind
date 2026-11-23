@@ -41,8 +41,8 @@ src/client/rewind-flow.ts  preview → commit + composer refill
 src/client/popover.ts   mode-selection popover, plus the pending-retract confirm
 src/client/visibility.ts  snapshot-level hidden span (wraps the chat builder)
 src/client/marker-node.ts  chat Definition publishing the durable marker cut node
-src/client/hidden.ts    Chat-snapshot readers and marker cut derivation, pure
-src/client/candidates.ts  candidate row mapping + loaded-window availability, pure
+src/client/hidden.ts    rewind-marker cut derivation + image readers, pure
+src/client/candidates.ts  candidate row mapping, pure
 src/client/host-api.ts  v1 contract client (health, preview, commit) + internal picker candidates
 src/client/claim.ts     third-party takeover store (data-dsh-rewind-claim)
 src/client/errors.ts    contract code → dictionary key mapping

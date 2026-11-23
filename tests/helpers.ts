@@ -131,9 +131,9 @@ export function buildTurnedSession(): Session {
 }
 
 /**
- * Apply a rewind exactly like `executeRewind` does on the v0.1.3/v2 line: plan
- * against the live surface, then append the single empty `user/message`
- * replace marker (no ghost step frame).
+ * Apply a rewind the way the engine commit does: plan against the live surface,
+ * then append the single empty `user/message` replace marker (no ghost step
+ * frame).
  * @returns the marker's log seq.
  */
 export function applyRewind(session: Session, targetSeq: number): number {
