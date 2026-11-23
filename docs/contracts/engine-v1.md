@@ -222,18 +222,15 @@ passes and it will actually render, and removes it on unload).
 
 ## 6. Taking over the command surface
 
-The client half exposes `ctx.dshRewind.commands.takeover()`. It resolves after
-every client command this engine contributed is unregistered and returns a
-permission whose `dispose()` restores them. The claimant registers its own
-commands with `ctx.commandUi.register`; registering none is hide-only.
+The client half exposes `ctx.dshRewind.commands.takeover()`. It resolves with a
+permission whose `dispose()` restores the engine's commands, or `null` when the
+takeover was refused: another claimant already holds the face, `uiOwner` is
+`self`, the client half has unloaded, or an engine command could not be
+unregistered. The refusal reason is logged and is not part of the API. The
+claimant registers its own commands with `ctx.commandUi.register`; registering
+none is hide-only.
 
-- Only one claimant at a time; a second call rejects with `code:
-  'already-taken'`.
-- `uiOwner: self` rejects with `code: 'native-owner'` (checked first); the
-  setting is read at call time, and a later change does not revoke an active
-  takeover.
-- Refusals are `CommandTakeoverError` (exported from the client entry); `code`
-  is stable, `message` is diagnostic.
+- A refusal is a `null` result, not an exception; callers register nothing.
 - `dispose()` is idempotent and a no-op after the client half unloads. A name
   still owned by another party is skipped, never overwritten. Open command
   popups are dismissed with the takeover.

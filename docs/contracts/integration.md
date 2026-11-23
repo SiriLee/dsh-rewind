@@ -166,17 +166,20 @@ face; [§6 of the contract](engine-v1.md) defines the rules.
 
 ```ts
 const permission = await ctx.dshRewind.commands.takeover()
-ctx.commandUi.register({ name: 'rewind', label, description, icon, available, ui })
-// Unregister your commands, then:
+if (permission === null) return // do not register
+const unregisterCommand = ctx.commandUi.register({ name: 'rewind', label, description, icon, available, ui })
+
+// On release: unregister your own commands first, then give the face back.
+unregisterCommand()
 permission.dispose()
 ```
 
-- Takeover with no registration is hide-only.
-- A second takeover while one is held rejects with `already-taken`;
-  `uiOwner: self` rejects with `native-owner`.
-- The permission registers nothing; use the standard client command interface.
+`null` means no face was taken (another claimant, `uiOwner: self`, an unloaded
+client half, or a failed withdrawal); the reason is logged, not public. Register
+only after a non-null result, and unregister your own commands before `dispose`.
+
+- Hide-only: take over and register nothing.
 - A name still occupied when you dispose stays with its owner.
-- The service is present only while the engine's client half is loaded.
 
 ## Packaging your plugin next to the engine
 

@@ -10,15 +10,12 @@ import type { CommandContribution } from '@deepseek-ai/dsh-client-ui-commands/cl
 import type { UiOwner } from './claim.ts'
 import { rewindLog } from './log.ts'
 
-/** Why a command-face takeover was refused. */
-export type CommandTakeoverErrorCode = 'already-taken' | 'native-owner'
+/** Why a takeover was refused; diagnostic only, never thrown or exported. */
+type TakeoverRefusal = 'native-owner' | 'already-taken' | 'withdraw-failed' | 'unloaded'
 
-/** Refusal raised by {@link RewindCommands.takeover}; branch on `code`. */
-export class CommandTakeoverError extends Error {
-  constructor(readonly code: CommandTakeoverErrorCode) {
-    super(`dsh-rewind: command takeover refused (${code})`)
-    this.name = 'CommandTakeoverError'
-  }
+/** Log one refused takeover. Callers branch on `null`, not on this reason. */
+function logRefusal(reason: TakeoverRefusal): void {
+  rewindLog.warn('command', `the command takeover was not granted: ${reason}`)
 }
 
 /** The handle a successful takeover returns. */
@@ -31,11 +28,10 @@ export interface CommandTakeoverPermission {
 export interface RewindCommands {
   /**
    * Take the page's command face away from the engine.
-   * @returns the permission that restores it.
-   * @throws {CommandTakeoverError} `native-owner` under `uiOwner: self`,
-   *   `already-taken` while another claimant holds the face.
+   * @returns the permission that restores it, or `null` when the takeover was
+   *   refused (the reason is logged and is not part of the API).
    */
-  takeover(): Promise<CommandTakeoverPermission>
+  takeover(): Promise<CommandTakeoverPermission | null>
 }
 
 /** The `ctx.dshRewind` service face. */
@@ -67,9 +63,6 @@ interface LiveCommand {
   readonly dispose: () => void
 }
 
-/** Handed to a caller that raced the client's own unload; owns nothing. */
-const INERT_PERMISSION: CommandTakeoverPermission = { dispose() {} }
-
 /**
  * Register the engine's client commands and build the takeover service.
  * A refused registration costs only that name. The returned `dispose` removes
@@ -91,31 +84,56 @@ export function createCommandFace(options: CommandFaceOptions): CommandFace {
     }
   }
 
-  /** Unregister every engine command currently live; returns them in registration order. */
-  const withdraw = (): LiveCommand[] => {
+  /**
+   * Unregister every engine command currently live; returns them in registration
+   * order. A failed removal returns `undefined`; when `restore` is set, the
+   * commands that were actually removed are put back first (best effort).
+   */
+  const withdraw = (restore: boolean): LiveCommand[] | undefined => {
     const commands = [...live.values()]
-    live.clear()
+    const failed: LiveCommand[] = []
     for (const command of [...commands].reverse()) {
       try {
         command.dispose()
+        live.delete(command.contribution.name)
       } catch (error) {
+        failed.push(command)
         rewindLog.warn('command', `the ${command.contribution.name} client command was not removed`, error)
       }
     }
-    return commands
+    if (failed.length === 0) return commands
+    if (restore) {
+      for (const command of commands) {
+        if (!failed.includes(command)) keep(command.contribution)
+      }
+    }
+    return undefined
   }
 
   for (const contribution of options.contributions) keep(contribution)
 
   const service: RewindCommandFace = {
     commands: {
-      async takeover(): Promise<CommandTakeoverPermission> {
-        // A stale caller can only race our unload; nothing is left to yield.
-        if (disposed) return INERT_PERMISSION
+      async takeover(): Promise<CommandTakeoverPermission | null> {
+        // A stale caller can only race our unload; there is nothing to take.
+        if (disposed) {
+          logRefusal('unloaded')
+          return null
+        }
         // `native-owner` outranks an existing claimant: the face was never ours.
-        if (options.readOwner() === 'self') throw new CommandTakeoverError('native-owner')
-        if (taken) throw new CommandTakeoverError('already-taken')
-        const withdrawn = withdraw()
+        if (options.readOwner() === 'self') {
+          logRefusal('native-owner')
+          return null
+        }
+        if (taken) {
+          logRefusal('already-taken')
+          return null
+        }
+        const withdrawn = withdraw(true)
+        if (withdrawn === undefined) {
+          logRefusal('withdraw-failed')
+          return null
+        }
         // Close an open picker with the commands it belongs to.
         for (const command of withdrawn) {
           try {
@@ -147,7 +165,7 @@ export function createCommandFace(options: CommandFaceOptions): CommandFace {
       if (disposed) return
       disposed = true
       taken = false
-      withdraw()
+      withdraw(false)
     },
   }
 }

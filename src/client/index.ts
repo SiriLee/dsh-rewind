@@ -54,13 +54,7 @@ import {
 } from './settings-card.tsx'
 
 export const name = 'dsh-rewind'
-export { CommandTakeoverError } from './command-takeover.ts'
-export type {
-  CommandTakeoverErrorCode,
-  CommandTakeoverPermission,
-  RewindCommandFace,
-  RewindCommands,
-} from './command-takeover.ts'
+export type { CommandTakeoverPermission, RewindCommandFace, RewindCommands } from './command-takeover.ts'
 // `configForms` IS a module-level inject: the rewind surface itself never needs
 // it, but the configuration card is addressed through it, and the web profile
 // always composes `ui-settings` (the same dependency the official settings
