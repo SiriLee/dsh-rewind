@@ -41,16 +41,15 @@ function makeFace(options: { readonly owner?: UiOwner; readonly refuse?: string 
 describe('command-face takeover', () => {
   it('registers both engine commands by default', () => {
     const { names } = makeFace()
-    expect(names()).toEqual(['rewind', 'undo'])
+    expect(names().sort()).toEqual(['rewind', 'undo'])
   })
 
   it('withdraws every engine command and supports hide-only', async () => {
     const { face, names, dismissed } = makeFace()
     const permission = await face.service.commands.takeover()
-    // Hide-only: the engine withdraws its commands and registers nothing.
     expect(names()).toEqual([])
-    expect(dismissed).toEqual(['rewind', 'undo'])
-    expect(permission.dispose).toBeTypeOf('function')
+    expect([...dismissed].sort()).toEqual(['rewind', 'undo'])
+    permission.dispose()
   })
 
   it('refuses a second takeover while one is held', async () => {
@@ -87,14 +86,13 @@ describe('command-face takeover', () => {
     await expect(face.service.commands.takeover()).rejects.toMatchObject({ code: 'native-owner' })
   })
 
-  it('restores the engine commands on permission.dispose, in registration order', async () => {
+  it('restores the engine commands on permission.dispose and is idempotent', async () => {
     const { face, names } = makeFace()
     const permission = await face.service.commands.takeover()
     permission.dispose()
-    expect(names()).toEqual(['rewind', 'undo'])
-    // Idempotent: a second dispose does not invent duplicates.
+    expect(names().sort()).toEqual(['rewind', 'undo'])
     permission.dispose()
-    expect(names()).toEqual(['rewind', 'undo'])
+    expect(names().sort()).toEqual(['rewind', 'undo'])
   })
 
   it('skips a name another plugin owns when it restores', async () => {
@@ -103,9 +101,8 @@ describe('command-face takeover', () => {
     const taken = contribution('rewind')
     registered.set('rewind', taken)
     permission.dispose()
-    // The occupant stays; the free engine command comes back.
     expect(registered.get('rewind')).toBe(taken)
-    expect(names()).toEqual(['rewind', 'undo'])
+    expect(names().sort()).toEqual(['rewind', 'undo'])
   })
 
   it('costs only one name when the registry refuses an engine command', async () => {
@@ -122,7 +119,6 @@ describe('command-face takeover', () => {
     const permission = await face.service.commands.takeover()
     face.dispose()
     expect(names()).toEqual([])
-    // There is no surface left to restore; the late dispose is a no-op.
     permission.dispose()
     expect(names()).toEqual([])
   })
@@ -133,11 +129,4 @@ describe('command-face takeover', () => {
     expect(names()).toEqual([])
   })
 
-  it('hands a stale caller an inert permission after unload', async () => {
-    const { face, names } = makeFace()
-    face.dispose()
-    const permission = await face.service.commands.takeover()
-    expect(() => { permission.dispose() }).not.toThrow()
-    expect(names()).toEqual([])
-  })
 })

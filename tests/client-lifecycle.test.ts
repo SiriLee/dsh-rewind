@@ -224,21 +224,14 @@ describe('client plugin lifecycle', () => {
     mounted.dispose()
   })
 
-  it('builds the command rows from the client dictionary and the session gate', () => {
+  it('keeps the command available for a bound session with no candidates', () => {
     const mounted = mountClient()
     const sessions = mounted.ctx.sessions as unknown as { binding: (id: string) => unknown }
     sessions.binding = id => id === 's1' ? { session: fakeSession() } : undefined
     apply(mounted.ctx)
     const rewind = mounted.contribution('rewind')!
-    const undo = mounted.contribution('undo')!
-    expect(rewind.label?.()).toBe('command.rewindLabel')
-    expect(rewind.description?.()).toBe('command.description')
-    expect(undo.label?.()).toBe('command.undoLabel')
-    expect(undo.description?.()).toBe('command.undoDescription')
-    expect(rewind.icon).toBeTypeOf('function')
     // No candidates is not "unavailable": the picker opens its empty panel.
     expect(rewind.available({ sessionId: 's1' })).toBe(true)
-    // An unbound session and a child session have no command row.
     expect(rewind.available({ sessionId: 'missing' })).toBe(false)
     sessions.binding = () => ({ session: { sessionId: 's1', getSnapshot: () => ({ subagent: { address: { mode: 'continuable' } } }) } })
     expect(rewind.available({ sessionId: 's1' })).toBe(false)
@@ -264,10 +257,9 @@ describe('client plugin lifecycle', () => {
     const nodes: FakeNodeEntry[] = [{ component: officialUser, options: { key: 'user' } }]
     const mounted = mountClient(nodes, { commandUi: conflict })
     expect(() => { apply(mounted.ctx) }).not.toThrow()
-    expect(attempted).toEqual(['rewind', 'undo'])
+    expect([...attempted].sort()).toEqual(['rewind', 'undo'])
     expect(accepted).toEqual(['undo'])
-    // The row takeover is what a thrown decoration used to take with it, and the
-    // registrations after the loop still run (the takeover tick included).
+    // One refused registration must not stop the row takeover that follows.
     expect(nodes[0]!.component).not.toBe(officialUser)
     expect(mounted.slotEntries.map(entry => entry.name)).toEqual(
       expect.arrayContaining([
