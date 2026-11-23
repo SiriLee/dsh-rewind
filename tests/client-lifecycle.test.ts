@@ -21,6 +21,7 @@ import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 import { apply, type ClientContext } from '../src/client/index.ts'
+import type { RewindCommandFace } from '../src/client/command-takeover.ts'
 import { closePopover, openPopover, type PopoverOptions } from '../src/client/popover.ts'
 import { isRewindInertSession } from '../src/client/rewind-flow.ts'
 import { CLASS } from '../src/client/styles.ts'
@@ -44,7 +45,7 @@ interface Mounted {
   readonly ctx: ClientContext
   /** Slot entries registered through `slots.register`, in order. */
   readonly slotEntries: readonly { readonly name: string; readonly id?: string; readonly key?: string }[]
-  /** Client command names the fake registry accepted, in registration order. */
+  /** Client command names currently registered in the fake command surface. */
   readonly registered: readonly string[]
   /** The accepted contribution for one command name. */
   contribution(name: string): FakeContribution | undefined
@@ -126,7 +127,11 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
       }
       contributions.set(contribution.name, contribution)
       registered.push(contribution.name)
-      return () => { contributions.delete(contribution.name) }
+      return () => {
+        contributions.delete(contribution.name)
+        const index = registered.indexOf(contribution.name)
+        if (index >= 0) registered.splice(index, 1)
+      }
     },
     dismiss: () => {},
   }
@@ -220,7 +225,18 @@ describe('client plugin lifecycle', () => {
     expect(mounted.slotEntries[0]?.key).toBe('dsh-rewind-plugin')
     expect(mounted.slotEntries[1]?.id).toBe('dsh-rewind-pending')
     expect([...mounted.registered].sort()).toEqual(['rewind', 'undo'])
-    expect(mounted.provided['dshRewind']).toBeDefined()
+    mounted.dispose()
+  })
+
+  it('exposes the takeover service over the commands apply registered', async () => {
+    const mounted = mountClient()
+    apply(mounted.ctx)
+    const face = mounted.provided['dshRewind'] as RewindCommandFace
+    const permission = await face.commands.takeover()
+    expect(permission).not.toBeNull()
+    expect(mounted.registered).toEqual([])
+    permission!.dispose()
+    expect([...mounted.registered].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
   })
 
