@@ -132,6 +132,13 @@ transcript cannot show the target until earlier history is paged in — display
 only, no data loss. **Stance:** no host patch; one manual load starts the
 paging.
 
+**U12 · Upstream limitation — duplicate inserts block configuration saves.**
+`ConfigEditor` resolves one entry id differently on read and write: the running
+entry is the last insert, while a save is compared against the first. A save
+whose value differs from that first insert is refused, even with no home patch
+or CLI overlay. **Impact:** the component runs while its configuration is
+readable but not writable. **Stance:** no plugin patch; reported upstream.
+
 ## Verification coverage
 
 These are paths verified manually or not yet in CI, not known-broken behavior.

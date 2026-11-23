@@ -152,13 +152,14 @@ This plugin deliberately stays lightweight and focused on one thing — "convers
 
 ## Engine contract
 
-Plugin authors can drive a rewind from their own interface: a small, versioned
-interface starts a rewind and can restore files too, while this plugin still
-performs it — the conversation goes back to the chosen message and the withdrawn
-messages are hidden. A plugin that claims the action interface makes this
-plugin's row button, mode popover and pending retract button step aside. Normal
-use needs none of this; details are in the
-[engine contract](docs/contracts/engine-v1.md).
+dsh-rewind provides the contract. Third-party DSH plugins can use dsh-rewind as their rewind engine, call its core operations through the API, and provide their own entry point.
+
+- **Action interface.** Add a button, menu entry, or picker, and design how the user resumes from the withdrawn text — refill, edit, or another flow. Claim the action interface to replace the native trigger; this plugin's controls then hide.
+- **Commands.** Add commands that call the engine, or take over `/rewind` and `/undo`; the engine unregisters its own commands while the takeover holds.
+- **Effects.** Rewind the conversation, restore workspace files, or do both in one operation. The caller chooses the mode.
+- **Packaging.** Optionally package the engine as a component of your plugin; your plugin then hosts its configuration.
+
+Details: [engine contract](docs/contracts/engine-v1.md) and [integration guide](docs/contracts/integration.md).
 
 ## Security
 

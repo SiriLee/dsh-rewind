@@ -198,10 +198,10 @@ and insert its loader row in your bundle patch:
       name: 'dsh-rewind-plugin'
 ```
 
-The id is the engine's own: loader entries are keyed by id, so the row merges
-with one a user already has, and the profile keeps a single engine package
-however many plugins insert that row. Leave `disabled` off it, and use `config`
-only for the initial policy described under Configuring.
+The id is the engine's own. The Loader keeps one active entry per id, so a
+second insert does not run the engine twice; see Configuring for the
+configuration limitation. Leave `disabled` off the insert row, and use `config`
+only for the initial policy described there.
 
 Installed this way, the engine is a component of your plugin: it has no card of
 its own, so plan to host its configuration — you enable, configure and remove
@@ -235,11 +235,13 @@ The row your patch inserts can carry `config`:
   config: { fileCheckpointingEnabled: false, autoCleanupEnabled: false }
 ```
 
-That is an initial value, not a lock. One entry has one configuration, and more
-than your row feeds it: another bundle inserting the same row, an engine
-upgrade that moves a default, and the user editing the profile all compose over
-it. So do not pin behavior to a default plus a hidden control, and do not
-assume a field still holds the value you saw: read the form when it matters.
+That is an initial value, not a lock: an engine upgrade that moves a default and
+the user editing the profile compose over your row. Known issue: when this row
+is inserted more than once, a save whose value differs from the first insert's
+config is refused as "overridden by a home patch or command-line overlay". Keep
+only one bundle that inserts this row enabled: turn the others off, then edit
+the configuration. Alternatively, edit the profile configuration file directly.
+See U12 in the [compat audit](../compat/audit.md).
 
 Where the controls live is your call:
 
