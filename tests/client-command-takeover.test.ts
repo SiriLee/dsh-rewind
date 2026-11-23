@@ -1,8 +1,6 @@
 /**
- * Command-face takeover probes: `/rewind` and `/undo` leave the catalog on
- * takeover, a permission restores them in order, and every refusal is one of
- * the two named codes. The registry is the standard `commandUi.register`
- * contract (duplicate names throw), not the engine's implementation.
+ * Command-face takeover probes: the commands leave the catalog on takeover, a
+ * permission restores them, and refusals use the two named codes.
  */
 import { describe, expect, it } from 'vitest'
 import type { CommandContribution } from '@deepseek-ai/dsh-client-ui-commands/client'

@@ -10,8 +10,7 @@
  * Run: `npm run build && node scripts/verify-host.mjs`
  *
  * What it proves:
- *  1. the host registers only `/snapshot-auto-cleanup` (the rewind commands are
- *     client contributions);
+ *  1. the host registers only `/snapshot-auto-cleanup`;
  *  2. one dense checkpoint per user message is written at `agent/pre-step`;
  *  3. a `write` first touch records the pre-touch state before the body;
  *  4. preview and both-mode restore agree on the target manifest;
@@ -191,11 +190,9 @@ const check = (name, ok, detail) => {
   check('v1 health reports contract 1', status === 200 && result.ok === true && result.value.contract === 1, JSON.stringify(result))
 }
 
-// 1. commands: the host keeps only the cleanup command; `/rewind` and `/undo`
-// are client contributions and never reach a host ctx.commands registry.
+// 1. commands
 check('only the cleanup command is registered', commands.size === 1
   && typeof commands.get('snapshot-auto-cleanup')?.handler === 'function', JSON.stringify([...commands.keys()]))
-check('no host /rewind or /undo', commands.get('rewind') === undefined && commands.get('undo') === undefined, JSON.stringify([...commands.keys()]))
 
 // 2-4. pre-step manifests, first-touch capture, preview and both-mode restore
 {

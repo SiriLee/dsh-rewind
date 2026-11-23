@@ -520,8 +520,7 @@ describe('host language preference', () => {
     mounted.setEntryId('include:dsh-rewind-plugin')
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
 
-    // The `/rewind` and `/undo` commands moved to the client; the host keeps
-    // only the cleanup command, whose description registers once at mount.
+    // The host keeps only the cleanup command; its description registers once.
     expect(mounted.commands.get('rewind')).toBeUndefined()
     expect(mounted.commands.get('undo')).toBeUndefined()
     expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(zhLocale['cleanup.description'])

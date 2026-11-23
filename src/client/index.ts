@@ -1,19 +1,12 @@
 /**
- * dsh-rewind client half: the `/rewind` and `/undo` client commands plus the
- * command-face takeover service, the locale registration, the mode popover the
- * commands open, the visibility layer, and the per-message rewind action.
+ * dsh-rewind client half: the `/rewind` and `/undo` client commands, the
+ * command-face takeover service, the mode popover, the visibility layer and
+ * the per-message rewind action.
  *
- * A durable message's action lives in the Chat row's own actions row: `mount.tsx`
- * takes over the official user/steering renderer identity and injects one more
- * child into that row. Unclaimed (pending) steering input has no such seat, so
- * `pending-mount.tsx` attaches the retract action through the only DOM path the
- * plugin keeps. The client commands (`ctx.commandUi.register`) make a bare
- * `/rewind` (or its alias `/undo`) open the harness's own popupSelect instead
- * of executing; a third-party UI can take the same command face over through
- * `ctx.dshRewind.commands.takeover()` (`command-takeover.ts`). The action and
- * the picker drive the v1 contract (preview → commit), and the picker lists
- * the loaded chat snapshot. The executed rewind and its composer refill live in
- * `rewind-flow.ts`.
+ * The action lives in the Chat row's official actions row (`mount.tsx`);
+ * unclaimed steering uses `pending-mount.tsx`. The commands and the action
+ * drive the v1 contract (preview → commit); `rewind-flow.ts` executes the
+ * rewind and the composer refill.
  *
  * @module dsh-rewind/client
  */
@@ -370,20 +363,14 @@ export function apply(ctx: ClientContext): void {
       rewindLog.error('settings', 'settings card register failed', error)
     }
 
-    // ---- /rewind and /undo client commands (the standard text-driven flow) ----
-    // A bare `/rewind` — picked from the slash-menu completion, or typed in
-    // full and Entered — opens the harness's own popupSelect shell through the
-    // client command contract (CommandContribution). The plugin never
-    // re-implements a menu; picking a candidate continues through the mode
-    // popover below. A third-party UI can take this whole face over through
-    // the provided `ctx.dshRewind` service (`command-takeover.ts`).
+    // ---- /rewind and /undo client commands ----
+    // A bare invocation opens the harness popupSelect; a third-party UI can
+    // take the face over through `ctx.dshRewind` (see command-takeover.ts).
     const commandUi = ctx.get('commandUi') as CommandUiContract
 
     /**
-     * Whether a session may be rewound at all: bound, and not a direct
-     * subagent. Unlike the row action, the command stays available with no
-     * candidates so its picker can open the empty panel; a child session has
-     * no command row, mirroring the action gate.
+     * Whether a session may be rewound: bound, and not a direct subagent. The
+     * command stays available with no candidates so its picker can open empty.
      */
     const canRewindIn = (sessionId: string): boolean => {
       const face = sessionOf(sessionId)

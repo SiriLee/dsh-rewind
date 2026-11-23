@@ -346,8 +346,7 @@ export class RewindVisibilityBuilder implements BuilderLike {
       if (command.name === RETIRED_REWIND_COMMAND) {
         const args = command.args ?? ''
         const probe = args.includes('preview') || args.includes('__candidates')
-        // A successful retained-engine command is a rewind row. The live client
-        // commands leave no command rows at all.
+        // A successful retained-engine command is a rewind row.
         const executed = command.outcome?.kind === 'success'
         if (probe || executed) return hidden(base)
       }

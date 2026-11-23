@@ -1,15 +1,7 @@
 /**
  * The client command face: `/rewind`, `/undo`, and the page-level takeover
- * service a third-party UI uses to own that face.
- *
- * The engine contributes its two commands as client commands. A claimant calls
- * `ctx.dshRewind.commands.takeover()`; the engine unregisters every command it
- * contributed and returns a permission. The claimant registers its own
- * commands through the standard `ctx.commandUi.register`; `permission.dispose()`
- * restores the engine's commands, skipping names another plugin still owns.
- *
- * The service is client-only, like the commands themselves: the host half keeps
- * no command takeover channel.
+ * service (`ctx.dshRewind.commands`) a third-party UI uses to own that face.
+ * The service is client-only; the host half has no command takeover channel.
  *
  * @module dsh-rewind/client/command-takeover
  */
@@ -21,10 +13,7 @@ import { rewindLog } from './log.ts'
 /** Why a command-face takeover was refused. */
 export type CommandTakeoverErrorCode = 'already-taken' | 'native-owner'
 
-/**
- * Refusal raised by {@link RewindCommands.takeover}. Branch on `code`; the
- * message is a diagnostic and is not stable.
- */
+/** Refusal raised by {@link RewindCommands.takeover}; branch on `code`. */
 export class CommandTakeoverError extends Error {
   constructor(readonly code: CommandTakeoverErrorCode) {
     super(`dsh-rewind: command takeover refused (${code})`)
@@ -32,12 +21,9 @@ export class CommandTakeoverError extends Error {
   }
 }
 
-/** The handle a successful takeover returns: gives the command face back. */
+/** The handle a successful takeover returns. */
 export interface CommandTakeoverPermission {
-  /**
-   * Restore the engine's command surface. Idempotent, and a no-op once the
-   * client half has unloaded (there is no surface left to restore).
-   */
+  /** Restore the engine's command surface; idempotent and inert after unload. */
   dispose(): void
 }
 
@@ -45,11 +31,9 @@ export interface CommandTakeoverPermission {
 export interface RewindCommands {
   /**
    * Take the page's command face away from the engine.
-   *
-   * Resolves after every engine command this page contributed has been
-   * unregistered. Refuses with {@link CommandTakeoverError}: `native-owner`
-   * when `uiOwner` is `self` (checked before anything else), `already-taken`
-   * when another claimant still holds the face.
+   * @returns the permission that restores it.
+   * @throws {CommandTakeoverError} `native-owner` under `uiOwner: self`,
+   *   `already-taken` while another claimant holds the face.
    */
   takeover(): Promise<CommandTakeoverPermission>
 }
@@ -77,7 +61,7 @@ export interface CommandFace {
   dispose(): void
 }
 
-/** One engine command currently registered on the page. */
+/** One engine command registered on the page. */
 interface LiveCommand {
   readonly contribution: CommandContribution
   readonly dispose: () => void
@@ -88,14 +72,10 @@ const INERT_PERMISSION: CommandTakeoverPermission = { dispose() {} }
 
 /**
  * Register the engine's client commands and build the takeover service.
- *
- * A refused registration costs only that command name: another plugin may own
- * it, and the face (plus the rest of the client half) must keep working. The
- * returned `dispose` removes the engine's commands with the client fiber and
- * invalidates any permission still held at that point.
- * @param options - the engine commands plus the standard command registry and
- *   the live owner policy.
- * @returns the exposed service face and its unload hook.
+ * A refused registration costs only that name. The returned `dispose` removes
+ * the commands with the client fiber and invalidates a held permission.
+ * @param options - the engine commands, the command registry and the owner policy.
+ * @returns the exposed service and its unload hook.
  */
 export function createCommandFace(options: CommandFaceOptions): CommandFace {
   const live = new Map<string, LiveCommand>()
@@ -130,16 +110,13 @@ export function createCommandFace(options: CommandFaceOptions): CommandFace {
   const service: RewindCommandFace = {
     commands: {
       async takeover(): Promise<CommandTakeoverPermission> {
-        // A stale caller can only race the client's own unload: there is no
-        // surface left to withdraw, and no reason to refuse.
+        // A stale caller can only race our unload; nothing is left to yield.
         if (disposed) return INERT_PERMISSION
-        // `uiOwner: self` is the native-owner escape hatch and outranks an
-        // existing claimant: the face was never ours to yield.
+        // `native-owner` outranks an existing claimant: the face was never ours.
         if (options.readOwner() === 'self') throw new CommandTakeoverError('native-owner')
         if (taken) throw new CommandTakeoverError('already-taken')
         const withdrawn = withdraw()
-        // An open picker would otherwise stay actionable after its commands
-        // left the catalog; close it with the surface it belongs to.
+        // Close an open picker with the commands it belongs to.
         for (const command of withdrawn) {
           try {
             options.dismiss(command.contribution.name)
@@ -155,8 +132,8 @@ export function createCommandFace(options: CommandFaceOptions): CommandFace {
             released = true
             if (disposed || !taken) return
             taken = false
-            // Only names that were registered before the takeover return; a
-            // name the claimant still owns is skipped, never overwritten.
+            // Only previously registered names return; an occupied name is
+            // skipped by `keep`, never overwritten.
             for (const command of withdrawn) keep(command.contribution)
           },
         }

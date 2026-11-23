@@ -199,8 +199,7 @@ value". While it is present, the engine hides its own:
 The engine does **not** hide: the withdrawn-span visibility computation, the
 client `/rewind` and `/undo` commands, or its own settings form when its
 installation has a plugin page. Commands remain usable; a command-triggered
-rewind still works. The command surface has its own takeover (§6), independent
-of this attribute.
+rewind still works.
 
 A settings page belongs to a direct installation. An engine mounted as another
 plugin's component has none, with or without a claim; the plugin that inserted
@@ -223,53 +222,35 @@ passes and it will actually render, and removes it on unload).
 
 ## 6. Taking over the command surface
 
-The client half provides one page-level service for owning the command face:
+The client half provides a page-level command-face service (present only while
+the client half is loaded):
 
 ```ts
 const permission = await ctx.dshRewind.commands.takeover()
 ```
 
-The call resolves after every client command this engine contributed is
-unregistered (currently `/rewind` and `/undo`, and any command added later). The
-claimant registers its own commands through the standard client command
-interface; the permission does not register anything:
+It resolves after every client command this engine contributed is unregistered.
+The claimant may register its own commands with `ctx.commandUi.register`
+(registering none is hide-only); `permission.dispose()` restores the engine's
+commands.
 
-```ts
-// 1. Take the face over.
-const permission = await ctx.dshRewind.commands.takeover()
-
-// 2a. Hide-only: register nothing.
-// 2b. Replace: register any names, with the standard client contract.
-ctx.commandUi.register({ name: 'rewind', label, description, icon, available, ui })
-
-// 3. Give it back: unregister your commands first, then dispose.
-permission.dispose()
-```
-
-- The service exists only while this plugin's client half is loaded. A caller
-  that cannot find `ctx.dshRewind` has no engine command surface to take over.
-- Only one claimant at a time. A second `takeover()` while one is held rejects
-  with `code: 'already-taken'`.
-- `uiOwner: self` rejects with `code: 'native-owner'`; this is checked before
-  `already-taken`. The setting is read when `takeover()` runs: a later change
-  does not revoke an active takeover.
-- Refusals are `CommandTakeoverError` instances (exported from the client
-  entry), with a stable `code` and an unstable diagnostic `message`.
-- `permission.dispose()` restores the engine's command surface. An engine
-  command whose name is still registered by someone else is skipped, never
-  overwritten. `dispose()` is idempotent; after the client half unloads, a held
-  permission is a no-op.
-- A command popup that is open when the takeover starts is dismissed with the
-  commands it belongs to.
-- The takeover covers client commands only. It does not touch host commands,
-  the engine routes, preview/commit, the action interface (§5), visibility or
-  settings. A claimant that wants both interfaces takes over both.
-- A host command registered under one of these names is a name collision, not a
-  takeover: the engine neither removes it nor treats it as part of this face.
+- Only one claimant at a time; a second call rejects with `code:
+  'already-taken'`.
+- `uiOwner: self` rejects with `code: 'native-owner'` (checked first); the
+  setting is read at call time, and a later change does not revoke an active
+  takeover.
+- Refusals are `CommandTakeoverError` (exported from the client entry); `code`
+  is stable, `message` is diagnostic.
+- `dispose()` is idempotent and a no-op after the client half unloads. A name
+  still owned by another party is skipped, never overwritten. Open command
+  popups are dismissed with the takeover.
+- It covers client commands only: host commands (a same-named host command is a
+  name collision, not a takeover), the engine routes, the action interface
+  (§5), visibility and settings are untouched.
 
 ## 7. Semantics
 
-### 6.1 Target
+### 7.1 Target
 
 `seq` must identify a human `user/message` currently on the model-visible
 surface. Messages cut by an earlier rewind or compaction are `target-missing`.
@@ -277,7 +258,7 @@ Checkpoints are located by that message's id; no checkpoint makes the file
 effect unavailable while the conversation effect still runs. The last message
 is a valid target: the operation withdraws the message itself.
 
-### 6.2 Conversation effect
+### 7.2 Conversation effect
 
 - Appends one marker (`user/message` carrying `surfaceOp: replace` and
   `sourceEventSeqs`); the model-visible surface moves to before the target. The
@@ -286,7 +267,7 @@ is a valid target: the operation withdraws the message itself.
   are kept. Withdrawn messages stay in the log and are not restored by this
   contract.
 
-### 6.3 Files effect
+### 7.3 Files effect
 
 - Uses the target's checkpoint as the baseline, reconciles every path against the
   current disk, and writes only the differences. Each write is a per-file atomic
@@ -298,7 +279,7 @@ is a valid target: the operation withdraws the message itself.
 - After a restore the host's filesystem-observation cache is re-synced, because
   the restore writes through plain host filesystem calls.
 
-### 6.4 Binding and concurrency
+### 7.4 Binding and concurrency
 
 - The server stores no plan state. `headSeq` is the only binding value.
 - The order and the zero-write rule are in §3.3. A replayed conversation commit
@@ -311,7 +292,7 @@ is a valid target: the operation withdraws the message itself.
 - The workspace is not bound: external changes after preview are reconciled per
   path and appear as `skipped`, not as a whole-commit refusal.
 
-### 6.5 Side effects and what is not undone
+### 7.5 Side effects and what is not undone
 
 This contract undoes workspace content and the model-visible surface only. Git
 commits, external services, process effects and checkpoint-store writes are not

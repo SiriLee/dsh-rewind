@@ -97,12 +97,8 @@ Two dependency rules keep the design testable:
 ```
 
 The action takeover attribute (`data-dsh-rewind-claim`) only changes the row
-action surface: the row action, pending retract and mode popover yield; the
-engine, the client command surface, visibility and the settings card keep
-working. The command surface has its own page-level takeover
-(`ctx.dshRewind.commands.takeover()`): the claimant causes the engine's client
-commands to be unregistered and registers its own; the engine, visibility and
-settings card are untouched.
+action trigger: the row action, pending retract and mode popover yield; the
+engine, commands, visibility and settings card keep working.
 
 Key invariants:
 

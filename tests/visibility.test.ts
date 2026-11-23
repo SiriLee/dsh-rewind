@@ -202,8 +202,7 @@ describe('RewindVisibilityBuilder', () => {
       order: readonly string[]
       nodes: Map<string, Node>
     }
-    // `rewind` is no longer this plugin's exclusive name: only the retired
-    // `rewind-plugin` row is hidden by name.
+    // Only the retired engine row is hidden by name.
     expect(snapshot.order).toEqual(['p2', 'u2', 'a2', 'cmd0'])
     expect(snapshot.nodes.get('u1')?.visibility).toBe('hidden')
     expect(snapshot.nodes.get('p1')?.visibility).toBe('hidden')

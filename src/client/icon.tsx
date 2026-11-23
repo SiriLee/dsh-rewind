@@ -10,9 +10,7 @@ import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
 
 /**
  * The ↶ glyph, drawn inline because the product icon set has no rewind
- * artwork. It renders at the row's glyph scale by default (the neighbouring
- * Copy/branch icons are 15px) with a 1.25 stroke; at 1 the single open stroke
- * reads thinner than their dense outlines.
+ * artwork. It defaults to the row glyph scale (15px) and a 1.25 stroke.
  * @param props - shared icon props (`size`, `className`).
  */
 export function RewindIcon({ size = 15, className }: IconProps): ReactNode {

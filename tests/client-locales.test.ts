@@ -32,7 +32,7 @@ describe('client locale dictionaries', () => {
 
 describe('command copy', () => {
   it('keeps the descriptions verbatim and adds the menu labels', () => {
-    // Moved from the host dictionary without rewriting the descriptions (§2.1).
+    // The descriptions moved verbatim from the host dictionary.
     expect(CLIENT_DICTS.en['command.description'])
       .toBe('Rewind the conversation and/or files to a previous point')
     expect(CLIENT_DICTS.en['command.undoDescription']).toBe('Alias of /rewind')

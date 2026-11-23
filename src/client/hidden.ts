@@ -4,13 +4,7 @@
  * @module dsh-rewind/client/hidden
  */
 
-/**
- * The retired engine channel. Its rows appear only in older session logs; the
- * visibility layer keeps hiding them so those logs replay correctly. The live
- * `/rewind` and `/undo` commands are client contributions now and leave no
- * command rows, so the name `rewind` is no longer owned by this plugin and is
- * never hidden by name.
- */
+/** The retired engine channel; its rows appear only in older session logs. */
 export const RETIRED_REWIND_COMMAND = 'rewind-plugin'
 
 /** A Chat-snapshot view node as the client readers see it. */

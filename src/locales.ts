@@ -1,10 +1,6 @@
 /**
- * Host-side localization for dsh-rewind's remaining host command,
- * `/snapshot-auto-cleanup`: its description and its rendered output.
- *
- * The `/rewind` and `/undo` commands are client contributions now; their
- * labels and descriptions live in the client dictionaries
- * (`src/client/locales.ts`) and never pass through this module.
+ * Host-side localization for `/snapshot-auto-cleanup`: its description and
+ * rendered output.
  *
  * Architecture (matches the dsh ecosystem): the HOST half of a dual-face
  * plugin has no locale service — only the browser client carries one. The host
