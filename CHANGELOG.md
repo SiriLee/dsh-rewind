@@ -10,7 +10,37 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.23.0...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.24.0...vNEXT
+
+## [0.24.0] - 2026-11-23
+
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
+### 新增功能
+
+- **其他插件可以新增、接管或隐藏回退命令。** 接管方可以加入自己的命令、替换 `/rewind` 与 `/undo`，或把这两条命令隐藏；接管结束时恢复为本插件的命令。文档已同步。（#101）@slev-agent @SiriLee
+
+### 其他变更
+
+- **`/rewind`、`/undo` 改由客户端注册。** 宿主现在只注册 `/snapshot-auto-cleanup`；`rewind` 这个名字不再由本插件独占。（#101）@slev-agent @SiriLee
+- **兼容性目标对齐 DSH `0.2.3-alpha.2`。** 审计目标与 `@deepseek-ai/*` 开发依赖升到 `0.2.3-alpha.2`，本插件依赖的接口未变；`engines.dsh` 范围保持 `>=0.2.2-rc.1 <0.3.0-0` 不变。 @SiriLee
+- **移除插件自带的 Node 下限。** 运行所需的 Node 版本改由 DSH 声明，插件不再单独限制。 @SiriLee
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### New Features
+
+- **Another plugin can add, take over, or hide the rewind commands.** The claimant can add its own commands, replace `/rewind` and `/undo`, or hide those two; ending the takeover restores this plugin's commands. The docs are updated. (#101) @slev-agent @SiriLee
+
+### Chores
+
+- **`/rewind` and `/undo` are registered by the client half now.** The host registers only `/snapshot-auto-cleanup`, and the `rewind` name is no longer exclusive to this plugin. (#101) @slev-agent @SiriLee
+- **Align the compatibility target with DSH `0.2.3-alpha.2`.** The audit target and the `@deepseek-ai/*` devDependencies move to `0.2.3-alpha.2`; the interfaces this plugin depends on are unchanged, and the `engines.dsh` range stays `>=0.2.2-rc.1 <0.3.0-0`. @SiriLee
+- **The plugin's own Node floor is gone.** The Node version is declared by DSH, so the plugin no longer restricts it separately. @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.23.0...v0.24.0
 
 ## [0.23.0] - 2026-11-21
 
