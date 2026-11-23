@@ -21,6 +21,7 @@ import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 import { apply, type ClientContext } from '../src/client/index.ts'
+import type { RewindCommandFace } from '../src/client/command-takeover.ts'
 import { closePopover, openPopover, type PopoverOptions } from '../src/client/popover.ts'
 import { isRewindInertSession } from '../src/client/rewind-flow.ts'
 import { CLASS } from '../src/client/styles.ts'
@@ -29,13 +30,27 @@ import { officialRow, ROW_PROPS, ROW_TEXT } from './support/chat-row.ts'
 /** A disposer yielded by the plugin's lifecycle generator. */
 type Disposer = () => unknown
 
+/** A client command contribution as the fake registry receives it. */
+interface FakeContribution {
+  readonly name: string
+  label?(): string
+  description?(): string
+  readonly icon?: unknown
+  available(session: { readonly sessionId: string }): boolean
+  readonly ui: unknown
+}
+
 /** What one mounted client plugin registered, plus its teardown. */
 interface Mounted {
   readonly ctx: ClientContext
   /** Slot entries registered through `slots.register`, in order. */
   readonly slotEntries: readonly { readonly name: string; readonly id?: string; readonly key?: string }[]
-  /** Commands the plugin decorated (`commandUi.decorate`). */
-  readonly decorated: readonly string[]
+  /** Client command names currently registered in the fake command surface. */
+  readonly registered: readonly string[]
+  /** The accepted contribution for one command name. */
+  contribution(name: string): FakeContribution | undefined
+  /** Services the plugin provided on the context (`ctx.provide`). */
+  readonly provided: Readonly<Record<string, unknown>>
   /** Subscriptions the cleanup form opened on its configuration scope. */
   readonly formSubscriptions: () => number
   /** Releases of those subscriptions (the model's `dispose`). */
@@ -77,7 +92,9 @@ interface MountOptions {
 function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): Mounted {
   const disposers: Disposer[] = []
   const slotEntries: { name: string; id?: string; key?: string }[] = []
-  const decorated: string[] = []
+  const registered: string[] = []
+  const contributions = new Map<string, FakeContribution>()
+  const provided: Record<string, unknown> = {}
   // The cleanup form's subscription to its configuration scope: the plugin must
   // release it on unload, so both ends are counted.
   const subscribeScope = vi.fn(() => () => {})
@@ -102,9 +119,21 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
     entries: (key: string) => (key === 'conversation.chat.node' ? nodes : []),
     subscribe: () => () => {},
   }
-  // The shipped command surface: it records every decoration it accepts.
+  // The shipped command surface: it records every contribution it accepts.
   const shippedCommandUi = {
-    decorate: (spec: { name: string }) => { decorated.push(spec.name); return () => {} },
+    register: (contribution: FakeContribution) => {
+      if (contributions.has(contribution.name)) {
+        throw new Error(`duplicate contribution for /${contribution.name}`)
+      }
+      contributions.set(contribution.name, contribution)
+      registered.push(contribution.name)
+      return () => {
+        contributions.delete(contribution.name)
+        const index = registered.indexOf(contribution.name)
+        if (index >= 0) registered.splice(index, 1)
+      }
+    },
+    dismiss: () => {},
   }
   // `commandUi` is a required inject, so the fake always provides it; a probe
   // can swap in a surface that refuses one name.
@@ -118,6 +147,12 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
       list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }) },
     },
     get: (name: string) => (name === 'commandUi' ? commandUi : undefined),
+    provide: (name: string, value?: unknown) => {
+      provided[name] = value
+      const off = () => { delete provided[name] }
+      disposers.push(off)
+      return off
+    },
     // The per-entry configuration form the cleanup card stages over. A minimal
     // read/write face is enough for the registration probe; the card's own
     // behaviour is covered by tests/client-settings-card.test.ts.
@@ -137,7 +172,9 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
   return {
     ctx,
     slotEntries,
-    decorated,
+    registered,
+    contribution: name => contributions.get(name),
+    provided,
     formSubscriptions: () => subscribeScope.mock.calls.length,
     formUnsubscriptions: () => unsubscribeScope.mock.calls.length,
     dispose: () => {
@@ -177,7 +214,7 @@ afterEach(() => {
 })
 
 describe('client plugin lifecycle', () => {
-  it('registers the configuration card and the pending bridge, and decorates both commands', () => {
+  it('registers the configuration card, the pending bridge and both client commands', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
     // The durable action is not a slot entry (it lives in the official rows via
@@ -187,32 +224,58 @@ describe('client plugin lifecycle', () => {
       .toEqual(['plugins.bundle.config', 'conversation.session.header.actions'])
     expect(mounted.slotEntries[0]?.key).toBe('dsh-rewind-plugin')
     expect(mounted.slotEntries[1]?.id).toBe('dsh-rewind-pending')
-    expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
+    expect([...mounted.registered].sort()).toEqual(['rewind', 'undo'])
     mounted.dispose()
   })
 
-  it('keeps mounting when one command decoration is refused', () => {
-    // `decorate` throws when the name is already owned — another plugin may have
-    // taken `/rewind` — so the refused name must cost that picker only, never
-    // the other name, and never the row action mounted after the loop.
+  it('exposes the takeover service over the commands apply registered', async () => {
+    const mounted = mountClient()
+    apply(mounted.ctx)
+    const face = mounted.provided['dshRewind'] as RewindCommandFace
+    const permission = await face.commands.takeover()
+    expect(permission).not.toBeNull()
+    expect(mounted.registered).toEqual([])
+    permission!.dispose()
+    expect([...mounted.registered].sort()).toEqual(['rewind', 'undo'])
+    mounted.dispose()
+  })
+
+  it('keeps the command available for a bound session with no candidates', () => {
+    const mounted = mountClient()
+    const sessions = mounted.ctx.sessions as unknown as { binding: (id: string) => unknown }
+    sessions.binding = id => id === 's1' ? { session: fakeSession() } : undefined
+    apply(mounted.ctx)
+    const rewind = mounted.contribution('rewind')!
+    // No candidates is not "unavailable": the picker opens its empty panel.
+    expect(rewind.available({ sessionId: 's1' })).toBe(true)
+    expect(rewind.available({ sessionId: 'missing' })).toBe(false)
+    sessions.binding = () => ({ session: { sessionId: 's1', getSnapshot: () => ({ subagent: { address: { mode: 'continuable' } } }) } })
+    expect(rewind.available({ sessionId: 's1' })).toBe(false)
+    mounted.dispose()
+  })
+
+  it('keeps mounting when one client command registration is refused', () => {
+    // `register` throws when the name is already owned — another plugin may have
+    // registered a `/rewind` contribution — so the refused name must cost that
+    // picker only, never the other name, and never the row action.
     const attempted: string[] = []
     const accepted: string[] = []
     const conflict = {
-      decorate: (spec: { name: string }) => {
-        attempted.push(spec.name)
-        if (spec.name === 'rewind') throw new Error('command already decorated')
-        accepted.push(spec.name)
+      register: (contribution: FakeContribution) => {
+        attempted.push(contribution.name)
+        if (contribution.name === 'rewind') throw new Error('command already registered')
+        accepted.push(contribution.name)
         return () => {}
       },
+      dismiss: () => {},
     }
     const officialUser = (): null => null
     const nodes: FakeNodeEntry[] = [{ component: officialUser, options: { key: 'user' } }]
     const mounted = mountClient(nodes, { commandUi: conflict })
     expect(() => { apply(mounted.ctx) }).not.toThrow()
-    expect(attempted).toEqual(['rewind', 'undo'])
+    expect([...attempted].sort()).toEqual(['rewind', 'undo'])
     expect(accepted).toEqual(['undo'])
-    // The row takeover is what a thrown decoration used to take with it, and the
-    // registrations after the loop still run (the takeover tick included).
+    // One refused registration must not stop the row takeover that follows.
     expect(nodes[0]!.component).not.toBe(officialUser)
     expect(mounted.slotEntries.map(entry => entry.name)).toEqual(
       expect.arrayContaining([
@@ -248,15 +311,15 @@ describe('client plugin lifecycle', () => {
 
   it('keeps the rest of the plugin alive when the Chat-row ledger throws', () => {
     // The action mount is the only surface allowed to fail on its own: a ledger
-    // whose shape drifted must cost the button, not the command decoration or
-    // the visibility layer.
+    // whose shape drifted must cost the button, not the commands or the
+    // visibility layer.
     const mounted = mountClient()
     ;(mounted.ctx.slots as { entries: () => never }).entries = () => {
       throw new Error('ledger shape drift')
     }
     vi.spyOn(console, 'error').mockReturnValue(undefined)
     expect(() => { apply(mounted.ctx) }).not.toThrow()
-    expect([...mounted.decorated].sort()).toEqual(['rewind', 'undo'])
+    expect([...mounted.registered].sort()).toEqual(['rewind', 'undo'])
     expect(document.head.querySelector('style[data-plugin="dsh-rewind-plugin"]')).not.toBeNull()
     mounted.dispose()
   })

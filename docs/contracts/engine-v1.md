@@ -1,10 +1,11 @@
 # Engine contract v1
 
 dsh-rewind publishes one deliberately narrow contract for driving a rewound
-conversation and its file effect, and for taking over the action interface. It
-has three operations and one attribute. This document is the contract: it
-defines the wire shape, the stable codes, the semantics and the invariants.
-Design rationale and rejected alternatives are not repeated here.
+conversation and its file effect, and for taking over the action and command
+interfaces. It has three operations, one attribute and one client command-face
+service. This document is the contract: it defines the wire shape, the stable
+codes, the semantics and the invariants. Design rationale and rejected
+alternatives are not repeated here.
 
 This plugin still does one job: rewind a conversation in place, optionally
 restoring the files that turn changed. The contract standardizes seams that
@@ -13,11 +14,12 @@ model and no general extension point. The native client is the first caller.
 
 ## 1. Scope
 
-- **In scope**: `health`, `preview`, `commit`, the takeover attribute, the
-  effect semantics, the stable code set and the version rules below.
+- **In scope**: `health`, `preview`, `commit`, the action takeover attribute,
+  the command-face takeover service, the effect semantics, the stable code set
+  and the version rules below.
 - **Out of scope**: theme-specific adapters, a DSH compatibility matrix, forward
-  undo, cross-session or batch rewind, permission models, MCP/tool bindings, and
-  whether the native UI exposes a file-only action.
+  undo, cross-session or batch rewind, permission models, MCP/tool bindings,
+  host command takeover, and whether the native UI exposes a file-only action.
 - **Effects**: `conversation` (cut the model-visible surface) and `files`
   (restore the workspace) are orthogonal. Callers choose the combination.
 
@@ -195,9 +197,9 @@ value". While it is present, the engine hides its own:
 - retract button on an unsent steering bubble.
 
 The engine does **not** hide: the withdrawn-span visibility computation, the
-`/rewind` and `/undo` commands and their decorations, or its own settings form
-when its installation has a plugin page. Commands remain usable; a
-command-triggered rewind still works.
+client `/rewind` and `/undo` commands, or its own settings form when its
+installation has a plugin page. Commands remain usable; a command-triggered
+rewind still works.
 
 A settings page belongs to a direct installation. An engine mounted as another
 plugin's component has none, with or without a claim; the plugin that inserted
@@ -218,9 +220,27 @@ passes and it will actually render, and removes it on unload).
   native button, command, or this contract. The hidden span survives a page
   reload (I9). The takeover attribute only changes the trigger surface.
 
-## 6. Semantics
+## 6. Taking over the command surface
 
-### 6.1 Target
+The client half exposes `ctx.dshRewind.commands.takeover()`. It resolves with a
+permission whose `dispose()` restores the engine's commands, or `null` when the
+takeover was refused: another claimant already holds the face, `uiOwner` is
+`self`, the client half has unloaded, or an engine command could not be
+unregistered. The refusal reason is logged and is not part of the API. The
+claimant registers its own commands with `ctx.commandUi.register`; registering
+none is hide-only.
+
+- A refusal is a `null` result, not an exception; callers register nothing.
+- `dispose()` is idempotent and a no-op after the client half unloads. A name
+  still owned by another party is skipped, never overwritten. Open command
+  popups are dismissed with the takeover.
+- It covers client commands only: host commands (a same-named host command is a
+  name collision, not a takeover), the engine routes, the action interface
+  (§5), visibility and settings are untouched.
+
+## 7. Semantics
+
+### 7.1 Target
 
 `seq` must identify a human `user/message` currently on the model-visible
 surface. Messages cut by an earlier rewind or compaction are `target-missing`.
@@ -228,7 +248,7 @@ Checkpoints are located by that message's id; no checkpoint makes the file
 effect unavailable while the conversation effect still runs. The last message
 is a valid target: the operation withdraws the message itself.
 
-### 6.2 Conversation effect
+### 7.2 Conversation effect
 
 - Appends one marker (`user/message` carrying `surfaceOp: replace` and
   `sourceEventSeqs`); the model-visible surface moves to before the target. The
@@ -237,7 +257,7 @@ is a valid target: the operation withdraws the message itself.
   are kept. Withdrawn messages stay in the log and are not restored by this
   contract.
 
-### 6.3 Files effect
+### 7.3 Files effect
 
 - Uses the target's checkpoint as the baseline, reconciles every path against the
   current disk, and writes only the differences. Each write is a per-file atomic
@@ -249,7 +269,7 @@ is a valid target: the operation withdraws the message itself.
 - After a restore the host's filesystem-observation cache is re-synced, because
   the restore writes through plain host filesystem calls.
 
-### 6.4 Binding and concurrency
+### 7.4 Binding and concurrency
 
 - The server stores no plan state. `headSeq` is the only binding value.
 - The order and the zero-write rule are in §3.3. A replayed conversation commit
@@ -262,13 +282,13 @@ is a valid target: the operation withdraws the message itself.
 - The workspace is not bound: external changes after preview are reconciled per
   path and appear as `skipped`, not as a whole-commit refusal.
 
-### 6.5 Side effects and what is not undone
+### 7.5 Side effects and what is not undone
 
 This contract undoes workspace content and the model-visible surface only. Git
 commits, external services, process effects and checkpoint-store writes are not
 undone.
 
-## 7. Invariants
+## 8. Invariants
 
 | # | Invariant |
 | --- | --- |
@@ -278,28 +298,30 @@ undone.
 | I4 | A `conversation` commit does not touch the workspace (file bytes are unchanged). |
 | I5 | `head-changed` performs zero writes and zero cancellation. |
 | I6 | With a claim present and `uiOwner: auto`, the inline action is not in the document; removing the claim restores it. |
-| I7 | Takeover yields only the trigger: commands, visibility computation and configuration are unaffected. |
+| I7 | The action takeover yields only the action trigger: the command surface, visibility computation and configuration are unaffected. |
 | I8 | Under the same disk state, `preview.files` and the following `commit.files` describe the same change set. |
 | I9 | Withdrawn content stays hidden after a reload and is independent of the trigger (command, native button or contract). |
+| I10 | A command takeover unregisters every engine client command; `permission.dispose()` restores them, skipping names still registered by another party. |
 
-## 8. Integrating
+## 9. Integrating
 
 This document is the contract. A step-by-step guide with worked examples lives
 in [integration.md](integration.md); it is not normative and adds no
 requirements.
 
-## 9. Responsibility
+## 10. Responsibility
 
 | Surface | Owner |
 | --- | --- |
-| Engine, checkpoints, restore, commands, visibility, native UI | dsh-rewind |
-| The trigger interface rendered after a takeover, its copy and its calls into this contract | the claimant |
+| Engine, checkpoints, restore, client commands, visibility, native UI | dsh-rewind |
+| The command-face service, its permission and restore rules | dsh-rewind |
+| The trigger or command interface rendered after a takeover, its copy and its calls into this contract | the claimant |
 | This contract (fields, codes, semantics, version) | dsh-rewind |
 
-A claimant accepts responsibility for the interface while its signal is up;
-§5 defines what the signal does and does not affect.
+A claimant accepts responsibility for the interface it renders; §5 and §6
+define what each takeover does and does not affect.
 
-## 10. Versioning
+## 11. Versioning
 
 - The major version is in the path (`v1`) and only breaking changes raise it.
   `health.contract` is the single version query point.

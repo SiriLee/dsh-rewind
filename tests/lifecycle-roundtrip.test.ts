@@ -514,15 +514,15 @@ describe('host language preference', () => {
     return await cleanup.handler({ rawInput: 'status', agent: { session } } as never) as { kind: string; text: string }
   }
 
-  it('renders command descriptions and results in the picked language', async () => {
+  it('renders the cleanup command description and results in the picked language', async () => {
     const mounted = mount()
     mounted.setLocaleRows([zhRow])
     mounted.setEntryId('include:dsh-rewind-plugin')
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
 
-    // The mount-time read covers the descriptions, which register once.
-    expect(mounted.commands.get('rewind')!.description).toBe(zhLocale['command.description'])
-    expect(mounted.commands.get('undo')!.description).toBe(zhLocale['command.undoDescription'])
+    // The host keeps only the cleanup command; its description registers once.
+    expect(mounted.commands.get('rewind')).toBeUndefined()
+    expect(mounted.commands.get('undo')).toBeUndefined()
     expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(zhLocale['cleanup.description'])
     // A command result renders in the same language.
     expect((await cleanupStatus(mounted)).text).toContain(zhStatus)
@@ -532,14 +532,13 @@ describe('host language preference', () => {
   it('costs only the colliding name when a third-party plugin already owns it', async () => {
     const mounted = mount()
     mounted.setEntryId('include:dsh-rewind-plugin')
-    mounted.occupyCommand('rewind')
+    mounted.occupyCommand('snapshot-auto-cleanup')
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
 
-    // The occupant's row is untouched, and every other command registered.
-    expect(mounted.commands.get('rewind')!.description).toBe('third-party')
-    expect(mounted.commands.get('undo')).toBeDefined()
-    expect(mounted.commands.get('snapshot-auto-cleanup')).toBeDefined()
-    expect(mounted.logger.warn).toHaveBeenCalledWith(expect.stringContaining('"rewind" is already registered'))
+    // The occupant's row is untouched, and the checkpoint pipeline still mounts.
+    expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe('third-party')
+    expect(mounted.logger.warn).toHaveBeenCalledWith(expect.stringContaining('"snapshot-auto-cleanup" was not registered'))
+    expect(mounted.handlers.has('agent/pre-step')).toBe(true)
     await mounted.dispose()
   })
 
@@ -552,7 +551,7 @@ describe('host language preference', () => {
     mounted.setEntryId('include:dsh-rewind-plugin')
     apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
 
-    expect(mounted.commands.get('rewind')!.description).toBe(enLocale['command.description'])
+    expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(enLocale['cleanup.description'])
     expect((await cleanupStatus(mounted)).text).toContain(enStatus)
     await mounted.dispose()
   })
@@ -591,7 +590,7 @@ describe('host language preference', () => {
       mounted.setEntryId('include:dsh-rewind-plugin')
       apply(mounted.ctx, testConfig({ snapshotDir: snapRoot }))
 
-      expect(mounted.commands.get('rewind')!.description).toBe(enLocale['command.description'])
+      expect(mounted.commands.get('snapshot-auto-cleanup')!.description).toBe(enLocale['cleanup.description'])
       expect((await cleanupStatus(mounted)).text).toContain(enStatus)
       await mounted.dispose()
     },

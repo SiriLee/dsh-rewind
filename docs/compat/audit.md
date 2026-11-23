@@ -27,7 +27,6 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | --- | --- |
 | Host session log | `session.snapshotEvents()` |
 | Host working directory | `ctx.workingDirectory.ensure(agent)` — the base the fs tools resolve against |
-| Client chat snapshot | `uiConversation` `chat` view (`chatSnapshotOf`) |
 | Client composer refill | `conversation.input.setDraft` facade, else the `[data-composer-input]` DOM fill |
 | Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
@@ -110,9 +109,9 @@ pre-refusal was reverted).
 **U8 · Upstream limitation — shared by every command-seam plugin.**
 `PopupSelectController.settle()` restores composer focus unconditionally, and
 command descriptions are a closed allowlist while no host command output is
-localized. **Impact:** any plugin using the command seam hits this; this plugin
-keeps its own capture-phase panel and host dictionary. **Stance:** no
-compensation.
+localized. **Impact:** any plugin using the host command seam hits this; this
+plugin keeps its own capture-phase panel, and `/snapshot-auto-cleanup` carries
+the same limitation. **Stance:** no compensation.
 
 **U9 · Upstream design — not plugin-specific.**
 A nearer physical copy wins over a peer declaration, and a range is not a

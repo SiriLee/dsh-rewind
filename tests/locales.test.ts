@@ -36,12 +36,12 @@ describe('host locale dictionaries', () => {
   })
 
   it.each(languages)('%s is reachable through translate', (lang) => {
-    expect(translate(lang, 'command.description')).toBe(HOST_DICTS[lang]['command.description'])
+    expect(translate(lang, 'cleanup.description')).toBe(HOST_DICTS[lang]['cleanup.description'])
   })
 
   it('interpolates named params', () => {
-    expect(translate(DEFAULT_HOST_LOCALE, 'success', { targetSeq: 5, restore: '' }))
-      .toContain('seq 5')
+    expect(translate(DEFAULT_HOST_LOCALE, 'cleanup.maxAgeOk', { days: 5 }))
+      .toContain('5')
   })
 
   it('falls back to the raw key for an unknown key', () => {
@@ -50,9 +50,9 @@ describe('host locale dictionaries', () => {
   })
 
   it('leaves unknown placeholders untouched', () => {
-    // An unknown param name is ignored; an unprovided placeholder stays.
-    const restored = translate(DEFAULT_HOST_LOCALE, 'success', { targetSeq: 9, restore: '' })
-    expect(restored).toContain('Withdrawn seq 9')
+    // An unprovided placeholder stays; params the template does not name are ignored.
+    const rendered = translate(DEFAULT_HOST_LOCALE, 'cleanup.runFailed', { unrelated: 'x' })
+    expect(rendered).toContain('{detail}')
   })
 })
 

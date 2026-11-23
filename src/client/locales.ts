@@ -2,6 +2,10 @@
 
 /** English dictionary — the canonical key set (the harness fallback language). */
 export const en = {
+  'command.rewindLabel': 'Rewind',
+  'command.undoLabel': 'Undo',
+  'command.description': 'Rewind the conversation and/or files to a previous point',
+  'command.undoDescription': 'Alias of /rewind',
   'button.title': 'Rewind',
   'button.aria': 'Rewind to this message',
   'button.retract.aria': 'Rewind to this pending message',
@@ -62,6 +66,10 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /** Chinese dictionary, checked complete against the en key set. */
 export const zh: Record<RewindKey, string> = {
+  'command.rewindLabel': '回退',
+  'command.undoLabel': '撤销',
+  'command.description': '把对话和/或文件回退到之前的某条消息',
+  'command.undoDescription': '/rewind 的别名',
   'button.title': '回退',
   'button.aria': '回退到此消息',
   'button.retract.aria': '回退到此插话消息',
@@ -112,6 +120,10 @@ export const zh: Record<RewindKey, string> = {
 
 /** Japanese dictionary, checked complete against the en key set. */
 export const ja: Record<RewindKey, string> = {
+  'command.rewindLabel': '巻き戻し',
+  'command.undoLabel': '元に戻す',
+  'command.description': '会話やファイルを以前の時点まで巻き戻します',
+  'command.undoDescription': '/rewind のエイリアス',
   'button.title': '巻き戻し',
   'button.aria': 'このメッセージまで巻き戻す',
   'button.retract.aria': 'この保留中のメッセージまで巻き戻す',
@@ -162,6 +174,10 @@ export const ja: Record<RewindKey, string> = {
 
 /** Spanish dictionary, checked complete against the en key set. */
 export const es: Record<RewindKey, string> = {
+  'command.rewindLabel': 'Rebobinar',
+  'command.undoLabel': 'Deshacer',
+  'command.description': 'Rebobinar la conversación y/o los archivos a un punto anterior',
+  'command.undoDescription': 'Alias de /rewind',
   'button.title': 'Rebobinar',
   'button.aria': 'Rebobinar hasta este mensaje',
   'button.retract.aria': 'Rebobinar hasta este mensaje pendiente',
@@ -212,6 +228,10 @@ export const es: Record<RewindKey, string> = {
 
 /** French dictionary, checked complete against the en key set. */
 export const fr: Record<RewindKey, string> = {
+  'command.rewindLabel': 'Rembobiner',
+  'command.undoLabel': 'Annuler',
+  'command.description': 'Rembobiner la conversation et/ou les fichiers à un point antérieur',
+  'command.undoDescription': 'Alias de /rewind',
   'button.title': 'Rembobiner',
   'button.aria': 'Rembobiner jusqu’à ce message',
   'button.retract.aria': 'Rembobiner jusqu’à ce message en attente',
@@ -262,6 +282,10 @@ export const fr: Record<RewindKey, string> = {
 
 /** German dictionary, checked complete against the en key set. */
 export const de: Record<RewindKey, string> = {
+  'command.rewindLabel': 'Zurückspulen',
+  'command.undoLabel': 'Rückgängig',
+  'command.description': 'Unterhaltung und/oder Dateien auf einen früheren Stand zurückspulen',
+  'command.undoDescription': 'Alias von /rewind',
   'button.title': 'Zurückspulen',
   'button.aria': 'Bis zu dieser Nachricht zurückspulen',
   'button.retract.aria': 'Bis zu dieser ausstehenden Nachricht zurückspulen',
@@ -312,6 +336,10 @@ export const de: Record<RewindKey, string> = {
 
 /** Russian dictionary, checked complete against the en key set. */
 export const ru: Record<RewindKey, string> = {
+  'command.rewindLabel': 'Откатить',
+  'command.undoLabel': 'Отменить',
+  'command.description': 'Откатить беседу и/или файлы к более раннему состоянию',
+  'command.undoDescription': 'Псевдоним /rewind',
   'button.title': 'Откатить',
   'button.aria': 'Откатить к этому сообщению',
   'button.retract.aria': 'Откатить к этому ожидающему сообщению',
@@ -362,6 +390,10 @@ export const ru: Record<RewindKey, string> = {
 
 /** Brazilian Portuguese dictionary, checked complete against the en key set. */
 export const pt: Record<RewindKey, string> = {
+  'command.rewindLabel': 'Rebobinar',
+  'command.undoLabel': 'Desfazer',
+  'command.description': 'Rebobinar a conversa e/ou os arquivos para um ponto anterior',
+  'command.undoDescription': 'Alias de /rewind',
   'button.title': 'Rebobinar',
   'button.aria': 'Rebobinar até esta mensagem',
   'button.retract.aria': 'Rebobinar até esta mensagem pendente',

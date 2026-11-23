@@ -1,126 +1,22 @@
 /**
- * Unit tests for the client-side rewind candidate computation
- * (src/client/candidates.ts): which user messages the `/rewind` command
- * decoration's popupSelect shell offers, their order (most recent first),
- * withdrawn-row exclusion, preview truncation, and the popupSelect row
- * mapping — the client mirror of the host's `listRewindCandidates`.
+ * Unit tests for the client candidate row mapping (`src/client/candidates.ts`).
  */
 import { describe, expect, it } from 'vitest'
 import type { RewindKey } from '../src/client/locales.ts'
-import {
-  formatCandidateTime,
-  messagePreviewOf,
-  rewindCandidatesOf,
-  rewindOptionsFromCandidates,
-  type CandidateChat,
-} from '../src/client/candidates.ts'
-
-/** A user/steering chat node fixture; only fields the listing reads are real. */
-function userNode(key: string, seq: number, time: number, text: string, kind = 'user') {
-  return { key, kind, data: { seq, time, content: [{ type: 'text', text }] } }
-}
-
-function snap(nodes: readonly ReturnType<typeof userNode>[]): CandidateChat {
-  return {
-    order: nodes.map(node => node.key),
-    nodes: new Map(nodes.map(node => [node.key, node])),
-  }
-}
+import { rewindOptionsFromCandidates } from '../src/client/candidates.ts'
 
 /** A translate that returns the key, for option-label assertions. */
 const t = (key: RewindKey): string => key
 
-describe('rewindCandidatesOf', () => {
-  it('lists surface user messages newest first (top row = default highlight)', () => {
-    const chat = snap([
-      userNode('u0', 0, 1000, 'first'),
-      userNode('u1', 1, 2000, 'second'),
-      userNode('u2', 2, 3000, 'third'),
-    ])
-    expect(rewindCandidatesOf(chat)).toEqual([
-      { seq: 2, time: 3000, preview: 'third' },
-      { seq: 1, time: 2000, preview: 'second' },
-      { seq: 0, time: 1000, preview: 'first' },
-    ])
-  })
-
-  it('skips rows absent from the visible order', () => {
-    const chat = snap([
-      userNode('u0', 0, 1000, 'first'),
-      userNode('u1', 1, 2000, 'second'),
-      userNode('u2', 2, 3000, 'third'),
-    ])
-    expect(rewindCandidatesOf({ ...chat, order: ['u0'] }).map(candidate => candidate.seq)).toEqual([0])
-  })
-
-  it('includes steering rows and skips non-user rows', () => {
-    const chat = snap([
-      userNode('u0', 0, 1000, 'plain'),
-      userNode('s1', 1, 2000, 'steered', 'steering'),
-      userNode('a2', 2, 3000, 'assistant', 'assistant'),
-    ])
-    expect(rewindCandidatesOf(chat).map(candidate => candidate.seq)).toEqual([1, 0])
-  })
-
-  it('keeps the newest DEFAULT_CANDIDATE_LIMIT (100) by default', () => {
-    const nodes = Array.from({ length: 105 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
-    const candidates = rewindCandidatesOf(snap(nodes))
-    expect(candidates).toHaveLength(100)
-    expect(candidates[0]!.seq).toBe(104)
-    expect(candidates[99]!.seq).toBe(5)
-  })
-
-  it('respects an explicit limit', () => {
-    const nodes = Array.from({ length: 12 }, (_, i) => userNode(`u${i}`, i, i, `msg ${i}`))
-    const candidates = rewindCandidatesOf(snap(nodes), 5)
-    expect(candidates.map(candidate => candidate.seq)).toEqual([11, 10, 9, 8, 7])
-  })
-
-  it('produces no candidates for an empty chat or empty visible order', () => {
-    expect(rewindCandidatesOf(snap([]))).toEqual([])
-    const chat = snap([userNode('u0', 0, 0, 'only')])
-    expect(rewindCandidatesOf({ ...chat, order: [] })).toEqual([])
-  })
-
-  it('reads the message seq', () => {
-    const chat: CandidateChat = {
-      order: ['u0'],
-      nodes: new Map([['u0', { kind: 'user', data: { seq: 7, time: 1, content: [] } }]]),
-    }
-    expect(rewindCandidatesOf(chat)).toEqual([{ seq: 7, time: 1, preview: '' }])
-  })
-})
-
-describe('messagePreviewOf', () => {
-  it('joins text blocks and collapses whitespace', () => {
-    expect(messagePreviewOf({ content: [{ type: 'text', text: '  hello ' }, { type: 'text', text: 'world\n' }] })).toBe('hello world')
-  })
-
-  it('ignores non-text blocks', () => {
-    expect(messagePreviewOf({ content: [{ type: 'image' }, { type: 'text', text: 'ok' }] })).toBe('ok')
-  })
-
-  it('truncates long previews with an ellipsis', () => {
-    const preview = messagePreviewOf({ content: [{ type: 'text', text: 'x'.repeat(100) }] })
-    expect(preview).toHaveLength(80)
-    expect(preview.endsWith('…')).toBe(true)
-    expect(preview.slice(0, 79)).toBe('x'.repeat(79))
-  })
-})
-
-describe('formatCandidateTime', () => {
-  it('renders HH:MM with zero padding', () => {
-    const d = new Date(2026, 7, 21, 9, 5)
-    expect(formatCandidateTime(d.getTime())).toBe('09:05')
-    expect(formatCandidateTime(new Date(2026, 7, 21, 23, 59).getTime())).toBe('23:59')
-  })
-})
-
 describe('rewindOptionsFromCandidates', () => {
-  it('maps typed candidates to rows (shared host path)', () => {
+  it('maps typed candidates to rows', () => {
     const time = new Date(2026, 7, 21, 4, 0).getTime()
     expect(rewindOptionsFromCandidates([{ seq: 4, time, preview: 'x' }], t)).toEqual([
       { id: '4', label: 'x', detail: '04:00' },
     ])
+  })
+
+  it('uses the no-text label for an empty preview', () => {
+    expect(rewindOptionsFromCandidates([{ seq: 1, time: 0, preview: '' }], t)[0]?.label).toBe('popover.noText')
   })
 })

@@ -20,6 +20,7 @@ mechanism visible.
 | Add a trigger without replacing anything | Render your own button or menu entry; never set the signal. |
 | Restore files without rewinding the conversation | Call `commit` with `mode: 'files'`. |
 | Your own target picker | List your own messages and pass each row's `seq`; the contract has no candidate query. |
+| Replace the engine's `/rewind` and `/undo` commands | Take over `ctx.dshRewind.commands` and register your own client commands. |
 
 ## The minimum
 
@@ -158,6 +159,28 @@ failure produces.
 - Users can recover the native interface with the plugin config item
   `uiOwner: self` (a file-level setting, not a settings-card toggle).
 
+## Taking over the command surface
+
+A client plugin can take the engine's `/rewind` and `/undo` commands as one
+face; [§6 of the contract](engine-v1.md) defines the rules.
+
+```ts
+const permission = await ctx.dshRewind.commands.takeover()
+if (permission === null) return // do not register
+const unregisterCommand = ctx.commandUi.register({ name: 'rewind', label, description, icon, available, ui })
+
+// On release: unregister your own commands first, then give the face back.
+unregisterCommand()
+permission.dispose()
+```
+
+`null` means no face was taken (another claimant, `uiOwner: self`, an unloaded
+client half, or a failed withdrawal); the reason is logged, not public. Register
+only after a non-null result, and unregister your own commands before `dispose`.
+
+- Hide-only: take over and register nothing.
+- A name still occupied when you dispose stays with its owner.
+
 ## Packaging your plugin next to the engine
 
 If your UI cannot work without the engine, install it as a dependency so adding
@@ -238,8 +261,9 @@ off in its row, a restore-default next to each.
 Three details to get right. Turning `fileCheckpointingEnabled` off makes
 `preview.files.reason` `checkpointing-disabled`, which you should explain
 rather than report as a failure. `uiOwner` is the user's escape hatch, not a
-caller switch: takeover is `data-dsh-rewind-claim`. And when `health` is absent
-the form is `unavailable`; hide the controls.
+caller switch: the action takeover is `data-dsh-rewind-claim`, the command
+takeover is `ctx.dshRewind`. And when `health` is absent the form is
+`unavailable`; hide the controls.
 
 ## Testing your integration
 

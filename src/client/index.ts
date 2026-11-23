@@ -1,26 +1,19 @@
 /**
- * dsh-rewind client half: the `/rewind` command decoration, the locale
- * registration, the mode popover it opens, the visibility layer, and the
- * per-message rewind action.
+ * dsh-rewind client half: the `/rewind` and `/undo` client commands, the
+ * command-face takeover service, the mode popover, the visibility layer and
+ * the per-message rewind action.
  *
- * A durable message's action lives in the Chat row's own actions row: `mount.tsx`
- * takes over the official user/steering renderer identity and injects one more
- * child into that row. Unclaimed (pending) steering input has no such seat, so
- * `pending-mount.tsx` attaches the retract action through the only DOM path the
- * plugin keeps. The
- * command decoration (`ctx.commandUi.decorate`) makes a bare `/rewind` (or its
- * alias `/undo`) open the harness's own popupSelect instead of executing; the
- * parameterized `@<seq>` form stays the execution channel; the action and the
- * picker drive the v1 contract (preview → commit), and the picker lists the
- * loaded chat snapshot. The executed rewind and its composer refill live in
- * `rewind-flow.ts`.
+ * The action lives in the Chat row's official actions row (`mount.tsx`);
+ * unclaimed steering uses `pending-mount.tsx`. The commands and the action
+ * drive the v1 contract (preview → commit); `rewind-flow.ts` executes the
+ * rewind and the composer refill.
  *
  * @module dsh-rewind/client
  */
 
 import type { ISessions, SessionFace } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { CommandDecoration, CommandUiContract } from '@deepseek-ai/dsh-client-ui-commands/client'
+import type { CommandContribution, CommandUiContract, PopupSelectSpec } from '@deepseek-ai/dsh-client-ui-commands/client'
 // Type-only: the React element the slot component returns (the settings card).
 import type { ReactNode } from 'react'
 // Type-only: the per-entry configuration form (`ctx.configForms`) the settings
@@ -33,9 +26,7 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // label the ui-session plugin contributes to `SessionReferenceSourceMap`).
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import {
-  rewindCandidatesOfChat,
   rewindOptionsFromCandidates,
-  type CandidateChat,
   type RewindCandidate,
 } from './candidates.ts'
 import { closePopover, openPopover, registerPreviewCall, registerComposerFocuser } from './popover.ts'
@@ -44,10 +35,12 @@ import { installRowAction, type RowAction, type SlotLedger } from './mount.tsx'
 import { rewindActionRenderer } from './action.tsx'
 import { createPendingBridge } from './pending-mount.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
-import { chatSnapshotOf, type ChatOf, type MessageImageRef } from './hidden.ts'
+import type { MessageImageRef } from './hidden.ts'
+import { createCommandFace } from './command-takeover.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { contractErrorKey } from './errors.ts'
-import { createTakeoverStore } from './claim.ts'
+import { createTakeoverStore, type UiOwner } from './claim.ts'
+import { RewindIcon } from './icon.tsx'
 import { rewindLog } from './log.ts'
 import { BUILD_HASH, PLUGIN_PACKAGE, PLUGIN_VERSION } from './build-info.ts'
 import { CLIENT_DICTS } from './locales.ts'
@@ -61,11 +54,7 @@ import {
 } from './settings-card.tsx'
 
 export const name = 'dsh-rewind'
-// NOTE: deliberately NOT injecting the `uiConversation` service
-// here as a required dependency. The service is resolved lazily per read
-// instead (see `uiConversation` in apply), the optional `ctx.get` pattern the
-// harness's own consumer plugins use.
-//
+export type { CommandTakeoverPermission, RewindCommandFace, RewindCommands } from './command-takeover.ts'
 // `configForms` IS a module-level inject: the rewind surface itself never needs
 // it, but the configuration card is addressed through it, and the web profile
 // always composes `ui-settings` (the same dependency the official settings
@@ -79,18 +68,6 @@ const HEADER_ACTIONS_SLOT = 'conversation.session.header.actions'
 
 /** The complete durable image reference the session face's image read verifies. */
 type DurableImageRef = Parameters<SessionFace['readAttachment']>[0]
-
-/**
- * Structural face of the `uiConversation` service: per-session
- * conversation bindings exposing named view targets (the "chat" view carries
- * the chat snapshot). Typed locally so the plugin never imports the
- * conversation UI package's types and survives harness version drift.
- */
-interface UiConversationLike {
-  binding(source: string | { readonly sessionId: string }): {
-    target(name: string): { getSnapshot(): unknown; subscribe?(cb: () => void): () => void } | undefined
-  }
-}
 
 /**
  * Structural face of the `conversation.input` session-input resolver
@@ -126,6 +103,8 @@ export interface ClientContext {
   get(name: string): unknown
   slots: unknown
   commandUi: unknown
+  /** Register this bundle's public command-face service (`ctx.dshRewind`). */
+  provide(name: string, value?: unknown): unknown
   /** Per-entry configuration forms (this bundle's own entry included). */
   configForms: { get<T>(entryId: string): ConfigForm<T> }
 }
@@ -159,8 +138,8 @@ interface SlotsLike {
 }
 
 /**
- * Client plugin body: command decoration + parameterized guard + locale +
- * visibility + the settings card.
+ * Client plugin body: the client commands, the command-face takeover service,
+ * locale, visibility and the settings card.
  * @param ctx - client root context carrying `slots`, `sessions`, `locale` and `commandUi`.
  */
 export function apply(ctx: ClientContext): void {
@@ -189,9 +168,12 @@ export function apply(ctx: ClientContext): void {
     })()
     const checkpointingEnabled = (): boolean =>
       settingsScope?.getSnapshot().value?.fileCheckpointingEnabled !== false
+    /** The live owner policy both takeover faces read (never cached). */
+    const readOwner = (): UiOwner =>
+      settingsScope?.getSnapshot().value?.uiOwner === 'self' ? 'self' : 'auto'
     // Third-party action-interface takeover.
     const takeover = createTakeoverStore({
-      readOwner: () => settingsScope?.getSnapshot().value?.uiOwner === 'self' ? 'self' : 'auto',
+      readOwner,
       subscribeOwner: listener => settingsScope?.subscribe(listener) ?? (() => {}),
       ...(typeof document === 'undefined' ? {} : { document }),
     })
@@ -226,35 +208,6 @@ export function apply(ctx: ClientContext): void {
       (ctx.sessions.list.getSnapshot().byId[sessionId as SessionId]?.retainedBy.mainView ?? 0) > 0
     /** Locale switches re-render the pending layer's portaled labels. */
     const subscribeLocale = (cb: () => void): (() => void) => ctx.locale.subscribe(cb)
-
-    /**
-     * The chat channel: the `uiConversation` service (contributed by
-     * dsh-client-ui-conversation; dsh-client-ui-chat registers its named
-     * "chat" view through the uiSession slot hook). Resolved lazily through
-     * `ctx.get` — the harness's own consumer pattern — so the read is undefined
-     * before the service registers. Re-read on every call: services restart
-     * under the live-reload profile patcher.
-     */
-    const uiConversation = (): UiConversationLike | undefined =>
-      (ctx as { get(name: string): unknown }).get('uiConversation') as UiConversationLike | undefined
-
-    /** The named chat view in the `uiConversation` registry. */
-    const CHAT_VIEW = 'chat'
-    /**
-     * The live chat snapshot of a session, or undefined when unavailable. Served
-     * by the `uiConversation` "chat" view (see `chatSnapshotOf`).
-     * `uiConversation.binding` throws for a session it does not know (a
-     * teardown window) — degrade to "no chat" instead of failing the caller.
-     */
-    const chatOf: ChatOf = (session) => {
-      if (session === undefined) return undefined
-      try {
-        const view = uiConversation()?.binding(session.sessionId).target(CHAT_VIEW)
-        return chatSnapshotOf(view)
-      } catch {
-        return undefined
-      }
-    }
 
     /**
      * The session's composer facade (draft write + focus), resolved lazily
@@ -404,28 +357,18 @@ export function apply(ctx: ClientContext): void {
       rewindLog.error('settings', 'settings card register failed', error)
     }
 
-    // ---- /rewind command decoration (the standard text-driven flow) ----
-    // A bare `/rewind` — picked from the slash-menu completion, or typed in
-    // full and Entered — opens the harness's own popupSelect shell instead of
-    // executing the command: the harness-native "bare invocation opens a
-    // picker" mechanism (CommandDecoration, see the ui-commands contract).
-    // The plugin never re-implements a menu; picking a candidate continues
-    // through the mode popover below.
+    // ---- /rewind and /undo client commands ----
+    // A bare invocation opens the harness popupSelect; a third-party UI can
+    // take the face over through `ctx.dshRewind` (see command-takeover.ts).
     const commandUi = ctx.get('commandUi') as CommandUiContract
 
-
-    /** True when the surface has at least one reachable rewind target. */
-    const hasCandidates = (sessionId: string | undefined): boolean => {
-      const face = sessionId === undefined ? undefined : sessionOf(sessionId)
-      // A direct-subagent (child) session is rewind-inert (see
-      // `isRewindInertSession`): the Host refuses every generic Session RPC for
-      // a subagent-owned identity, so this picker could only list targets that
-      // can never execute. The Harness's own slash-command directory already
-      // returns nothing there; this keeps the decoration from becoming a second
-      // dead surface should that policy change.
-      if (face === undefined || isRewindInertSession(face.getSnapshot())) return false
-      const chat = chatOf(face)
-      return chat !== undefined && rewindCandidatesOfChat(chat as unknown as CandidateChat).length > 0
+    /**
+     * Whether a session may be rewound: bound, and not a direct subagent. The
+     * command stays available with no candidates so its picker can open empty.
+     */
+    const canRewindIn = (sessionId: string): boolean => {
+      const face = sessionOf(sessionId)
+      return face !== undefined && !isRewindInertSession(face.getSnapshot())
     }
 
     /** Internal host candidate read for the picker. */
@@ -445,56 +388,57 @@ export function apply(ctx: ClientContext): void {
       return card ?? surface ?? document.body
     }
 
-    // The decoration shared by `/rewind` and its alias `/undo`.
-    const rewindPopupSpec: Omit<CommandDecoration, 'name'> = {
-      // The picker exists exactly while the surface has a reachable user
-      // message: a fresh session (no candidates) falls through to the host
-      // command, which fails with "no user messages" — matching the harness's
-      // own decoration convention (see ui-permission-presets).
-      available: session => hasCandidates(session.sessionId),
-      ui: {
-        kind: 'popupSelect',
-        options: async session => {
-          const face = sessionOf(session.sessionId)
-          return face === undefined ? [] : rewindOptionsFromCandidates(await fetchHostCandidates(face), t)
-        },
-        onSelect: (option, session) => {
-          const face = sessionOf(session.sessionId)
-          if (face === undefined) return
-          const candidate = hostCandidates.get(face.sessionId)?.find(candidate => candidate.seq === Number(option.id))
-          if (candidate === undefined) return
-          openPopover({
-            session: face,
-            seq: candidate.seq,
-            time: candidate.time,
-            preview: candidate.preview,
-            anchor: composerAnchor(),
-            t,
-            checkpointingEnabled: checkpointingEnabled(),
-            onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, setComposerText, restoreImages, code => t(contractErrorKey(code))) },
-          })
-        },
+    // The popup shared by `/rewind` and its alias `/undo`.
+    const rewindPopupSpec: PopupSelectSpec = {
+      kind: 'popupSelect',
+      options: async session => {
+        const face = sessionOf(session.sessionId)
+        return face === undefined ? [] : rewindOptionsFromCandidates(await fetchHostCandidates(face), t)
+      },
+      onSelect: (option, session) => {
+        const face = sessionOf(session.sessionId)
+        if (face === undefined) return
+        const candidate = hostCandidates.get(face.sessionId)?.find(candidate => candidate.seq === Number(option.id))
+        if (candidate === undefined) return
+        openPopover({
+          session: face,
+          seq: candidate.seq,
+          time: candidate.time,
+          preview: candidate.preview,
+          anchor: composerAnchor(),
+          t,
+          checkpointingEnabled: checkpointingEnabled(),
+          onRewind: mode => { void runRewindAndFill(face, candidate.seq, mode, isMainViewSession, setComposerText, restoreImages, code => t(contractErrorKey(code))) },
+        })
       },
     }
-    for (const name of ['rewind', 'undo'] as const) {
-      try {
-        yield commandUi.decorate({ name, ...rewindPopupSpec })
-      } catch (error) {
-        // `decorate` throws when the name is already owned — another plugin may
-        // have taken `/rewind` — and a refused decoration must cost that one
-        // picker only: the mount keeps going, so the row action and the pending
-        // bridge still come up.
-        rewindLog.warn('command', `the ${name} decoration was refused or malformed`, error)
-      }
+
+    /** One client command per name; both share the picker. */
+    const commandContribution = (name: 'rewind' | 'undo'): CommandContribution => ({
+      name,
+      label: () => t(name === 'rewind' ? 'command.rewindLabel' : 'command.undoLabel'),
+      description: () => t(name === 'rewind' ? 'command.description' : 'command.undoDescription'),
+      icon: RewindIcon,
+      available: session => canRewindIn(session.sessionId),
+      ui: rewindPopupSpec,
+    })
+
+    const commandFace = createCommandFace({
+      contributions: [commandContribution('rewind'), commandContribution('undo')],
+      register: contribution => commandUi.register(contribution),
+      dismiss: name => { commandUi.dismiss(name) },
+      readOwner,
+    })
+    ctx.effect(() => () => commandFace.dispose(), 'dsh-rewind command face')
+    try {
+      ctx.provide('dshRewind', commandFace.service)
+    } catch (error) {
+      // Another copy of this bundle already owns the page-level service. The
+      // commands still work; only the takeover channel is unavailable.
+      rewindLog.error('command', 'command-face service registration failed', error)
     }
 
     // ---- per-message rewind action (a child of the official actions row) ----
-    /** A direct-subagent session refuses every generic Session RPC: no action there. */
-    const canRewindIn = (sessionId: string): boolean => {
-      const face = sessionOf(sessionId)
-      return face !== undefined && !isRewindInertSession(face.getSnapshot())
-    }
-
     /** Open the mode popover for one row, anchored at its action button. */
     const openRewindFor = (row: RowAction, anchor: HTMLElement): void => {
       const face = sessionOf(row.sessionId)
@@ -515,8 +459,8 @@ export function apply(ctx: ClientContext): void {
       })
     }
 
-    // A failing mount costs the action only: the decoration and the visibility
-    // layer above must not share its fate.
+    // A failing mount costs the action only: the command face and the
+    // visibility layer above must not share its fate.
     try {
       yield installRowAction({
         slots: ctx.slots as unknown as SlotLedger,

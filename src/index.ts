@@ -1,7 +1,8 @@
 /**
- * dsh-rewind host half: the `/rewind` command and the Claude-Code-style
- * checkpoint store, composed as one dual-face bundle row (the browser half
- * lives in `src/client/`).
+ * dsh-rewind host half: the v1 engine routes, the `/snapshot-auto-cleanup`
+ * command and the Claude-Code-style checkpoint store, composed as one dual-face
+ * bundle row (the browser half, which carries the `/rewind` and `/undo`
+ * commands, lives in `src/client/`).
  *
  * Rewind mechanism: planning is pure (`src/rewind.ts`); execution appends a
  * marker `user/message` whose `surfaceOp` replaces the target and every surface
@@ -40,7 +41,6 @@ import {
   storeSessionOf,
   targetMessageIdOf,
   waitForAgentIdle,
-  type EngineErrorCode,
   type FilesCommit,
 } from './engine.ts'
 import { DEFAULT_MAX_FILE_BYTES, SnapshotStore, type ClearSessionReport, type PruneStaleReport, type RestoreOutcome } from './snapshot.ts'
@@ -563,26 +563,6 @@ async function syncRestoreObservations(
   }
 }
 
-/** Map one engine failure to the command's localized result. */
-function commandFailure(
-  error: { readonly code: EngineErrorCode; readonly message: string },
-  signal: AbortSignal | undefined,
-): CommandResult {
-  switch (error.code) {
-    case 'commit-in-flight':
-      return { kind: 'error', text: t('inflight') }
-    case 'turn-running':
-      // An aborted command is a normal cancel, not a failure to stop.
-      return { kind: 'error', text: signal?.aborted === true ? t('cancelled') : t('stopFailed') }
-    case 'target-missing':
-      // The target became unusable before the commit wrote the marker.
-      return { kind: 'error', text: error.message }
-    case 'head-changed':
-    case 'internal':
-      return { kind: 'error', text: t('failed', { error: error.message }) }
-  }
-}
-
 /**
  * Re-sync the harness fs-observation policy after a committed file restore. The
  * restore writes through plain `node:fs`, invisible to the observation layer
@@ -602,45 +582,6 @@ async function syncCommittedFiles(
     failed: [],
     noCheckpoint: false,
   })
-}
-
-/**
- * Execute one command-initiated rewind through the shared engine. The bare
- * `/rewind` host fallback binds to the head it just read, so the head check
- * cannot introduce a confirmation window of its own.
- */
-async function executeRewindCommand(
-  engine: RewindEngine,
-  invocation: CommandInvocation,
-  targetSeq: number,
-): Promise<CommandResult> {
-  const { agent } = invocation
-  // A command cancelled before it starts is a normal cancel, not a rewind.
-  if (invocation.signal.aborted) return { kind: 'error', text: t('cancelled') }
-  const result = await engine.commit({
-    agent,
-    seq: targetSeq,
-    headSeq: agent.session.seq - 1,
-    mode: 'conversation',
-    signal: invocation.signal,
-  })
-  if (!result.ok) return commandFailure(result, invocation.signal)
-  return {
-    kind: 'success',
-    text: t('success', { targetSeq, restore: '' }),
-  }
-}
-
-/** Handle the bare `/rewind` host fallback: withdraw the latest message. */
-async function handleRewind(engine: RewindEngine, invocation: CommandInvocation): Promise<CommandResult> {
-  const session = invocation.agent.session
-  // The client decoration owns a bare `/rewind`; this host path remains for
-  // non-composer callers and withdraws the latest message.
-  const candidates = listRewindCandidates(session.snapshotEvents(), session.surface.nodes, 1)
-  if (candidates.length === 0) {
-    return { kind: 'error', text: t('noUserMessages') }
-  }
-  return executeRewindCommand(engine, invocation, candidates[0]!.seq)
 }
 
 /** Whether THIS MOUNT already ran its one-shot auto-cleanup check. */
@@ -816,12 +757,11 @@ function formatClearReport(report: ClearSessionReport): string {
  * The `--apply` mutation must only run once the session is STOPPED: a running
  * turn (the LLM thinking/outputting/editing, actively driving write tools)
  * would otherwise let a concurrent first-touch write interleave with this
- * directory `rm`. Mirroring `rewind`, we ACTIVELY pause the running turn —
- * cancel it and wait for quiescence — before clearing; if it cannot stop, we
- * error (`stopFailed`) and never clear, so the plugin is never left corrupted.
- * `agent.status` reads `idle` during a maintenance phase, so a mere status read
- * is not enough — the `whenIdle` race is required, exactly as in
- * `executeRewind`.
+ * directory `rm`. The clear ACTIVELY pauses the running turn — cancel it and
+ * wait for quiescence — before clearing; if it cannot stop, it errors
+ * (`cleanup.clearActive`) and never clears, so the plugin is never left
+ * corrupted. `agent.status` reads `idle` during a maintenance phase, so a mere
+ * status read is not enough — the `whenIdle` race is required.
  *
  * Clearing is an explicit abandonment of this session's checkpoint archive.
  * The memory reset is part of `clearSession`; it is what keeps the next
@@ -880,11 +820,12 @@ export function profileEntryKey(entryId: string | undefined): string | undefined
 
 
 /**
- * Register the `/rewind` command and the checkpoint pipeline: dense manifests
+ * Register `/snapshot-auto-cleanup` and the checkpoint pipeline: dense manifests
  * at `agent/pre-step` and first-touch rows at `tools/execute`.
  *
- * The command is fs-independent and registers immediately. The checkpoint
- * pipeline mounts through a dynamic `ctx.inject(['fs', 'workingDirectory'])`:
+ * The cleanup command is fs-independent and registers immediately. The
+ * checkpoint pipeline mounts through a dynamic
+ * `ctx.inject(['fs', 'workingDirectory'])`:
  * it takes effect whenever those services become available and never fails the
  * plugin's load in a deployment without them (without fs, no checkpoints are
  * recorded and `both` restores report no checkpoint).
@@ -952,7 +893,7 @@ export function apply(ctx: Context, config?: Config): void {
     log: message => ctx.logger.warn(message),
   })
   // The fs service, captured from the dynamic `ctx.inject(['fs'])` scope and
-  // handed to the command path for the post-restore observation sync.
+  // handed to the v1 commit route for the post-restore observation sync.
   // Undefined until the service mounts (or in fs-less deployments): the sync
   // then degrades to a no-op and the pre-existing stale-error fallback stays.
   let fsService: FileSystem | undefined
@@ -969,31 +910,9 @@ export function apply(ctx: Context, config?: Config): void {
         activeLocale = readHostLocale(ctx)
         return handler(invocation)
       }
-    // One handler serves `/rewind` and its alias `/undo`.
-    const rewindHandler = withHostLocale(
-      (invocation: CommandInvocation) => handleRewind(engine, invocation),
-    )
     // Each registration is isolated so a name another plugin owns costs only
     // that name (issue #49). Cordis rolls a failed effect back, so one
     // unguarded throw would also take the checkpoint pipeline below down.
-    try {
-      yield ctx.commands.register({
-        name: 'rewind',
-        description: t('command.description'),
-        handler: rewindHandler,
-      })
-    } catch (error) {
-      warnCommandUnavailable(ctx, 'rewind', error)
-    }
-    try {
-      yield ctx.commands.register({
-        name: 'undo',
-        description: t('command.undoDescription'),
-        handler: rewindHandler,
-      })
-    } catch (error) {
-      warnCommandUnavailable(ctx, 'undo', error)
-    }
     try {
       yield ctx.commands.register({
         name: 'snapshot-auto-cleanup',
@@ -1102,7 +1021,7 @@ export function apply(ctx: Context, config?: Config): void {
   ctx.inject(['fs', 'workingDirectory'], (scope) => {
     const fs = scope.fs
     const workingDirectory = scope.workingDirectory
-    // Expose the fs service to the command path (restore observation sync).
+    // Expose the fs service to the v1 commit route (restore observation sync).
     // Undefined before the service mounts: the sync then degrades to a no-op.
     fsService = fs
     // The scope disposes with either service: drop the captured reference so the

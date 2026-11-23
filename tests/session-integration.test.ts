@@ -2,7 +2,7 @@
  * Integration tests against a real dsh-session: build a session log, plan a
  * rewind (withdraw semantics: the target AND everything after it), append the
  * empty `user/message` marker with a surface replace, and verify the surface
- * and the derived model messages — the exact mechanism `executeRewind` uses.
+ * and the derived model messages — the exact mechanism the engine commit uses.
  *
  * The marker is a `user/message` (v2 reserves surface `replace` to a node
  * that cites the shadowed seqs via `sourceEventSeqs`; `assistant/message` can
@@ -34,7 +34,7 @@ function rewindMarker(): UserMessage {
 
 /**
  * Append the rewind marker (a single empty `user/message` surface replace) —
- * the exact shape the host's `executeRewind` appends on the v0.1.3/v2 line:
+ * the exact shape the engine commit appends:
  * no ghost `step/start`…`step/end` frame, because the token-meter's step
  * machine ignores `user/message` and the session invariant imposes no
  * open-turn requirement on it.

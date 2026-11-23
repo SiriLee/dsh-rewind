@@ -33,7 +33,7 @@ console filter:
 | --- | --- |
 | `boot` | Startup identity — `loaded v<version> (build <hash>)`, gated by the verbose switch (see below). Confirms the running bundle matches a fix. |
 | `refill` | The preview → commit flow and composer refill after a rewind (request failure, rejected commit, timed-out preview, or a refill fault) |
-| `command` | The `/rewind` and `/undo` command decoration (a name another plugin already owns, or a decoration the host refuses) |
+| `command` | The `/rewind` and `/undo` client commands and the command-face takeover |
 | `preview` | The preview transport behind the mode popover and the internal `/rewind` candidate read (request failure, invalid result, timeout, or an unexpected fault while rendering the panel) |
 | `commit` | The commit transport after confirmation (request failure, invalid result, or timeout) |
 | `claim` | Third-party takeover observation (claim injection/subscription failures) |

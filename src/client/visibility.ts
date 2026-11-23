@@ -16,7 +16,7 @@
  */
 
 import {
-  REWIND_COMMANDS,
+  RETIRED_REWIND_COMMAND,
   hasRewindMarker,
   rewindCutsOf,
   type ChatConversationViewNode,
@@ -343,11 +343,10 @@ export class RewindVisibilityBuilder implements BuilderLike {
         args?: string | null
         outcome?: { kind?: string; sourceEventSeq?: number } | null
       }
-      if (command.name !== undefined && command.name !== null && REWIND_COMMANDS.has(command.name)) {
+      if (command.name === RETIRED_REWIND_COMMAND) {
         const args = command.args ?? ''
         const probe = args.includes('preview') || args.includes('__candidates')
-        // A successful engine command is a rewind row; newer command outcomes do
-        // not carry a marker seq (the marker node owns the cut now).
+        // A successful retained-engine command is a rewind row.
         const executed = command.outcome?.kind === 'success'
         if (probe || executed) return hidden(base)
       }

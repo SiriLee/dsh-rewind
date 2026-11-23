@@ -731,30 +731,6 @@ describe('engine idle wait', () => {
   })
 })
 
-describe('bare /rewind host fallback', () => {
-  it('withdraws the latest message through the shared commit path', async () => {
-    const h = await harness()
-    const session = h.session('bare-rewind')
-    const first = await h.runUserStep(session, 'first')
-    const second = await h.runUserStep(session, 'second')
-    expect(first.seq).toBeLessThan(second.seq)
-    const command = h.commands.get('rewind')
-    expect(command).toBeDefined()
-    const result = await command!.handler({
-      commandId: 'cid',
-      agent: h.agentFor(session),
-      rawInput: '   ',
-      signal: new AbortController().signal,
-    }) as { kind: string; text: string }
-    expect(result.kind).toBe('success')
-    const marker = session.snapshotEvents().at(-1)!
-    expect(marker.type).toBe('user/message')
-    if (marker.type !== 'user/message') throw new Error('expected a marker')
-    expect(marker.surfaceOp).toMatchObject({ op: 'replace', startSeq: second.seq })
-    expect(session.surface.nodes).not.toContain(second.seq)
-  })
-})
-
 describe('v1 error codes', () => {
   it('rejects malformed requests with bad-request', async () => {
     const h = await harness()
