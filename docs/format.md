@@ -29,7 +29,6 @@ checkpoints and their versions; the store rebuilds from scratch.
         └── 9c1e8d7f6a5b4c3d@v1
 ```
 
-There is no `.pending/`, journal, rescue directory or persistent temp marker.
 Old snapshot members may exist in the same session directory; this build never
 reads them (see [Old data](#old-data)).
 
@@ -226,11 +225,11 @@ operation that does not read references, versions or the store marker; see
 ## Old data
 
 This build reads only `meta.json`, `checkpoints/` and `versions/`. Old snapshot
-members — numeric anchor directories, `store`, `format`, `journal-*`, `rescue/`,
-`.pending/` — are never parsed, modified or deleted. They may coexist with the
-new storage in the same session directory and still count toward its size and
-activity; only [whole-session cleanup](snapshot-auto-cleanup.md) removes them. A
-one-time `legacy snapshot data ignored` warning is logged on load.
+members — numeric anchor directories, `store`, `format` and the like — are never
+parsed, modified or deleted. They may coexist with the new storage in the same
+session directory and still count toward its size and activity; only
+[whole-session cleanup](snapshot-auto-cleanup.md) removes them. A one-time
+`legacy snapshot data ignored` warning is logged on load.
 
 ## Versioning policy
 
