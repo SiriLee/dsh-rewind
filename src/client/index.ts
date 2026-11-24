@@ -37,7 +37,6 @@ import { createPendingBridge } from './pending-mount.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
 import type { MessageImageRef } from './hidden.ts'
 import { createCommandFace } from './command-takeover.ts'
-import { HostCommandNames } from './host-commands.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { contractErrorKey } from './errors.ts'
 import { createTakeoverStore, type UiOwner } from './claim.ts'
@@ -60,7 +59,7 @@ export type { CommandTakeoverPermission, RewindCommandFace, RewindCommands } fro
 // it, but the configuration card is addressed through it, and the web profile
 // always composes `ui-settings` (the same dependency the official settings
 // pages declare).
-export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms', 'remote']
+export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms']
 
 const NS = 'rewind'
 
@@ -102,25 +101,12 @@ export interface ClientContext {
   }
   sessions: ISessions
   get(name: string): unknown
-  /** Client-root event subscription (the reset that invalidates cached catalogs). */
-  on(event: string, listener: () => void): () => void
   slots: unknown
   commandUi: unknown
   /** Register this bundle's public command-face service (`ctx.dshRewind`). */
   provide(name: string, value?: unknown): unknown
   /** Per-entry configuration forms (this bundle's own entry included). */
   configForms: { get<T>(entryId: string): ConfigForm<T> }
-}
-
-/** Client Remote face: one Session's Host catalog plus its invalidation events. */
-interface RemoteFace {
-  commands: {
-    list(sessionId: string): Promise<
-      | { ok: true; value: readonly { name: string }[] }
-      | { ok: false; error: unknown }
-    >
-  }
-  $on(event: string, listener: (payload?: unknown) => void): () => void
 }
 
 /**
@@ -385,29 +371,6 @@ export function apply(ctx: ClientContext): void {
       return face !== undefined && !isRewindInertSession(face.getSnapshot())
     }
 
-    // A Host command owns its name: keep the same-name contribution dormant so
-    // `ui-commands` never sees the collision. An unknown catalog is dormant.
-    const remote = ctx.get('remote') as RemoteFace | undefined
-    const hostCommands = new HostCommandNames(async (sessionId) => {
-      if (remote === undefined) return undefined
-      const result = await remote.commands.list(sessionId)
-      return result.ok ? result.value.map(command => command.name) : undefined
-    })
-    /** Prewarm open Sessions so a menu pass reads a settled cache. */
-    const warmHostCommands = (): void => {
-      for (const sessionId of ctx.sessions.list.getSnapshot().ids) {
-        const binding = ctx.sessions.binding(sessionId)
-        if (binding !== undefined && binding.session.getSnapshot().openState === 'open') hostCommands.warm(sessionId)
-      }
-    }
-    yield ctx.sessions.list.subscribe(warmHostCommands)
-    warmHostCommands()
-    yield ctx.on('connection/reset', () => { hostCommands.invalidateAll() })
-    if (remote !== undefined) {
-      yield remote.$on('commands/change', () => { hostCommands.invalidateAll() })
-      yield remote.$on('agent-preset/selected', (sessionId) => { hostCommands.invalidate(String(sessionId)) })
-    }
-
     /** Internal host candidate read for the picker. */
     const hostCandidates = new Map<string, readonly RewindCandidate[]>()
     const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[]> => {
@@ -456,7 +419,7 @@ export function apply(ctx: ClientContext): void {
       label: () => t(name === 'rewind' ? 'command.rewindLabel' : 'command.undoLabel'),
       description: () => t(name === 'rewind' ? 'command.description' : 'command.undoDescription'),
       icon: RewindIcon,
-      available: session => canRewindIn(session.sessionId) && hostCommands.allows(session.sessionId, name),
+      available: session => canRewindIn(session.sessionId),
       ui: rewindPopupSpec,
     })
 

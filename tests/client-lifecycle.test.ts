@@ -86,8 +86,6 @@ interface FakeNodeEntry {
 /** Which command surface the mount finds: one that refuses a name, or the shipped one. */
 interface MountOptions {
   readonly commandUi?: unknown
-  /** Host command names the Session catalog owns (empty when omitted). */
-  readonly hostCommands?: readonly string[]
 }
 
 /** Mount the client half on a minimal fake context. */
@@ -140,23 +138,15 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
   // `commandUi` is a required inject, so the fake always provides it; a probe
   // can swap in a surface that refuses one name.
   const commandUi = options.commandUi ?? shippedCommandUi
-  // The Host catalog read `available` gates on; an empty catalog keeps both
-  // client commands free.
-  const hostCommands = options.hostCommands ?? []
-  const remote = {
-    commands: { list: async () => ({ ok: true as const, value: hostCommands.map(name => ({ name })) }) },
-    $on: () => () => {},
-  }
   const ctx = {
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
-    on: () => () => {},
     locale,
     slots,
     sessions: {
       binding: () => undefined,
-      list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }), subscribe: () => () => {} },
+      list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }) },
     },
-    get: (name: string) => name === 'commandUi' ? commandUi : name === 'remote' ? remote : undefined,
+    get: (name: string) => (name === 'commandUi' ? commandUi : undefined),
     provide: (name: string, value?: unknown) => {
       provided[name] = value
       const off = () => { delete provided[name] }
@@ -250,34 +240,17 @@ describe('client plugin lifecycle', () => {
     mounted.dispose()
   })
 
-  it('keeps the command available for a bound session with no candidates', async () => {
+  it('keeps the command available for a bound session with no candidates', () => {
     const mounted = mountClient()
     const sessions = mounted.ctx.sessions as unknown as { binding: (id: string) => unknown }
     sessions.binding = id => id === 's1' ? { session: fakeSession() } : undefined
     apply(mounted.ctx)
     const rewind = mounted.contribution('rewind')!
-    // The Host catalog is unknown on the first pass: dormant, never available.
-    expect(rewind.available({ sessionId: 's1' })).toBe(false)
-    await new Promise(resolve => { setTimeout(resolve, 0) })
     // No candidates is not "unavailable": the picker opens its empty panel.
     expect(rewind.available({ sessionId: 's1' })).toBe(true)
     expect(rewind.available({ sessionId: 'missing' })).toBe(false)
     sessions.binding = () => ({ session: { sessionId: 's1', getSnapshot: () => ({ subagent: { address: { mode: 'continuable' } } }) } })
     expect(rewind.available({ sessionId: 's1' })).toBe(false)
-    mounted.dispose()
-  })
-
-  it('leaves a host-owned name to the host while the other command stays', async () => {
-    const mounted = mountClient([], { hostCommands: ['rewind'] })
-    const sessions = mounted.ctx.sessions as unknown as { binding: (id: string) => unknown }
-    sessions.binding = id => id === 's1' ? { session: fakeSession() } : undefined
-    apply(mounted.ctx)
-    const rewind = mounted.contribution('rewind')!
-    const undo = mounted.contribution('undo')!
-    expect(rewind.available({ sessionId: 's1' })).toBe(false)
-    await new Promise(resolve => { setTimeout(resolve, 0) })
-    expect(rewind.available({ sessionId: 's1' })).toBe(false)
-    expect(undo.available({ sessionId: 's1' })).toBe(true)
     mounted.dispose()
   })
 
