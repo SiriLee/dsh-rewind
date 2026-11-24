@@ -10,7 +10,25 @@ and the release steps are documented in
 
 > 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
 
-**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.24.0...vNEXT
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.24.1...vNEXT
+
+## [0.24.1] - 2026-11-24
+
+> 适配 DSH `>=0.2.2-rc.1 <0.3.0-0`
+
+### 问题修复
+
+- **读到宿主同名命令时，只让出冲突的那一条，`/` 面板不再整体失效（#102）。** DSH 把客户端命令与宿主同名视为致命错误，一处冲突会丢掉整条 `/` 命令来源。本版在打开主视图会话或切换 agent preset 时读取宿主目录，按名字让位：宿主占用 `/rewind` 就让出 `/rewind`，`/undo` 与其余命令照常；宿主行照常显示，带参调用仍由宿主处理。读取失败或结果过期时沿用上次判断。 @SiriLee
+
+---
+
+> DSH `>=0.2.2-rc.1 <0.3.0-0` supported
+
+### Bug Fixes
+
+- **When the host catalog reports a same-name command, only that command yields; the `/` panel no longer disappears as a whole (#102).** DSH treats a client command that shares a host name as fatal, so one collision drops the entire `/` command source. This release reads the host catalog when the main-view session opens or its agent preset changes and yields per name: when the host owns `/rewind`, only `/rewind` is hidden, `/undo` and the rest keep working, and the host row remains with its argument-taking invocations still handled by the host. A failed or superseded read keeps the previous decision. @SiriLee
+
+**Full Changelog**: https://github.com/SiriLee/dsh-rewind/compare/v0.24.0...v0.24.1
 
 ## [0.24.0] - 2026-11-23
 
