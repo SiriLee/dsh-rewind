@@ -20,7 +20,8 @@ import type { SessionFace } from '@deepseek-ai/dsh-api-session-controller/client
 // jsdom + React act: the environment must opt in so act() does not warn.
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-import { apply, type ClientContext } from '../src/client/index.ts'
+import { apply, inject, type ClientContext } from '../src/client/index.ts'
+import { REWIND, UNDO } from '../src/client/command-names.ts'
 import type { RewindCommandFace } from '../src/client/command-takeover.ts'
 import { closePopover, openPopover, type PopoverOptions } from '../src/client/popover.ts'
 import { isRewindInertSession } from '../src/client/rewind-flow.ts'
@@ -86,6 +87,8 @@ interface FakeNodeEntry {
 /** Which command surface the mount finds: one that refuses a name, or the shipped one. */
 interface MountOptions {
   readonly commandUi?: unknown
+  /** Host command names the Session catalog owns (empty when omitted). */
+  readonly hostCommands?: readonly string[]
 }
 
 /** Mount the client half on a minimal fake context. */
@@ -138,15 +141,21 @@ function mountClient(nodes: FakeNodeEntry[] = [], options: MountOptions = {}): M
   // `commandUi` is a required inject, so the fake always provides it; a probe
   // can swap in a surface that refuses one name.
   const commandUi = options.commandUi ?? shippedCommandUi
+  const remote = {
+    commands: { list: async () => ({ ok: true as const, value: (options.hostCommands ?? []).map(name => ({ name })) }) },
+    $on: () => () => {},
+  }
   const ctx = {
     effect: (fn: unknown) => { collect(fn, disposers); return () => {} },
+    on: () => () => {},
     locale,
     slots,
     sessions: {
       binding: () => undefined,
-      list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }) },
+      list: { getSnapshot: () => ({ ids: [], byId: {}, phase: 'ready' }), subscribe: () => () => {} },
+      using: async (_target: unknown, _options: unknown, operation: (reference: unknown) => unknown) => operation({}),
     },
-    get: (name: string) => (name === 'commandUi' ? commandUi : undefined),
+    get: (name: string) => name === 'commandUi' ? commandUi : name === 'remote' ? remote : undefined,
     provide: (name: string, value?: unknown) => {
       provided[name] = value
       const off = () => { delete provided[name] }
@@ -214,6 +223,11 @@ afterEach(() => {
 })
 
 describe('client plugin lifecycle', () => {
+  it('declares the remote namespaces the command gate reads', () => {
+    expect(inject).toContain('remote')
+    expect(inject).toContain('remote.commands')
+  })
+
   it('registers the configuration card, the pending bridge and both client commands', () => {
     const mounted = mountClient()
     apply(mounted.ctx)
@@ -251,6 +265,23 @@ describe('client plugin lifecycle', () => {
     expect(rewind.available({ sessionId: 'missing' })).toBe(false)
     sessions.binding = () => ({ session: { sessionId: 's1', getSnapshot: () => ({ subagent: { address: { mode: 'continuable' } } }) } })
     expect(rewind.available({ sessionId: 's1' })).toBe(false)
+    mounted.dispose()
+  })
+
+  it('hides a host-owned name after the session check', async () => {
+    const mounted = mountClient([], { hostCommands: [REWIND] })
+    const sessions = mounted.ctx.sessions as unknown as {
+      binding: (id: string) => unknown
+      list: { getSnapshot: () => unknown }
+    }
+    sessions.binding = id => id === 's1' ? { session: fakeSession() } : undefined
+    sessions.list.getSnapshot = () => ({ ids: ['s1'], byId: { s1: { retainedBy: { mainView: 1 } } }, phase: 'ready' })
+    apply(mounted.ctx)
+    const rewind = mounted.contribution(REWIND)!
+    const undo = mounted.contribution(UNDO)!
+    await new Promise(resolve => { setTimeout(resolve, 0) })
+    expect(rewind.available({ sessionId: 's1' })).toBe(false)
+    expect(undo.available({ sessionId: 's1' })).toBe(true)
     mounted.dispose()
   })
 

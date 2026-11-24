@@ -37,6 +37,8 @@ import { createPendingBridge } from './pending-mount.tsx'
 import { isRewindInertSession, runRewindAndFill, writeComposer } from './rewind-flow.ts'
 import type { MessageImageRef } from './hidden.ts'
 import { createCommandFace } from './command-takeover.ts'
+import { CommandConflicts } from './command-conflicts.ts'
+import { REWIND, REWIND_COMMANDS, type RewindCommand } from './command-names.ts'
 import { candidatesOverApi, previewOverApi } from './host-api.ts'
 import { contractErrorKey } from './errors.ts'
 import { createTakeoverStore, type UiOwner } from './claim.ts'
@@ -55,11 +57,19 @@ import {
 
 export const name = 'dsh-rewind'
 export type { CommandTakeoverPermission, RewindCommandFace, RewindCommands } from './command-takeover.ts'
+
+declare module '@deepseek-ai/dsh-api-session-controller/client' {
+  interface SessionReferenceSourceMap {
+    /** One Host command catalog read for the session. */
+    dshRewindCommands: unknown
+  }
+}
+
 // `configForms` IS a module-level inject: the rewind surface itself never needs
 // it, but the configuration card is addressed through it, and the web profile
 // always composes `ui-settings` (the same dependency the official settings
 // pages declare).
-export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms']
+export const inject = ['slots', 'sessions', 'locale', 'commandUi', 'configForms', 'remote', 'remote.commands']
 
 const NS = 'rewind'
 
@@ -101,12 +111,25 @@ export interface ClientContext {
   }
   sessions: ISessions
   get(name: string): unknown
+  /** Client-root event subscription (the reset that invalidates the catalog). */
+  on(event: string, listener: () => void): () => void
   slots: unknown
   commandUi: unknown
   /** Register this bundle's public command-face service (`ctx.dshRewind`). */
   provide(name: string, value?: unknown): unknown
   /** Per-entry configuration forms (this bundle's own entry included). */
   configForms: { get<T>(entryId: string): ConfigForm<T> }
+}
+
+/** Client Remote face: one Session's Host catalog plus its invalidation events. */
+interface RemoteFace {
+  commands: {
+    list(sessionId: string): Promise<
+      | { ok: true; value: readonly { name: string }[] }
+      | { ok: false; error: unknown }
+    >
+  }
+  $on(event: string, listener: (payload?: unknown) => void): () => void
 }
 
 /**
@@ -371,6 +394,51 @@ export function apply(ctx: ClientContext): void {
       return face !== undefined && !isRewindInertSession(face.getSnapshot())
     }
 
+    // A Host command owns its name. Read the Session's Host catalog at open /
+    // preset switch and keep the same-name contribution out of the menu while
+    // that name is owned. The snapshot starts optimistic and is only replaced
+    // by a completed read.
+    const remote = ctx.get('remote') as RemoteFace | undefined
+    const readHostCommands = async (sessionId: string): Promise<readonly string[] | undefined> => {
+      if (remote === undefined) return undefined
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          return await ctx.sessions.using(sessionId as SessionId, { source: 'dshRewindCommands' }, async () => {
+            const result = await remote.commands.list(sessionId)
+            if (!result.ok) throw new Error(`command.list failed: ${String(result.error)}`)
+            return result.value.map(command => command.name)
+          })
+        } catch (error) {
+          if (attempt === 3) {
+            rewindLog.warn('conflicts', 'host command catalog unavailable', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            })
+            return undefined
+          }
+          await new Promise(resolve => { setTimeout(resolve, 250 * attempt) })
+        }
+      }
+      return undefined
+    }
+    const conflicts = new CommandConflicts(readHostCommands)
+    let current: string | undefined
+    const syncSession = (): void => {
+      const { ids, byId } = ctx.sessions.list.getSnapshot()
+      const sessionId = ids.find(id => (byId[id]?.retainedBy.mainView ?? 0) > 0)
+      if (sessionId === undefined || sessionId === current) return
+      current = sessionId
+      void conflicts.check(sessionId)
+    }
+    yield ctx.sessions.list.subscribe(syncSession)
+    syncSession()
+    yield ctx.on('connection/reset', () => { if (current !== undefined) void conflicts.check(current) })
+    if (remote !== undefined) {
+      yield remote.$on('agent-preset/selected', (sessionId) => {
+        if (current !== undefined && String(sessionId) === current) void conflicts.check(current)
+      })
+    }
+
     /** Internal host candidate read for the picker. */
     const hostCandidates = new Map<string, readonly RewindCandidate[]>()
     const fetchHostCandidates = async (face: SessionFace): Promise<readonly RewindCandidate[]> => {
@@ -414,17 +482,17 @@ export function apply(ctx: ClientContext): void {
     }
 
     /** One client command per name; both share the picker. */
-    const commandContribution = (name: 'rewind' | 'undo'): CommandContribution => ({
+    const commandContribution = (name: RewindCommand): CommandContribution => ({
       name,
-      label: () => t(name === 'rewind' ? 'command.rewindLabel' : 'command.undoLabel'),
-      description: () => t(name === 'rewind' ? 'command.description' : 'command.undoDescription'),
+      label: () => t(name === REWIND ? 'command.rewindLabel' : 'command.undoLabel'),
+      description: () => t(name === REWIND ? 'command.description' : 'command.undoDescription'),
       icon: RewindIcon,
-      available: session => canRewindIn(session.sessionId),
+      available: session => canRewindIn(session.sessionId) && conflicts.allows(name),
       ui: rewindPopupSpec,
     })
 
     const commandFace = createCommandFace({
-      contributions: [commandContribution('rewind'), commandContribution('undo')],
+      contributions: REWIND_COMMANDS.map(name => commandContribution(name)),
       register: contribution => commandUi.register(contribution),
       dismiss: name => { commandUi.dismiss(name) },
       readOwner,
