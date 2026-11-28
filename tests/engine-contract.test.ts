@@ -87,6 +87,7 @@ interface Harness {
   agentFor(session: Session): Agent
   runUserStep(session: Session, text: string | readonly ContentBlock[]): Promise<{ message: UserMessage; seq: number }>
   runTool(session: Session, path: string, content: string): Promise<void>
+  runPatch(session: Session, input: string, mutate: () => Promise<void>): Promise<void>
   api(path: string, init: RequestInit): Promise<{ status: number; result: Record<string, unknown> }>
   preview(session: Session, seq: number): Promise<{ status: number; result: Record<string, unknown> }>
   commit(session: Session, body: Record<string, unknown>): Promise<{ status: number; result: Record<string, unknown> }>
@@ -220,6 +221,18 @@ async function createHarness(options: {
         signal: new AbortController().signal,
       }, async () => {
         await writeFile(path, content)
+        return { isError: false, content: [] }
+      })
+    },
+    async runPatch(session, input, mutate) {
+      await (ctx as unknown as EventHost).waterfall('tools/execute', {
+        callId: `patch-${++turn}-${Date.now()}`,
+        name: 'apply_patch',
+        arguments: { input },
+        agent: agentFor(session),
+        signal: new AbortController().signal,
+      }, async () => {
+        await mutate()
         return { isError: false, content: [] }
       })
     },
@@ -718,6 +731,80 @@ describe('v1 commit', () => {
     expect(commitFiles['deleted']).toEqual((previewFiles['changes'] as Array<Record<string, unknown>>)
       .filter(change => change['action'] === 'delete')
       .map(change => change['path']))
+  })
+})
+
+describe('apply_patch checkpoint coverage', () => {
+  /** Add a later message, then commit a files-only rewind to `seq`. */
+  const rewindTo = async (h: Harness, session: Session, seq: number) => {
+    await h.runUserStep(session, 'second')
+    return h.commit(session, { seq, headSeq: session.seq - 1, mode: 'files' })
+  }
+
+  it('restores an update of a file the target checkpoint did not track', async () => {
+    const h = await harness()
+    const session = h.session('patch-update')
+    const file = join(h.ws, 'update.txt')
+    await writeFile(file, 'original')
+    const first = await h.runUserStep(session, 'first')
+    await h.runPatch(session, '*** Begin Patch\n*** Update File: update.txt\n@@\n-original\n+patched\n*** End Patch', async () => {
+      await writeFile(file, 'patched')
+    })
+    const { status, result } = await rewindTo(h, session, first.seq)
+    expect(status).toBe(200)
+    const files = valueOf(result)['files'] as Record<string, unknown>
+    expect(files['restored']).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('original')
+  })
+
+  it('deletes a file an apply_patch added after the target', async () => {
+    const h = await harness()
+    const session = h.session('patch-add')
+    const first = await h.runUserStep(session, 'first')
+    const file = join(h.ws, 'created.txt')
+    await h.runPatch(session, '*** Begin Patch\n*** Add File: created.txt\n+new\n*** End Patch', async () => {
+      await writeFile(file, 'new')
+    })
+    const { status, result } = await rewindTo(h, session, first.seq)
+    expect(status).toBe(200)
+    const files = valueOf(result)['files'] as Record<string, unknown>
+    expect(files['deleted']).toEqual([file])
+    await expect(readFile(file, 'utf8')).rejects.toThrow()
+  })
+
+  it('restores a file an apply_patch deleted after the target', async () => {
+    const h = await harness()
+    const session = h.session('patch-delete')
+    const file = join(h.ws, 'deleted.txt')
+    await writeFile(file, 'keep')
+    const first = await h.runUserStep(session, 'first')
+    await h.runPatch(session, '*** Begin Patch\n*** Delete File: deleted.txt\n*** End Patch', async () => {
+      await rm(file)
+    })
+    const { status, result } = await rewindTo(h, session, first.seq)
+    expect(status).toBe(200)
+    const files = valueOf(result)['files'] as Record<string, unknown>
+    expect(files['restored']).toEqual([file])
+    expect(await readFile(file, 'utf8')).toBe('keep')
+  })
+
+  it('restores a move source and deletes its destination', async () => {
+    const h = await harness()
+    const session = h.session('patch-move')
+    const from = join(h.ws, 'from.txt')
+    const to = join(h.ws, 'to.txt')
+    await writeFile(from, 'content')
+    const first = await h.runUserStep(session, 'first')
+    await h.runPatch(session, '*** Begin Patch\n*** Update File: from.txt\n*** Move to: to.txt\n@@\n-content\n+content\n*** End Patch', async () => {
+      await rename(from, to)
+    })
+    const { status, result } = await rewindTo(h, session, first.seq)
+    expect(status).toBe(200)
+    const files = valueOf(result)['files'] as Record<string, unknown>
+    expect(files['restored']).toEqual([from])
+    expect(files['deleted']).toEqual([to])
+    expect(await readFile(from, 'utf8')).toBe('content')
+    await expect(readFile(to, 'utf8')).rejects.toThrow()
   })
 })
 

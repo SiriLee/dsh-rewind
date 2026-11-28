@@ -15,8 +15,8 @@ The plugin runs in the DSH host process and therefore holds the host user's
 filesystem authority — it reads and writes files with plain `node:fs`. The
 following are treated as **untrusted inputs**:
 
-- **Model arguments** — the `file_path` field of `write` / `edit` tool calls
-  (it names the paths the checkpoint store records).
+- **Model arguments** — the paths and patch text of file-mutation tool calls
+  (they name the paths the checkpoint store records).
 - **Session log contents** — events are parsed structurally; a hostile or
   malformed id must never escape the store root.
 - **Current worktree state** — restore planning reconciles against the live

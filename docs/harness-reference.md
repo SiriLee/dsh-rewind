@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | `agent/pre-step` | Runs after `inbox.claim` and before `step()` appends the claimed `user/message` events. Payload carries `messages: UserMessage[]` (plus `turn`, `step`, model selection). A prepended listener `await next()` and acts only on `decision.kind === 'enter'`. | One dense checkpoint per user-sourced message in the claimed batch; `message.id` is the key because no seq exists yet; a reject creates nothing. |
 | `inbox.claim` | Returns all `next-step` messages plus at most one `next-turn`; the default `next` may append a `runtime-context` message. | One step can claim several user messages (prompt, steering, queued turn); the checkpoint filter is `source.kind === 'user'`, matching `listRewindCandidates`. |
-| `tools/execute` | The around-dispatch wrapper, after `tools/pre-execute` approval/guards and before the tool body. | First-touch capture for `write` / `edit`; a denied or pre-dispatch-cancelled call never reaches it, so it records nothing. |
+| `tools/execute` | The around-dispatch wrapper, after `tools/pre-execute` approval/guards and before the tool body. | First-touch capture for the tracked write-class tools; a denied or pre-dispatch-cancelled call never reaches it, so it records nothing. |
 | Session format | `session.header.version` identifies the session format. | Written as `meta.sessionFormat`; a mismatch discards the new storage. |
 | User message id | `UserMessage.id` is stable and is assigned when the message is created (`createUserMessage`). | Checkpoint file key; a rewind resolves target seq → `user/message` event → `data.id` → checkpoint. |
 

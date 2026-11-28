@@ -130,10 +130,12 @@ function isFileCheckpointingEnabled(config: Config | undefined): boolean {
 }
 
 /**
- * Tool names whose mutations the checkpoint tracker follows. `str_replace_editor`
- * is not tracked: it is an optional package, not a default tool.
+ * Tool names whose mutations the checkpoint tracker follows. `apply_patch`
+ * carries its paths inside the patch text, not in `file_path`.
+ * `str_replace_editor` is not tracked: it is an optional package, not a
+ * default tool.
  */
-const TRACKED_TOOLS = new Set(['write', 'edit'])
+const TRACKED_TOOLS = new Set(['write', 'edit', 'apply_patch'])
 
 /**
  * Whether a session is a subagent child: a direct-delegation session this
@@ -213,13 +215,41 @@ function warnCommandUnavailable(ctx: Context, name: string, error: unknown): voi
   ctx.logger.warn(`[dsh-rewind] command "${name}" was not registered: ${error instanceof Error ? error.message : String(error)}`)
 }
 
-/** Extract the file path a tracked tool call mutates, or undefined. */
-function mutationPathOf(exec: ToolExecution): string | undefined {
-  const args = exec.arguments as { file_path?: unknown }
-  if (exec.name === 'write' || exec.name === 'edit') {
-    return typeof args.file_path === 'string' ? args.file_path : undefined
+/**
+ * Paths a patch mutates, from its `*** Add/Update/Delete File:` headers and an
+ * update's optional `*** Move to:` line. Malformed input yields none; the tool
+ * reports the syntax. Exported for tests.
+ */
+export function applyPatchPaths(input: string): readonly string[] {
+  const paths: string[] = []
+  for (const line of input.split('\n')) {
+    const text = line.trimEnd()
+    const header = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/.exec(text)
+    if (header !== null) {
+      const path = header[1]!.trim()
+      if (path.length > 0) paths.push(path)
+      continue
+    }
+    const move = /^\*\*\* Move to: (.+)$/.exec(text)
+    if (move !== null) {
+      const path = move[1]!.trim()
+      if (path.length > 0) paths.push(path)
+    }
   }
-  return undefined
+  return [...new Set(paths)]
+}
+
+/** Paths a tracked tool call mutates, in call order. */
+function mutationPathsOf(exec: ToolExecution): readonly string[] {
+  if (exec.name === 'write' || exec.name === 'edit') {
+    const path = (exec.arguments as { file_path?: unknown }).file_path
+    return typeof path === 'string' ? [path] : []
+  }
+  if (exec.name === 'apply_patch') {
+    const input = (exec.arguments as { input?: unknown }).input
+    return typeof input === 'string' ? applyPatchPaths(input) : []
+  }
+  return []
 }
 
 /** True for the harness fs abort (a normal cancel, never a diagnostic). */
@@ -228,10 +258,12 @@ function isFsAbort(error: unknown): boolean {
 }
 
 /**
- * Record the pre-touch state of a path the current step has not tracked yet,
- * during `tools/execute` (after approval, before the body). The store itself
- * rejects non-regular targets, hard links, over-cap files and a missing
- * current checkpoint; this function only resolves and maps the path.
+ * Record the pre-touch state of every path a tracked tool call mutates, during
+ * `tools/execute` (after approval, before the body). An `apply_patch` add or
+ * move destination that does not exist yet is recorded as absent, so a rewind
+ * deletes it. The store rejects non-regular targets, hard links, over-cap files
+ * and a missing current checkpoint; this function only resolves and maps each
+ * path.
  */
 async function captureFirstTouch(
   ctx: Context,
@@ -244,25 +276,27 @@ async function captureFirstTouch(
   const agent = exec.agent
   if (agent === undefined) return
   if (isSubagentSession(agent.session)) return
-  const path = mutationPathOf(exec)
-  if (path === undefined) return
+  const paths = mutationPathsOf(exec)
+  if (paths.length === 0) return
   const cwd = await workingDirectory.ensure(agent, exec.signal)
-  let target: Awaited<ReturnType<FileSystem['resolve']>>
-  try {
-    target = await fs.resolve(path, { cwd, signal: exec.signal })
-  } catch (error) {
-    // A genuine resolution failure silently loses this path's checkpoint; a
-    // cancelled run is expected and stays silent.
-    if (!isFsAbort(error)) {
-      ctx.logger.warn(`[dsh-rewind] first-touch resolve failed for ${path}: ${error instanceof Error ? error.message : String(error)}`)
-    }
-    return
-  }
-  // A non-local backend has no host path a node:fs restore could safely touch.
-  if (fs.processPathFromHostPath(target.displayPath) === undefined) return
   await ensureStoreSession(store, agent.session, message => ctx.logger.warn(message))
-  const { warnings } = await store.captureFirstTouch(agent.session.id, target.displayPath)
-  for (const warning of warnings) ctx.logger.warn(`[dsh-rewind] ${warning}`)
+  for (const path of paths) {
+    let target: Awaited<ReturnType<FileSystem['resolve']>>
+    try {
+      target = await fs.resolve(path, { cwd, signal: exec.signal })
+    } catch (error) {
+      // A genuine resolution failure silently loses this path's checkpoint; a
+      // cancelled run is expected and stays silent.
+      if (!isFsAbort(error)) {
+        ctx.logger.warn(`[dsh-rewind] first-touch resolve failed for ${path}: ${error instanceof Error ? error.message : String(error)}`)
+      }
+      continue
+    }
+    // A non-local backend has no host path a node:fs restore could safely touch.
+    if (fs.processPathFromHostPath(target.displayPath) === undefined) continue
+    const { warnings } = await store.captureFirstTouch(agent.session.id, target.displayPath)
+    for (const warning of warnings) ctx.logger.warn(`[dsh-rewind] ${warning}`)
+  }
 }
 
 /** Handler shape of the Host Connection exact Fetch registry. */

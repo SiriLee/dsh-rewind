@@ -2,7 +2,7 @@
 
 > When it rewinds files, the plugin **writes back only what its checkpoints
 > recorded**: one dense manifest per user message. A file enters the
-> record when a write-class tool (`write`, `edit`) first touches it; from then
+> record when a write-class tool first touches it; from then
 > on every retained checkpoint carries a row for it. Restores reconcile against
 > the live disk and never guess.
 >
@@ -43,7 +43,7 @@ unchanged file reuses its version. This is how an external edit — a Bash
 command, a build script, an editor save — enters the record: the next message
 boundary sees it.
 
-**At first touch.** When `write` / `edit` targets a path that is not tracked yet,
+**At first touch.** When a write-class tool targets a path that is not tracked yet,
 the plugin records its state *before the tool body runs*: `null` for a file that
 does not exist yet, otherwise its current bytes. That row is added to the
 current message's checkpoint as version 1. A call that is denied or cancelled
@@ -184,7 +184,7 @@ when content is restored.
 
 ## 7. Why the boundary sits here
 
-Checkpoints cover the agent's `write`/`edit` edits plus external changes to those
+Checkpoints cover the agent's write-class edits plus external changes to those
 tracked files; workspace history beyond that belongs to Git. Why the split works
 this way, and what a whole-tree store would cost, is in
 [design boundaries](../boundaries.md).

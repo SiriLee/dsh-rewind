@@ -26,7 +26,7 @@ Two rules keep it small:
 
 | Boundary | Classification | Why it sits here | The need is served by |
 | --- | --- | --- | --- |
-| File restore covers the agent's `write`/`edit` text edits and the tracked list, not the whole tree | By design | The checkpoint model has this boundary; whole-tree history is a different product | Git, or the snapshot tool the project already uses |
+| File restore covers the agent's write-class tool edits and the tracked list, not the whole tree | By design | The checkpoint model has this boundary; whole-tree history is a different product | Git, or the snapshot tool the project already uses |
 | A rewind is one-way; the session log is append-only | By design | Append-only is the audit and crash-safety foundation; the cut is a replace operation | DSH "branch into a new conversation" |
 | Adaptation follows upstream | By design | DSH is a developer preview; one adapted line keeps behavior stable and the gate meaningful | The release built for your DSH line |
 | Hiding and the message action join the official path on private seams | Upstream constraint | No public seat exists; only the host's own path keeps behavior and timing identical | An upstream seat; until then, the seams are re-checked per DSH line |
@@ -35,13 +35,13 @@ Two rules keep it small:
 
 ## The file boundary
 
-The workflow this plugin targets is an agent editing text through `write` and
-`edit`. The record is deterministic by construction: at each user-message
-boundary, before the turn runs, the plugin re-reads every tracked file and
-records its state in the checkpoint. A file not yet tracked enters the record at
-first touch, with its pre-touch state. A restore writes back only backups,
-reconciled against the live disk. The mechanics and the exact cases are in the
-[file-rewind tracking boundary](compat/tracking-boundary.md).
+The workflow this plugin targets is an agent editing text through the
+write-class tools. The record is deterministic by construction: at each
+user-message boundary, before the turn runs, the plugin re-reads every tracked
+file and records its state in the checkpoint. A file not yet tracked enters the
+record at first touch, with its pre-touch state. A restore writes back only
+backups, reconciled against the live disk. The mechanics and the exact cases
+are in the [file-rewind tracking boundary](compat/tracking-boundary.md).
 
 The boundary follows from the model: a file that no write-class tool ever handled
 never enters the tracked list, and a stretch of state the plugin did not back up
@@ -50,8 +50,8 @@ cannot be written back. It prefers to write nothing over guessing:
 - no history before the first write-class touch;
 - no restore across a stretch that was not backed up (over the per-file cap,
   snapshots switched off);
-- no tracking for external edits to files outside the list, or for write tools
-  outside the default `write`/`edit` pair that a custom composition mounts.
+- no tracking for external edits to files outside the list, or for
+  file-mutation tools the plugin does not track.
 
 This is the checkpoint model Claude Code uses. The boundary comes from the model
 itself: checkpoints cover edits within the session, and workspace history beyond
