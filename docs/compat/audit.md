@@ -30,7 +30,7 @@ The plugin targets one channel and reads the targeted version's shape only (no
 | Client composer refill | `conversation.input.setDraft` facade, else the `[data-composer-input]` DOM fill |
 | Client image restore | `SessionFace.readAttachment` (complete `ImageAttachmentRef`) + `conversation.createDrafts(..., uploadImages)` |
 | Client settings card | entry form via `ctx.configForms.get(entryId)` (`plugins.bundle.config`) |
-| Client message action | default-priority chat-node entry takeover (row `actions` prop + `extraActions`); pending bubbles matched in the session DOM |
+| Client message action | winning `user`/`steering` seat: `actions` + `extraActions`, else a strip portal; pending bubbles in the session DOM |
 
 **Admission.** DSH reads `engines.dsh` alone when a manifest declares it, and the
 `@deepseek-ai/dsh-*` peers only when it does not (both under `includePrerelease`), re-checking
@@ -71,6 +71,14 @@ have no counterpart, and an unread steering bubble has no component at all.
 **Impact:** none on behavior — the durable action is injected through the row
 entry's own `component` and `actions` row, closer to the official path and
 lighter than a DOM pass. **Stance:** keep the takeover.
+
+**U2a · Ecosystem constraint — a shadow can win the cell the action rides on.**
+A keyed cell renders its lowest-priority live entry, so a plugin that shadows
+`user`/`steering` below the shipped seat replaces the official row and the
+action with it (`dsh-markdown-bubble` at `-1`, re-rendering the text).
+**Impact:** the action is absent, silently. **Stance:** take over the winning
+seat too — the shipped row when it delegates, a portal into its own `_actions`
+strip when it rebuilds; no strip, no action.
 
 **U3 · Upstream constraint — private seam, maintenance watch.**
 `isVisibleChatNode` drives order, grouping, turn navigation and presentation but

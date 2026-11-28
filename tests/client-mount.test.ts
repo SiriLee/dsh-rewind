@@ -168,7 +168,7 @@ describe('row takeover', () => {
     dispose()
   })
 
-  it('keeps a delegating shadow renderer identifiable and mounts the action on its shipped row', () => {
+  it('answers a delegating shadow with the shipped row instead of recursing', () => {
     const shipped = (props: Props): ReactNode => {
       const chain = props['renderSlotChain'] as () => ReactNode
       chain()
@@ -187,8 +187,63 @@ describe('row takeover', () => {
       { component: shipped, options: { key: 'user' } },
     )
     const dispose = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
-    expect(ledger.store[0]!.component).toBe(Shadow)
-    expect(render(Shadow).querySelector('[data-extra]')).not.toBeNull()
+    // The shadow wins the cell, so it is the entry the action has to survive.
+    expect(ledger.store[0]!.component).not.toBe(Shadow)
+    const container = render(ledger.store[0]!.component)
+    // One action, on the shipped row the shadow delegates to: never a second pass.
+    expect(container.querySelectorAll('[data-extra]')).toHaveLength(1)
+    expect(container.querySelector('[data-actions]')?.querySelector('[data-extra]')).not.toBeNull()
+    dispose()
+  })
+
+  it('mounts the action in the action strip a replacing shadow rebuilt', () => {
+    // The shape a markdown-rendering shadow produces: its own row with its own
+    // strip, no `actions` constructor for the shipped takeover to extend.
+    const replacing = memo(function ReplacingShadow(): ReactNode {
+      return createElement('div', { 'data-shadow-row': '' },
+        createElement('div', { className: 'dshmb_actions', 'data-clock': 'start' },
+          createElement('button', { type: 'button', 'data-copy': '' }, 'copy')),
+        createElement('div', { 'data-bubble': '' }, 'message body'))
+    })
+    const ledger = new FakeLedger([
+      { component: officialRow, options: { key: 'user' } },
+      { component: replacing, options: { key: 'user', priority: -1 } },
+    ])
+    const opened: RowAction[] = []
+    const dispose = installRowAction({
+      slots: ledger,
+      render: rewindActionRenderer(t, () => true, row => opened.push(row), takeoverStore()),
+    })
+    expect(ledger.store[1]!.component).not.toBe(replacing)
+
+    const container = render(ledger.store[1]!.component)
+    // The shadow keeps its own chrome; the action joins its strip.
+    expect(container.querySelector('[data-copy]')).not.toBeNull()
+    expect(container.querySelector('[data-bubble]')?.textContent).toBe('message body')
+    const strip = container.querySelector('[class*="_actions"]')
+    const button = rewoundButton(container)
+    expect(button).not.toBeNull()
+    expect(button?.parentElement).toBe(strip)
+
+    act(() => { button!.click() })
+    expect(opened).toHaveLength(1)
+    expect(opened[0]!.seq).toBe(7)
+    expect(opened[0]!.time).toBe(1_700_000_000_000)
+    dispose()
+  })
+
+  it('leaves a shadow row it cannot address untouched', () => {
+    // A shadow returning another component element exposes no row to reach the
+    // strip through; the row is passed through rather than broken.
+    const opaque = memo(function OpaqueShadow(): ReactNode { return createElement(ActionsRow, {}) })
+    const ledger = new FakeLedger([
+      { component: officialRow, options: { key: 'user' } },
+      { component: opaque, options: { key: 'user', priority: -1 } },
+    ])
+    const dispose = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
+    const container = render(ledger.store[1]!.component)
+    expect(container.querySelector('[data-copy]')).not.toBeNull()
+    expect(container.querySelector('[data-extra]')).toBeNull()
     dispose()
   })
 
@@ -331,6 +386,25 @@ describe('teardown', () => {
     ledger.store[0]!.component = later
     disposal()
     expect(ledger.store[0]!.component).toBe(later)
+  })
+
+  it('restores the shadow seat it took over', () => {
+    const replacing = memo(function ReplacingShadow(): ReactNode {
+      return createElement('div', { 'data-shadow-row': '' },
+        createElement('div', { className: 'dshmb_actions' },
+          createElement('button', { type: 'button', 'data-copy': '' }, 'copy')))
+    })
+    const ledger = new FakeLedger([
+      { component: officialRow, options: { key: 'user' } },
+      { component: replacing, options: { key: 'user', priority: -1 } },
+    ])
+    const disposal = installRowAction({ slots: ledger, render: () => createElement('i', { 'data-extra': '' }) })
+    expect(ledger.store[1]!.component).not.toBe(replacing)
+
+    disposal()
+    expect(ledger.store[0]!.component).toBe(officialRow)
+    expect(ledger.store[1]!.component).toBe(replacing)
+    expect(render(replacing).querySelector('[data-extra]')).toBeNull()
   })
 })
 
