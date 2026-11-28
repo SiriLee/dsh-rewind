@@ -40,7 +40,8 @@ export function Tooltip(props: {
   readonly side?: string
   readonly children: ReactElement
 }): ReactNode {
-  return cloneElement(props.children, { 'data-tooltip': props.label })
+  // React 19 infers cloneElement's props from the element type; the real Tooltip accepts any anchor.
+  return cloneElement(props.children as ReactElement<{ 'data-tooltip': string }>, { 'data-tooltip': props.label })
 }
 
 /** The real `Tag` contract: a read-only capsule that renders its children. */
